@@ -37,6 +37,10 @@ msbuild.binlog
 .env
 .env.local
 
+# User-local converted Allods output
+converted/*
+!converted/.gitkeep
+
 # OS
 .DS_Store
 Thumbs.db

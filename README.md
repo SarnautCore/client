@@ -1,6 +1,42 @@
-# client
+# SarnautCore client
 
-SarnautCore game client: Godot (.NET/C#), C++ GDExtensions for hot paths, Lua addon API.
+The SarnautCore game client uses Godot 4.7.2 .NET and C#. C++ GDExtensions are reserved for measured hot paths. The Lua addon interface will come later.
+
+The current milestone includes a boot menu and an Asset Viewer for locally converted Allods assets.
+
+## Development quickstart
+
+Install Godot 4.7.2 stable .NET and a .NET 10 SDK. Then run:
+
+```powershell
+dotnet build SarnautCore.sln
+godot --editor --path .
+```
+
+The default scene opens a small boot menu. Choose **Asset Viewer** to browse supported files below `converted/`.
+
+### Convert local assets
+
+`converted/` is the user-local mount point and Git ignores its contents. Point `ao-godot-converter` at that directory:
+
+```powershell
+Set-Location E:\allods\Dev\ao-godot-converter
+cargo run --release -- convert --version 14.1 --output E:\SarnautCore\client\converted
+```
+
+Replace `14.1` with the converter profile for your own game installation. Return to this repository and click **Refresh converted/** in the viewer after conversion. The tree includes `.png`, `.tres`, `.tscn`, and `.skmesh` files. Images open in a fitted 2D preview. Mesh resources, 3D scenes, and converter meshes open in an orbitable 3D viewport. Drag with the left mouse button to orbit and use the wheel to zoom.
+
+The client contains the converter's C# runtime resource classes and skinned-mesh loader. The loader path matches the path written into converted scenes.
+
+### Command-line checks
+
+```powershell
+dotnet build SarnautCore.sln
+godot_console --headless --import --path .
+godot_console --headless --path . --scene res://tests/asset_viewer_smoke.tscn
+```
+
+The smoke scene expects local samples under `converted/samples/`. Those files are intentionally absent from Git because converted game assets must remain local.
 
 ## About SarnautCore
 
