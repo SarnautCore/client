@@ -1,0 +1,42 @@
+# Godot 4 editor and import cache
+.godot/
+
+# Godot exports
+export_presets.cfg
+build/
+dist/
+
+# .NET build artifacts
+bin/
+obj/
+*.user
+*.userprefs
+*.suo
+*.swp
+.vs/
+.idea/
+.vscode/
+
+# Mono / MSBuild
+msbuild.binlog
+*.nupkg
+*.snupkg
+
+# Native GDExtension build output
+*.dll
+*.so
+*.dylib
+*.pdb
+*.lib
+*.exp
+*.obj
+.sconsign.dblite
+.scons_cache/
+
+# Local config
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
