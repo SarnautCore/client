@@ -52,5 +52,8 @@ jobs:
       - name: Build
         run: dotnet build SarnautCore.sln --configuration Debug --no-restore
 
-      - name: Test networking
-        run: dotnet test tests/SarnautCore.Network.Tests/SarnautCore.Network.Tests.csproj --configuration Debug --no-build
+      # Every test project in the solution, and none of them needs Godot: the
+      # headless runtime wants converted assets and libmsquic, so anything left
+      # in a Control subclass is untestable here by construction.
+      - name: Test
+        run: dotnet test SarnautCore.sln --configuration Debug --no-build
