@@ -28,3 +28,6 @@ jobs:
 
       - name: Build
         run: dotnet build SarnautCore.sln --configuration Debug --no-restore
+
+      - name: Test networking
+        run: dotnet test tests/SarnautCore.Network.Tests/SarnautCore.Network.Tests.csproj --configuration Debug --no-build

@@ -8,4 +8,11 @@
     <RootNamespace>SarnautCore</RootNamespace>
     <DefaultItemExcludes>$(DefaultItemExcludes);converted/**</DefaultItemExcludes>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="src/SarnautCore.Network/**" />
+    <Compile Remove="tests/SarnautCore.Network.Tests/**" />
+    <Compile Remove="tools/**" />
+    <ProjectReference Include="src/SarnautCore.Network/SarnautCore.Network.csproj" />
+  </ItemGroup>
 </Project>

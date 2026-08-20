@@ -16,6 +16,11 @@ public partial class WalkaboutController : CharacterBody3D
 
     public bool IsFlying { get; private set; }
 
+    public bool NetworkControlled { get; set; }
+
+    // TODO: add client-side prediction and reconciliation without changing the offline controller path.
+    public Vector3 NetworkMoveDirection { get; private set; }
+
     public override void _Ready()
     {
         _head = GetNode<Node3D>("Head");
@@ -41,7 +46,7 @@ public partial class WalkaboutController : CharacterBody3D
         {
             Input.MouseMode = Input.MouseModeEnum.Captured;
         }
-        else if (inputEvent is InputEventKey key && key.Pressed && !key.Echo && MatchesKey(key, Key.F))
+        else if (!NetworkControlled && inputEvent is InputEventKey key && key.Pressed && !key.Echo && MatchesKey(key, Key.F))
         {
             SetFlying(!IsFlying);
             GetViewport().SetInputAsHandled();
@@ -53,6 +58,13 @@ public partial class WalkaboutController : CharacterBody3D
         Vector2 input = ReadMovementInput();
         Vector3 localDirection = new(input.X, 0, input.Y);
         Vector3 worldDirection = (Basis * localDirection).Normalized();
+        NetworkMoveDirection = worldDirection;
+
+        if (NetworkControlled)
+        {
+            Velocity = Vector3.Zero;
+            return;
+        }
 
         if (IsFlying)
         {
