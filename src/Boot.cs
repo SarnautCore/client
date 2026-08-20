@@ -6,6 +6,8 @@ public partial class Boot : Control
 {
     private LineEdit _zoneName = null!;
     private Label _zoneError = null!;
+    private CheckButton _onlineMode = null!;
+    private LineEdit _serverAddress = null!;
 
     public override void _Ready()
     {
@@ -63,6 +65,24 @@ public partial class Boot : Control
         _zoneName.TextSubmitted += _ => OpenZoneWalkabout();
         menu.AddChild(_zoneName);
 
+        _onlineMode = new CheckButton
+        {
+            Text = "Online mode",
+            ButtonPressed = false,
+            TooltipText = "Join the local authoritative shard instead of moving offline.",
+        };
+        menu.AddChild(_onlineMode);
+
+        _serverAddress = new LineEdit
+        {
+            Text = System.Environment.GetEnvironmentVariable("SARNAUT_SERVER_ADDRESS") ?? "127.0.0.1:4242",
+            PlaceholderText = "Server host:port",
+            CustomMinimumSize = new Vector2(0, 44),
+            TooltipText = "QUIC shard endpoint",
+        };
+        _serverAddress.TextSubmitted += _ => OpenZoneWalkabout();
+        menu.AddChild(_serverAddress);
+
         _zoneError = new Label
         {
             Text = "Enter a converted map name.",
@@ -98,6 +118,8 @@ public partial class Boot : Control
 
         _zoneError.Visible = false;
         ZoneWalkabout.RequestedMapName = mapName;
+        ZoneWalkabout.RequestedOnlineMode = _onlineMode.ButtonPressed;
+        ZoneWalkabout.RequestedServerAddress = _serverAddress.Text.Trim();
         GetTree().ChangeSceneToFile("res://scenes/zone_walkabout.tscn");
     }
 }

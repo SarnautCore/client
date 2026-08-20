@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package sarnaut.v1;
+
+option csharp_namespace = "Sarnaut.Protocol.V1";
+
+enum ProtocolVersion {
+  PROTOCOL_VERSION_UNSPECIFIED = 0;
+  PROTOCOL_VERSION_1 = 1;
+}
