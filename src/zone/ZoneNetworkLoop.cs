@@ -192,7 +192,7 @@ public partial class ZoneNetworkLoop : Node
 
     public void SetTarget(ulong entityId)
     {
-        if (TargetEntityId == entityId)
+        if (Entities is null || TargetEntityId == entityId)
         {
             return;
         }
