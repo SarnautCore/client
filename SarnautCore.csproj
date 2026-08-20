@@ -6,5 +6,6 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>SarnautCore</AssemblyName>
     <RootNamespace>SarnautCore</RootNamespace>
+    <DefaultItemExcludes>$(DefaultItemExcludes);converted/**</DefaultItemExcludes>
   </PropertyGroup>
 </Project>

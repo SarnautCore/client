@@ -2,7 +2,7 @@
 
 The SarnautCore game client uses Godot 4.7.2 .NET and C#. C++ GDExtensions are reserved for measured hot paths. The Lua addon interface will come later.
 
-The current milestone includes a boot menu and an Asset Viewer for locally converted Allods assets.
+The current milestone includes a boot menu, an Asset Viewer, and a 3D Zone Walkabout for locally converted Allods assets.
 
 ## Development quickstart
 
@@ -14,6 +14,22 @@ godot --editor --path .
 ```
 
 The default scene opens a small boot menu. Choose **Asset Viewer** to browse supported files below `converted/`.
+
+### Zone Walkabout
+
+The Boot menu defaults the zone field to `Inst_LeagueStart`, the classic League tutorial map. Choose **Zone Walkabout** to assemble the map from converted terrain OBJ files and MapRegion placement JSON.
+
+Controls:
+
+- `WASD`: move
+- Mouse: look
+- `Space`: jump while walking, rise while flying
+- `Q`: descend while flying
+- `Shift`: fly faster
+- `F`: toggle walk/fly mode
+- `Esc`: release the mouse; press it again to return to Boot
+
+The loader currently applies the dominant converted terrain-layer texture to each terrain tile. Splat and light maps are present in the conversion, but full layered terrain materials are pending converter support.
 
 ### Convert local assets
 
@@ -34,9 +50,10 @@ The client contains the converter's C# runtime resource classes and skinned-mesh
 dotnet build SarnautCore.sln
 godot_console --headless --import --path .
 godot_console --headless --path . --scene res://tests/asset_viewer_smoke.tscn
+godot_console --headless --path . --scene res://tests/zone_walkabout_smoke.tscn
 ```
 
-The smoke scene expects local samples under `converted/samples/`. Those files are intentionally absent from Git because converted game assets must remain local.
+The Asset Viewer smoke scene expects local samples under `converted/samples/`. The Zone Walkabout smoke scene expects the classic conversion below `converted/assets/classic-1.1/` and prints the imported terrain and placement counts. These files are intentionally absent from Git because converted game assets must remain local.
 
 ## About SarnautCore
 

@@ -1,0 +1,111 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://src/zone/ZoneWalkabout.cs" id="1_walkabout"]
+[ext_resource type="Script" path="res://src/zone/ZoneLoader.cs" id="2_loader"]
+[ext_resource type="Script" path="res://src/zone/WalkaboutController.cs" id="3_controller"]
+
+[sub_resource type="Environment" id="Environment_walkabout"]
+background_mode = 1
+background_color = Color(0.115, 0.145, 0.19, 1)
+ambient_light_source = 3
+ambient_light_color = Color(0.68, 0.74, 0.82, 1)
+ambient_light_energy = 0.55
+tonemap_mode = 2
+
+[sub_resource type="CapsuleShape3D" id="Capsule_walker"]
+radius = 0.42
+height = 1.8
+
+[sub_resource type="StyleBoxFlat" id="Panel_status"]
+bg_color = Color(0.04, 0.055, 0.075, 0.88)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+content_margin_left = 14.0
+content_margin_top = 10.0
+content_margin_right = 14.0
+content_margin_bottom = 10.0
+
+[sub_resource type="StyleBoxFlat" id="Panel_help"]
+bg_color = Color(0.04, 0.055, 0.075, 0.78)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+content_margin_left = 14.0
+content_margin_top = 8.0
+content_margin_right = 14.0
+content_margin_bottom = 8.0
+
+[node name="ZoneWalkabout" type="Node3D"]
+script = ExtResource("1_walkabout")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_walkabout")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-52, -28, 0)
+light_energy = 1.15
+shadow_enabled = true
+directional_shadow_max_distance = 600.0
+
+[node name="ZoneLoader" type="Node3D" parent="."]
+script = ExtResource("2_loader")
+auto_load = false
+
+[node name="Walker" type="CharacterBody3D" parent="."]
+script = ExtResource("3_controller")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Walker"]
+position = Vector3(0, 0.9, 0)
+shape = SubResource("Capsule_walker")
+
+[node name="Head" type="Node3D" parent="Walker"]
+position = Vector3(0, 1.62, 0)
+
+[node name="Camera3D" type="Camera3D" parent="Walker/Head"]
+current = true
+near = 0.05
+far = 5000.0
+
+[node name="Interface" type="CanvasLayer" parent="."]
+
+[node name="Margin" type="MarginContainer" parent="Interface"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 18.0
+offset_top = 18.0
+offset_right = -18.0
+offset_bottom = -18.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Column" type="VBoxContainer" parent="Interface/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="StatusPanel" type="PanelContainer" parent="Interface/Margin/Column"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("Panel_status")
+
+[node name="Status" type="Label" parent="Interface/Margin/Column/StatusPanel"]
+layout_mode = 2
+text = "Loading zone..."
+theme_override_colors/font_color = Color(0.91, 0.94, 0.98, 1)
+
+[node name="Spacer" type="Control" parent="Interface/Margin/Column"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="HelpPanel" type="PanelContainer" parent="Interface/Margin/Column"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("Panel_help")
+
+[node name="Help" type="Label" parent="Interface/Margin/Column/HelpPanel"]
+layout_mode = 2
+text = "WASD move  |  Mouse look  |  Space jump/up  |  Q down  |  Shift boost  |  F fly/walk  |  Esc release/back"
+horizontal_alignment = 1
+theme_override_colors/font_color = Color(0.76, 0.81, 0.88, 1)
