@@ -15,11 +15,14 @@ try
         zoneId,
         "sar20-smoke",
         allowUntrustedDevelopmentCertificate: true,
-        timeout.Token);
+        packId: ArgumentValue(args, "--pack") ?? string.Empty,
+        ticket: ArgumentValue(args, "--ticket") ?? string.Empty,
+        cancellationToken: timeout.Token);
 
     ulong ownEntityId = session.EnteredZone.OwnEntityId;
     float startX = session.EnteredZone.SpawnPosition?.X ?? 0;
-    var advanced = new TaskCompletionSource<(float X, ulong Tick)>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var advanced = new TaskCompletionSource<(float X, ulong Tick, bool Alive)>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
     Task receiveTask = ReceiveUntilAdvanced(session, ownEntityId, startX, advanced, timeout.Token);
 
     using var movementTimer = new PeriodicTimer(TimeSpan.FromMilliseconds(50));
@@ -35,7 +38,12 @@ try
         }, timeout.Token);
     }
 
-    (float advancedX, ulong serverTick) = await advanced.Task.WaitAsync(timeout.Token);
+    (float advancedX, ulong serverTick, bool alive) = await advanced.Task.WaitAsync(timeout.Token);
+
+    // A clean exit through the envelope's logout verb, before the connection is
+    // torn down, so the shard's teardown runs rather than races.
+    await session.SendLogoutAsync(timeout.Token);
+
     timeout.Cancel();
     try
     {
@@ -46,8 +54,9 @@ try
     }
 
     Console.WriteLine(
-        $"SAR20_NET_SMOKE result=PASS transport=quic-stream entity={ownEntityId} " +
-        $"start_x={startX:F3} advanced_x={advancedX:F3} server_tick={serverTick} intents={sequence}");
+        $"SAR20_NET_SMOKE result=PASS transport=quic-stream envelope=v1 entity={ownEntityId} " +
+        $"start_x={startX:F3} advanced_x={advancedX:F3} alive={alive} " +
+        $"server_tick={serverTick} intents={sequence}");
     return 0;
 }
 catch (Exception exception)
@@ -60,7 +69,7 @@ static async Task ReceiveUntilAdvanced(
     GameSession session,
     ulong ownEntityId,
     float startX,
-    TaskCompletionSource<(float X, ulong Tick)> advanced,
+    TaskCompletionSource<(float X, ulong Tick, bool Alive)> advanced,
     CancellationToken cancellationToken)
 {
     while (!cancellationToken.IsCancellationRequested)
@@ -69,7 +78,7 @@ static async Task ReceiveUntilAdvanced(
         EntitySnapshot? own = snapshot.Entities.FirstOrDefault(entity => entity.EntityId == ownEntityId);
         if (own?.Position is not null && own.Position.X > startX + 0.05f)
         {
-            advanced.TrySetResult((own.Position.X, snapshot.ServerTick));
+            advanced.TrySetResult((own.Position.X, snapshot.ServerTick, own.Alive));
             return;
         }
     }

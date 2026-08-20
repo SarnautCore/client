@@ -2,6 +2,11 @@ using Sarnaut.Protocol.V1;
 
 namespace SarnautCore.Networking;
 
+/// <summary>
+/// One entity at one instant. Position, heading and velocity are interpolated;
+/// identity and combat state are taken from the newer of the two snapshots,
+/// because a level or a content id between two values is not a thing.
+/// </summary>
 public readonly record struct SampledEntity(
     ulong EntityId,
     EntityKind Kind,
@@ -12,7 +17,14 @@ public readonly record struct SampledEntity(
     float VelocityX,
     float VelocityY,
     float VelocityZ,
-    AnimationState AnimationState);
+    AnimationState AnimationState,
+    string ContentId,
+    string NameKey,
+    uint Level,
+    string Faction,
+    int Health,
+    int MaxHealth,
+    bool Alive);
 
 public sealed class SnapshotTimeline(int capacity = 32)
 {
@@ -109,7 +121,14 @@ public sealed class SnapshotTimeline(int capacity = 32)
             Lerp(leftVelocity.X, rightVelocity.X, amount),
             Lerp(leftVelocity.Y, rightVelocity.Y, amount),
             Lerp(leftVelocity.Z, rightVelocity.Z, amount),
-            right.AnimationState);
+            right.AnimationState,
+            right.ContentId,
+            right.NameKey,
+            right.Level,
+            right.Faction,
+            right.Health,
+            right.MaxHealth,
+            right.Alive);
         return true;
     }
 
