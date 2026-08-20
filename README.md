@@ -31,6 +31,8 @@ Controls:
 
 The loader currently applies the dominant converted terrain-layer texture to each terrain tile. Splat and light maps are present in the conversion, but full layered terrain materials are pending converter support.
 
+Walkabout loads the classic Elf male skinned scene for the local player and crossfades between its `idle` and `run` clips from controller movement state. The camera follows from a third-person spring arm. Server-object placements resolve `MobWorld` and spawn-table references into the zone's converted character or creature scene, then play `idle`; NPC scene loading keeps only `idle`, `run`, and `walk` resources to avoid loading unrelated combat and emote clips. A missing or incomplete converted model becomes a colored capsule and is counted in `NpcPlaceholderCount` and `NpcModelFailures`.
+
 ### Online walkabout
 
 Start the shard, enable **Online mode** on the Boot menu, and leave the endpoint at `127.0.0.1:4242`. The walkabout then joins network zone `InstLeague1`, sends the controller's world-space WASD input at 20 Hz, and renders authoritative snapshots with a 125 ms interpolation delay. The existing `Walker` node represents the local player. Other players and NPCs appear as colored capsules. Disable the toggle to use the original offline controller unchanged.

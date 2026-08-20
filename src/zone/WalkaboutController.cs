@@ -12,6 +12,7 @@ public partial class WalkaboutController : CharacterBody3D
 
     private Node3D _head = null!;
     private CollisionShape3D _collision = null!;
+    private ConvertedCharacter? _character;
     private float _gravity;
 
     public bool IsFlying { get; private set; }
@@ -25,6 +26,7 @@ public partial class WalkaboutController : CharacterBody3D
     {
         _head = GetNode<Node3D>("Head");
         _collision = GetNode<CollisionShape3D>("CollisionShape3D");
+        _character = GetNodeOrNull<ConvertedCharacter>("Character");
         _gravity = (float)ProjectSettings.GetSetting("physics/3d/default_gravity", 9.8).AsDouble();
         if (DisplayServer.GetName() != "headless")
         {
@@ -59,6 +61,7 @@ public partial class WalkaboutController : CharacterBody3D
         Vector3 localDirection = new(input.X, 0, input.Y);
         Vector3 worldDirection = (Basis * localDirection).Normalized();
         NetworkMoveDirection = worldDirection;
+        _character?.SetMoving(input.LengthSquared() > 0.001f);
 
         if (NetworkControlled)
         {

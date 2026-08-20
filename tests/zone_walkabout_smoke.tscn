@@ -1,7 +1,8 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=4 format=3]
 
 [ext_resource type="Script" path="res://tests/ZoneWalkaboutSmoke.cs" id="1_smoke"]
 [ext_resource type="Script" path="res://src/zone/ZoneLoader.cs" id="2_loader"]
+[ext_resource type="Script" path="res://src/characters/ConvertedCharacter.cs" id="3_character"]
 
 [node name="ZoneWalkaboutSmoke" type="Node"]
 script = ExtResource("1_smoke")
@@ -9,3 +10,6 @@ script = ExtResource("1_smoke")
 [node name="ZoneLoader" type="Node3D" parent="."]
 script = ExtResource("2_loader")
 map_name = "Inst_LeagueStart"
+
+[node name="PlayerCharacter" type="Node3D" parent="."]
+script = ExtResource("3_character")
