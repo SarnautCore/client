@@ -44,8 +44,9 @@ Controls are named input actions in `project.godot`'s `[input]` section, so they
 | `move_descend` | `Q`, `Ctrl` | descend while flying |
 | `move_sprint` | `Shift` | fly faster |
 | `move_toggle_fly` | `F` | toggle walk/fly mode |
-| `camera_orbit` / `camera_zoom_in` / `camera_zoom_out` | right mouse, wheel | orbit and zoom a preview camera |
-| `target_nearest` | `Tab` | target |
+| `camera_orbit` / `camera_zoom_in` / `camera_zoom_out` | right mouse, wheel | orbit and zoom a preview camera; right mouse also recaptures the cursor in the zone |
+| `target_nearest` | `Tab` | cycle targets outwards from the player |
+| `target_click` | left mouse | target the entity under the cursor |
 | `interact` | `E` | interact |
 | `journal` | `J` | journal |
 | `inventory` | `I` | inventory |
@@ -57,7 +58,21 @@ Walkabout loads the classic Elf male skinned scene for the local player and cros
 
 ### Online walkabout
 
-Entering the world is now part of the session shell rather than a toggle on the hub: choose a character and press **Enter the world**. Character select mints the opaque single-use shard ticket, and the zone scene presents it in `EnterZoneRequest` (ADR 0030 §2). The walkabout joins the chargen option's spawn zone, sends the controller's world-space movement at 20 Hz, and renders authoritative snapshots with a 125 ms interpolation delay. The spawn the server answers with is authoritative and the client snaps to it. Other players and NPCs appear as colored capsules. **Walk a converted zone** on the hub is the offline controller, unchanged and with no shard involved.
+Entering the world is now part of the session shell rather than a toggle on the hub: choose a character and press **Enter the world**. Character select mints the opaque single-use shard ticket, and the zone scene presents it in `EnterZoneRequest` (ADR 0030 §2). The walkabout joins the chargen option's spawn zone, sends the controller's world-space movement at 20 Hz, and renders authoritative snapshots with a 125 ms interpolation delay. The spawn the server answers with is authoritative and the client snaps to it. **Walk a converted zone** on the hub is the offline controller, unchanged and with no shard involved.
+
+#### Server entities
+
+The shard decides what exists. Online, `ZoneLoader` counts the map's authored mob placements but does not draw them (`spawn_npc_visuals` is off), because a placement is where a mob *may* spawn and not proof that one is there; the offline walkabout turns it back on because there is no shard to ask. Every replicated entity is one `NetworkEntityVisual` under `NetworkEntities`, carrying its model, an `Area3D` on the entity physics layer for picking, a billboard nameplate and a health bar. `ZoneNetworkLoop.Entities` is the registry: it answers *entity by id* and, through `TryTargetAtScreenPoint`, *entity under the cursor*. `Tab` cycles targets outwards from the player and wraps.
+
+Nameplates come from `name_key` and never from the wire (ADR 0007). When there is no locale string the key is slugged — `Rat1_1_Name.txt` reads `Rat  (2)` — so a nameplate is always readable and never a raw key.
+
+`EntitySnapshot.content_id` binds to a converted model through `converted/assets/<ruleset>/entity_models.json`, a manifest derived from extracted content that lives with the converted assets and is never committed here. Write it with:
+
+```powershell
+./scripts/build-entity-models.ps1 -DataRepo ..\data
+```
+
+Without the manifest, or without `converted/` at all, every entity renders as a labelled capsule at its authoritative position. That is a supported way to run the client, and it is what CI builds.
 
 Set `SARNAUT_SERVER_ADDRESS` before starting Godot to change the endpoint default. Online mode accepts the shard's ephemeral self-signed certificate for local development. Production certificate validation remains future work.
 
@@ -86,9 +101,13 @@ dotnet test SarnautCore.sln
 godot_console --headless --import --path .
 godot_console --headless --path . --scene res://tests/asset_viewer_smoke.tscn
 godot_console --headless --path . --scene res://tests/zone_walkabout_smoke.tscn
+godot_console --headless --path . --scene res://tests/entity_binding_smoke.tscn
+dotnet run --project tools/SarnautCore.EntityBench -c Release -- --entities 288
 ```
 
 The Asset Viewer smoke scene expects local samples under `converted/samples/`. The Zone Walkabout smoke scene expects the classic conversion below `converted/assets/classic-1.1/` and prints the imported terrain and placement counts. These files are intentionally absent from Git because converted game assets must remain local.
+
+The Entity Binding smoke scene needs neither: it binds snapshots to visuals, picks one with a ray and retires one, and prints whether it ran on converted models or on capsules. Run it both ways. `SarnautCore.EntityBench` compares the entity update against the pre-registry loop; see `tools/SarnautCore.EntityBench/RESULTS.md`.
 
 For an asset-free end-to-end network check, keep the `server` repository beside this one and run:
 

@@ -19,6 +19,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SarnautCore.Shell.Tests", "tests\SarnautCore.Shell.Tests\SarnautCore.Shell.Tests.csproj", "{5841AFC5-4EA6-419E-8943-BFD548BA5094}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{07C2787E-EAC7-C090-1BA3-A61EC2A24D84}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SarnautCore.EntityBench", "tools\SarnautCore.EntityBench\SarnautCore.EntityBench.csproj", "{55FAB463-EB53-4CDD-96F1-2A3223682626}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -179,6 +183,30 @@ Global
 		{5841AFC5-4EA6-419E-8943-BFD548BA5094}.Release|x64.Build.0 = Release|Any CPU
 		{5841AFC5-4EA6-419E-8943-BFD548BA5094}.Release|x86.ActiveCfg = Release|Any CPU
 		{5841AFC5-4EA6-419E-8943-BFD548BA5094}.Release|x86.Build.0 = Release|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.Debug|x64.Build.0 = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.Debug|x86.Build.0 = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.ExportDebug|Any CPU.ActiveCfg = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.ExportDebug|Any CPU.Build.0 = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.ExportDebug|x64.ActiveCfg = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.ExportDebug|x64.Build.0 = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.ExportDebug|x86.ActiveCfg = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.ExportDebug|x86.Build.0 = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.ExportRelease|Any CPU.ActiveCfg = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.ExportRelease|Any CPU.Build.0 = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.ExportRelease|x64.ActiveCfg = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.ExportRelease|x64.Build.0 = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.ExportRelease|x86.ActiveCfg = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.ExportRelease|x86.Build.0 = Debug|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.Release|Any CPU.Build.0 = Release|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.Release|x64.ActiveCfg = Release|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.Release|x64.Build.0 = Release|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.Release|x86.ActiveCfg = Release|Any CPU
+		{55FAB463-EB53-4CDD-96F1-2A3223682626}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -186,5 +214,6 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{38EFC339-18E8-4BD3-9049-9E45AC073232} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{5841AFC5-4EA6-419E-8943-BFD548BA5094} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{55FAB463-EB53-4CDD-96F1-2A3223682626} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 	EndGlobalSection
 EndGlobal

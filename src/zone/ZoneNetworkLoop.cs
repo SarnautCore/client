@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -29,23 +27,41 @@ public partial class ZoneNetworkLoop : Node
             SingleWriter = true,
         });
     private readonly SnapshotTimeline _timeline = new();
-    private readonly Dictionary<ulong, Node3D> _remoteEntities = [];
+    private readonly MoveIntentCadence _cadence = new(SendIntervalSeconds);
     private readonly Stopwatch _clock = Stopwatch.StartNew();
 
     private WalkaboutController _walker = null!;
-    private Node3D _entityRoot = null!;
+    private ZoneEntityVisualFactory _visuals = null!;
+    private ZoneEntityPicker _picker = null!;
     private Action<string> _setStatus = null!;
     private Action? _onAdmitted;
     private Action<string>? _onRefused;
     private Task? _networkTask;
     private ulong _ownEntityId;
-    private ulong _sequence;
-    private double _sendAccumulator;
     private double _statusAccumulator;
     private bool _connected;
 
     [Export(PropertyHint.Range, "0.1,0.15,0.005")]
     public double InterpolationDelaySeconds { get; set; } = 0.125;
+
+    /// <summary>How far a Tab press will reach for a target.</summary>
+    [Export(PropertyHint.Range, "5,120,1")]
+    public float TargetRangeMetres { get; set; } = 45.0f;
+
+    /// <summary>
+    /// Every entity the shard is replicating to this client, by id and by the
+    /// body a pick ray hits.
+    /// </summary>
+    public EntityRegistry Entities { get; private set; } = null!;
+
+    /// <summary>The entity this client is playing.</summary>
+    public ulong OwnEntityId => _ownEntityId;
+
+    /// <summary>The entity the player has selected, or 0 for none.</summary>
+    public ulong TargetEntityId { get; private set; }
+
+    /// <summary>Raised when the selection changes, with 0 for a cleared target.</summary>
+    public event Action<ulong>? TargetChanged;
 
     /// <param name="ticket">
     /// The opaque single-use shard ticket the account service minted for this
@@ -55,6 +71,8 @@ public partial class ZoneNetworkLoop : Node
     public void Start(
         WalkaboutController walker,
         Node3D entityRoot,
+        EntityModelCatalog catalog,
+        string convertedRoot,
         string address,
         string zoneId,
         Secret ticket,
@@ -63,7 +81,10 @@ public partial class ZoneNetworkLoop : Node
         Action<string>? onRefused = null)
     {
         _walker = walker;
-        _entityRoot = entityRoot;
+        _visuals = new ZoneEntityVisualFactory(entityRoot, catalog, convertedRoot);
+        Entities = new EntityRegistry(_visuals);
+        _picker = new ZoneEntityPicker();
+        AddChild(_picker);
         _setStatus = setStatus;
         _onAdmitted = onAdmitted;
         _onRefused = onRefused;
@@ -79,22 +100,11 @@ public partial class ZoneNetworkLoop : Node
             return;
         }
 
-        _sendAccumulator += delta;
-        while (_sendAccumulator >= SendIntervalSeconds)
+        _cadence.Accumulate(delta);
+        Vector3 direction = _walker.NetworkMoveDirection;
+        while (_cadence.TryDequeue(direction.X, direction.Z, _walker.Rotation.Y, out ClientMoveIntent intent))
         {
-            _sendAccumulator -= SendIntervalSeconds;
-            Vector3 direction = _walker.NetworkMoveDirection;
-            _moveIntents.Writer.TryWrite(new ClientMoveIntent
-            {
-                Seq = ++_sequence,
-                Input = new Sarnaut.Protocol.V1.Vec3
-                {
-                    X = direction.X,
-                    Y = direction.Z,
-                },
-                Heading = _walker.Rotation.Y,
-                DtSeconds = (float)(SendIntervalSeconds * 2),
-            });
+            _moveIntents.Writer.TryWrite(intent);
         }
     }
 
@@ -118,7 +128,10 @@ public partial class ZoneNetworkLoop : Node
             _statusAccumulator = 0;
             _setStatus(
                 $"Online: QUIC stream | entity {_ownEntityId} | tick {_timeline.LatestServerTick} | " +
-                $"position {_walker.Position.X:F1}, {_walker.Position.Z:F1} | {_timeline.LatestEntityIds.Count} entities");
+                $"position {_walker.Position.X:F1}, {_walker.Position.Z:F1} | " +
+                $"{_timeline.LatestEntityIds.Count} entities " +
+                $"({_visuals.ModelCount} models, {_visuals.CapsuleCount} capsules)" +
+                (TargetEntityId == 0 ? string.Empty : $" | target {TargetEntityId}"));
         }
     }
 
@@ -129,6 +142,74 @@ public partial class ZoneNetworkLoop : Node
         _shutdown.Cancel();
         _moveIntents.Writer.TryComplete();
         _shutdown.Dispose();
+    }
+
+    /// <summary>
+    /// Selects the entity under a point on screen, and returns false when the
+    /// ray hit nothing the registry knows.
+    /// </summary>
+    public bool TryTargetAtScreenPoint(Vector2 screenPoint, out ulong entityId)
+    {
+        entityId = 0;
+        if (Entities is null)
+        {
+            return false;
+        }
+
+        if (!_picker.TryPick(GetViewport().GetCamera3D(), screenPoint, out ulong pickKey)
+            || !Entities.TryGetByPickKey(pickKey, out TrackedEntity? hit))
+        {
+            // Clicking past everything is how a target is dropped.
+            SetTarget(0);
+            return false;
+        }
+
+        entityId = hit.EntityId;
+        SetTarget(entityId);
+        return true;
+    }
+
+    /// <summary>Steps the Tab cycle outwards from the player.</summary>
+    public bool TryCycleTarget(out ulong entityId)
+    {
+        entityId = 0;
+        if (Entities is null || !Entities.HasLocalSample)
+        {
+            return false;
+        }
+
+        SampledEntity local = Entities.LocalSample;
+        if (!Entities.TryCycleTarget(TargetEntityId, local.X, local.Y, local.Z, TargetRangeMetres, out entityId))
+        {
+            SetTarget(0);
+            return false;
+        }
+
+        SetTarget(entityId);
+        return true;
+    }
+
+    public void SetTarget(ulong entityId)
+    {
+        if (TargetEntityId == entityId)
+        {
+            return;
+        }
+
+        if (TargetEntityId != 0 && Entities.TryGet(TargetEntityId, out TrackedEntity? previous)
+            && previous.Visual is NetworkEntityVisual previousVisual)
+        {
+            previousVisual.Targeted = false;
+        }
+
+        TargetEntityId = entityId;
+        if (entityId != 0 && Entities.TryGet(entityId, out TrackedEntity? current)
+            && current.Visual is NetworkEntityVisual currentVisual)
+        {
+            currentVisual.Targeted = true;
+        }
+
+        TargetChanged?.Invoke(entityId);
     }
 
     private async Task RunNetworkAsync(
@@ -235,64 +316,33 @@ public partial class ZoneNetworkLoop : Node
         }
     }
 
+    /// <summary>
+    /// Draws one frame of the replicated world.
+    /// </summary>
+    /// <remarks>
+    /// This used to be quadratic in the entity count: it read a freshly
+    /// allocated id array twice, searched the timeline and then linearly scanned
+    /// both batches once per entity, and swept for stale entities with a
+    /// <c>Contains</c> inside a <c>Where</c>. The window is now opened once and
+    /// the registry does the rest in one pass; see
+    /// <c>tools/SarnautCore.EntityBench/RESULTS.md</c>.
+    /// </remarks>
     private void UpdateEntities()
     {
-        double now = _clock.Elapsed.TotalSeconds;
-        IReadOnlyCollection<ulong> latestIds = _timeline.LatestEntityIds;
-        foreach (ulong entityId in latestIds)
+        SnapshotWindow window = _timeline.OpenWindow(_clock.Elapsed.TotalSeconds, InterpolationDelaySeconds);
+        Entities.Reconcile(window, _ownEntityId);
+        if (Entities.HasLocalSample)
         {
-            if (!_timeline.TrySample(entityId, now, InterpolationDelaySeconds, out SampledEntity sample))
-            {
-                continue;
-            }
-
-            Vector3 position = new(sample.X, sample.Z, sample.Y);
-            if (entityId == _ownEntityId)
-            {
-                _walker.Position = position;
-                continue;
-            }
-
-            if (!_remoteEntities.TryGetValue(entityId, out Node3D? entityNode))
-            {
-                entityNode = CreatePlaceholder(sample);
-                _remoteEntities.Add(entityId, entityNode);
-                _entityRoot.AddChild(entityNode);
-            }
-
-            entityNode.Position = position;
-            entityNode.Rotation = new Vector3(0, sample.Heading, 0);
+            SampledEntity local = Entities.LocalSample;
+            _walker.Position = new Vector3(local.X, local.Z, local.Y);
         }
 
-        foreach (ulong staleId in _remoteEntities.Keys.Where(id => !latestIds.Contains(id)).ToArray())
+        if (TargetEntityId != 0 && !Entities.Contains(TargetEntityId))
         {
-            _remoteEntities[staleId].QueueFree();
-            _remoteEntities.Remove(staleId);
+            // The shard stopped replicating the target: it died and despawned,
+            // or it left the subscription. Either way the selection is gone.
+            SetTarget(0);
         }
-    }
-
-    private static Node3D CreatePlaceholder(SampledEntity sample)
-    {
-        Color color = sample.Kind == EntityKind.Npc ? new Color("e4a853") : new Color("55c8e8");
-        var material = new StandardMaterial3D
-        {
-            AlbedoColor = color,
-            Roughness = 0.75f,
-        };
-        var mesh = new MeshInstance3D
-        {
-            Name = "Capsule",
-            Mesh = new CapsuleMesh
-            {
-                Radius = 0.42f,
-                Height = 1.8f,
-                Material = material,
-            },
-            Position = new Vector3(0, 0.9f, 0),
-        };
-        var root = new Node3D { Name = $"Entity_{sample.EntityId}" };
-        root.AddChild(mesh);
-        return root;
     }
 
     private static Vector3 ToGodot(Sarnaut.Protocol.V1.Vec3 value) => new(value.X, value.Z, value.Y);

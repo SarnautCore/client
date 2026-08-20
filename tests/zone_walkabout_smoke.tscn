@@ -9,7 +9,8 @@ script = ExtResource("1_smoke")
 
 [node name="ZoneLoader" type="Node3D" parent="."]
 script = ExtResource("2_loader")
-map_name = "Inst_LeagueStart"
+MapName = "Inst_LeagueStart"
+SpawnNpcVisuals = true
 
 [node name="PlayerCharacter" type="Node3D" parent="."]
 script = ExtResource("3_character")

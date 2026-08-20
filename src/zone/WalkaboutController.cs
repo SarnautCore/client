@@ -63,9 +63,17 @@ public partial class WalkaboutController : CharacterBody3D
             _head.Rotation = headRotation;
             GetViewport().SetInputAsHandled();
         }
-        else if (inputEvent is InputEventMouseButton button && button.Pressed && button.ButtonIndex == MouseButton.Left)
+        else if (inputEvent is InputEventMouseButton button
+                 && button.Pressed
+                 && button.ButtonIndex == MouseButton.Right
+                 && Input.MouseMode != Input.MouseModeEnum.Captured)
         {
+            // Recapture is the right button's job. It used to be the left
+            // button's, which meant the controller ate every left click before
+            // anything could target with one: the first click after Esc did
+            // nothing but grab the cursor back.
             Input.MouseMode = Input.MouseModeEnum.Captured;
+            GetViewport().SetInputAsHandled();
         }
         else if (!NetworkControlled && inputEvent.IsActionPressed(MoveToggleFly))
         {

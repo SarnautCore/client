@@ -57,6 +57,67 @@ public sealed class SnapshotTimelineTests
         Assert.True(sample.Alive);
     }
 
+    // The nameplate, the health bar and the model binding all read fields that
+    // used to be sampled through a per-entity linear scan. A window samples them
+    // all from one pair of snapshots, and has to reach the same answers.
+    [Fact]
+    public void SamplesEveryReplicatedFieldThroughAWindow()
+    {
+        var timeline = new SnapshotTimeline();
+        timeline.Add(Snapshot(tick: 10, x: 2, health: 120), receivedAtSeconds: 1.0);
+        timeline.Add(Snapshot(tick: 12, x: 4, health: 60), receivedAtSeconds: 1.2);
+
+        SnapshotWindow window = timeline.OpenWindow(1.25, 0.15);
+
+        Assert.False(window.IsEmpty);
+        Assert.Equal(new ulong[] { 7 }, window.EntityIds.ToArray());
+        Assert.True(window.TrySample(7, out SampledEntity sample));
+        Assert.Equal(3, sample.X, precision: 4);
+        Assert.Equal(EntityKind.Player, sample.Kind);
+        Assert.Equal(AnimationState.Moving, sample.AnimationState);
+        Assert.Equal("mob.fixture.critter", sample.ContentId);
+        Assert.Equal("mob.fixture.critter.name", sample.NameKey);
+        Assert.Equal((uint)2, sample.Level);
+        Assert.Equal("faction.wild", sample.Faction);
+        Assert.Equal(60, sample.Health);
+        Assert.Equal(150, sample.MaxHealth);
+        Assert.True(sample.Alive);
+        Assert.False(window.TrySample(4242, out _));
+    }
+
+    [Fact]
+    public void HasNoWindowBeforeTheFirstWholeTick()
+    {
+        var timeline = new SnapshotTimeline();
+        SnapshotWindow empty = timeline.OpenWindow(1.0, 0.15);
+
+        Assert.True(empty.IsEmpty);
+        Assert.False(empty.TrySample(7, out _));
+
+        timeline.Add(Chunk(tick: 10, index: 0, count: 2, entityId: 1), receivedAtSeconds: 1.0);
+        Assert.True(timeline.OpenWindow(1.05, 0.15).IsEmpty);
+    }
+
+    // The zone loop reads this every frame and used to get a fresh array each
+    // time. The list is the timeline's own, so two reads are the same object and
+    // neither one allocates.
+    [Fact]
+    public void PublishesOneEntityIdListRatherThanACopyPerRead()
+    {
+        var timeline = new SnapshotTimeline();
+        timeline.Add(Snapshot(tick: 10, x: 2), receivedAtSeconds: 1.0);
+
+        Assert.Same(timeline.LatestEntityIds, timeline.LatestEntityIds);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int index = 0; index < 1000; index++)
+        {
+            _ = timeline.LatestEntityIds.Count;
+        }
+
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
     // A tick the shard could not fit in one datagram arrives as several batches
     // sharing a ServerTick (session spec rule 5.5.7). Replacing the tick with
     // each chunk as it lands — which is what a same-tick batch used to do — makes
