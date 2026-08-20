@@ -53,7 +53,7 @@ directional_shadow_max_distance = 600.0
 
 [node name="ZoneLoader" type="Node3D" parent="."]
 script = ExtResource("2_loader")
-auto_load = false
+AutoLoad = false
 
 [node name="Walker" type="CharacterBody3D" parent="."]
 script = ExtResource("3_controller")
@@ -100,6 +100,7 @@ layout_mode = 2
 theme_override_styles/panel = SubResource("Panel_status")
 
 [node name="Status" type="Label" parent="Interface/Margin/Column/StatusPanel"]
+unique_name_in_owner = true
 layout_mode = 2
 text = "Loading zone..."
 theme_override_colors/font_color = Color(0.91, 0.94, 0.98, 1)

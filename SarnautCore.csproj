@@ -17,6 +17,11 @@
     <Compile Remove="src/SarnautCore.Shell/**" />
     <Compile Remove="tests/**" />
     <Compile Remove="tools/**" />
+    <!-- The headless smoke scenes are Godot scripts and belong to this project;
+         only the xUnit projects below tests/ are somebody else's. Removing all
+         of tests/ compiled them out, which left every smoke scene refusing to
+         instantiate its own script. -->
+    <Compile Include="tests/*.cs" />
     <ProjectReference Include="src/SarnautCore.Network/SarnautCore.Network.csproj" />
     <ProjectReference Include="src/SarnautCore.Shell/SarnautCore.Shell.csproj" />
   </ItemGroup>

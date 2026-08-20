@@ -42,6 +42,13 @@ public partial class SessionHost : Node
     public string ServerAddress { get; set; } =
         System.Environment.GetEnvironmentVariable(ServerAddressVariable) ?? DefaultServerAddress;
 
+    /// <summary>
+    /// The runtime pack this client claims in <c>ClientHello</c> (ADR 0029).
+    /// Empty is legal and means the shard decides whether to admit a client that
+    /// names no pack.
+    /// </summary>
+    public string ContentPackId { get; set; } = ContentPackIdentity.FromEnvironment();
+
     /// <summary>The account service, built once per run.</summary>
     public AuthClient Auth => _auth ??= AuthClient.Create(new Uri(
         System.Environment.GetEnvironmentVariable(AuthAddressVariable) ?? AuthClient.DefaultBaseAddress));

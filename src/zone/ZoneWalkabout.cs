@@ -16,12 +16,24 @@ namespace SarnautCore;
 /// </remarks>
 public partial class ZoneWalkabout : Node3D
 {
+    /// <summary>The named input actions this scene reads, declared in <c>project.godot</c>.</summary>
+    public const string TargetClick = "target_click";
+    public const string TargetNearest = "target_nearest";
+
     [Export] public string DefaultMapName { get; set; } = ZoneLoader.DefaultMapName;
     [Export] public string DefaultZoneId { get; set; } = "InstLeague1";
+
+    /// <summary>
+    /// Where the status line is. Exported rather than hard-coded, because the
+    /// path used to be a string literal four containers deep and renaming any
+    /// one of them turned the whole scene into a null reference at run time.
+    /// </summary>
+    [Export] public NodePath StatusLabelPath { get; set; } = new("%Status");
 
     private SessionHost _session = null!;
     private ZoneLoader _loader = null!;
     private WalkaboutController _walker = null!;
+    private ZoneNetworkLoop? _networkLoop;
     private Label _status = null!;
     private string _zoneStatus = "";
 
@@ -30,10 +42,16 @@ public partial class ZoneWalkabout : Node3D
         _session = SessionHost.Of(this);
         _loader = GetNode<ZoneLoader>("ZoneLoader");
         _walker = GetNode<WalkaboutController>("Walker");
-        _status = GetNode<Label>("Interface/Margin/Column/StatusPanel/Status");
+        _status = GetNode<Label>(StatusLabelPath);
 
         ZoneRequest request = _session.Zone;
         string mapName = string.IsNullOrWhiteSpace(request.MapName) ? DefaultMapName : request.MapName.Trim();
+
+        // Offline there is no shard to be authoritative, so the map's own mob
+        // placements are all there is to draw. Online they are duplicates of
+        // entities the shard replicates, and drawing them puts two of every
+        // creature in the zone.
+        _loader.SpawnNpcVisuals = !request.Online;
         if (!_loader.LoadZone(mapName))
         {
             _status.Text = _loader.LastError;
@@ -52,13 +70,22 @@ public partial class ZoneWalkabout : Node3D
 
         var entityRoot = new Node3D { Name = "NetworkEntities" };
         AddChild(entityRoot);
-        var networkLoop = new ZoneNetworkLoop { Name = "NetworkLoop" };
-        AddChild(networkLoop);
-        networkLoop.Start(
+        var catalog = new EntityModelCatalog(_loader.ConvertedRoot);
+        if (!catalog.IsAvailable)
+        {
+            GD.Print($"ZoneWalkabout: {catalog.LastError}");
+        }
+
+        _networkLoop = new ZoneNetworkLoop { Name = "NetworkLoop" };
+        AddChild(_networkLoop);
+        _networkLoop.Start(
             _walker,
             entityRoot,
+            catalog,
+            _loader.ConvertedRoot,
             request.ServerAddress,
             string.IsNullOrWhiteSpace(request.ZoneId) ? DefaultZoneId : request.ZoneId,
+            _session.ContentPackId,
             request.Ticket,
             SetNetworkStatus,
             OnAdmitted,
@@ -94,21 +121,47 @@ public partial class ZoneWalkabout : Node3D
 
     public override void _UnhandledInput(InputEvent inputEvent)
     {
-        if (!inputEvent.IsActionPressed("ui_cancel"))
+        if (inputEvent.IsActionPressed("ui_cancel"))
+        {
+            if (Input.MouseMode == Input.MouseModeEnum.Captured)
+            {
+                Input.MouseMode = Input.MouseModeEnum.Visible;
+            }
+            else
+            {
+                Leave();
+            }
+
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (_networkLoop is null)
         {
             return;
         }
 
-        if (Input.MouseMode == Input.MouseModeEnum.Captured)
+        if (inputEvent.IsActionPressed(TargetNearest))
         {
-            Input.MouseMode = Input.MouseModeEnum.Visible;
-        }
-        else
-        {
-            Leave();
+            _networkLoop.TryCycleTarget(out _);
+            GetViewport().SetInputAsHandled();
+            return;
         }
 
-        GetViewport().SetInputAsHandled();
+        if (inputEvent.IsActionPressed(TargetClick))
+        {
+            // With the cursor captured there is no cursor to pick under, so the
+            // pick goes through the middle of the screen, which is where the
+            // crosshair would be.
+            Viewport viewport = GetViewport();
+            Vector2 point = Input.MouseMode == Input.MouseModeEnum.Captured
+                ? viewport.GetVisibleRect().Size * 0.5f
+                : viewport.GetMousePosition();
+            if (_networkLoop.TryTargetAtScreenPoint(point, out _))
+            {
+                viewport.SetInputAsHandled();
+            }
+        }
     }
 
     private void Leave()

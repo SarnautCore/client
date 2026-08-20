@@ -30,9 +30,19 @@
 .PARAMETER ServerRepo
     Path to a checkout of SarnautCore/server, which supplies auth, the shard and
     the vendored fixture pack.
+
+.PARAMETER EntityProbe
+    Also run `res://tests/zone_online_probe.tscn` against the same rig. It loads
+    the real zone scene against the live shard and checks what the client ended
+    up drawing: one visual per replicated entity, nameplates and health bars, and
+    that Tab and a screen-point pick agree on the same entity id. It needs Godot
+    on PATH, and the converted assets if the models are to be anything but
+    capsules.
 #>
 param(
     [string]$ServerRepo = "../server",
+    [switch]$EntityProbe,
+    [string]$Godot = "godot",
     [string]$Address = "127.0.0.1:4452",
     [string]$AuthAddress = "127.0.0.1:8593",
     [string]$ShardHealthAddress = "127.0.0.1:8591",
@@ -186,6 +196,30 @@ try {
         }
     }
     Write-Output "PASS no password, email or token appears in the client output"
+
+    if ($EntityProbe) {
+        Write-Output "== entity binding against the live shard =="
+        [System.Environment]::SetEnvironmentVariable("SARNAUT_SERVER_ADDRESS", $Address, "Process")
+        [System.Environment]::SetEnvironmentVariable("SARNAUT_AUTH_ADDRESS", "http://$AuthAddress", "Process")
+        # The shard is gated on pack_id (ADR 0029), so the client has to name the
+        # same pack rather than connecting anonymously.
+        [System.Environment]::SetEnvironmentVariable("SARNAUT_CONTENT_PACK", $contentPack, "Process")
+        [System.Environment]::SetEnvironmentVariable("SARNAUT_PROBE_ZONE", $zoneId, "Process")
+        [System.Environment]::SetEnvironmentVariable("SARNAUT_PROBE_EMAIL", $email, "Process")
+        [System.Environment]::SetEnvironmentVariable("SARNAUT_PROBE_PASSWORD", $password, "Process")
+        [System.Environment]::SetEnvironmentVariable("SARNAUT_PROBE_CHARACTER", $characterName, "Process")
+
+        & dotnet build (Join-Path $clientRoot "SarnautCore.csproj") --configuration Debug
+        if ($LASTEXITCODE -ne 0) { throw "Building the Godot project failed." }
+
+        $probe = & $Godot --headless --path $clientRoot --scene res://tests/zone_online_probe.tscn 2>&1
+        $probe | ForEach-Object { Write-Output $_ }
+        $line = $probe | Select-String -Pattern "ZONE_ONLINE_PROBE .* result=(\w+)"
+        if ($null -eq $line -or $line.Matches[0].Groups[1].Value -ne "PASS") {
+            throw "The entity binding probe did not pass."
+        }
+        Write-Output "PASS the zone drew the shard's entities"
+    }
 
     Write-Output "m2-session-smoke: OK"
 }

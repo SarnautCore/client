@@ -21,6 +21,7 @@ public partial class ZoneLoader : Node3D
         PropertyNameCaseInsensitive = true,
     };
     private readonly HashSet<string> _npcModelFailures = new(StringComparer.OrdinalIgnoreCase);
+    private AllodsResourceTree _tree = new(DefaultConvertedRoot);
     private Node3D _terrainRoot = null!;
     private Node3D _objectsRoot = null!;
     private Node3D _charactersRoot = null!;
@@ -29,6 +30,18 @@ public partial class ZoneLoader : Node3D
     [Export(PropertyHint.Dir)] public string ConvertedRoot { get; set; } = DefaultConvertedRoot;
     [Export] public bool AutoLoad { get; set; } = true;
     [Export] public bool CreateTerrainCollision { get; set; } = true;
+
+    /// <summary>
+    /// Whether the map's authored mob placements are drawn as NPCs.
+    /// </summary>
+    /// <remarks>
+    /// Off, because the shard is authoritative over what exists: a placement is
+    /// where a mob may be spawned, not proof that one is there, and drawing both
+    /// the placement and the replicated entity put two identical creatures on the
+    /// same patch of ground with only one of them alive. The offline walkabout
+    /// turns it back on, because there is no shard to ask.
+    /// </remarks>
+    [Export] public bool SpawnNpcVisuals { get; set; }
 
     public int TerrainTileCount { get; private set; }
     public int TerrainVertexCount { get; private set; }
@@ -64,6 +77,7 @@ public partial class ZoneLoader : Node3D
     public bool LoadZone(string mapName)
     {
         ResetZone();
+        _tree = new AllodsResourceTree(ConvertedRoot);
         MapName = mapName.Trim();
         if (!IsSafeMapName(MapName))
         {
@@ -332,6 +346,13 @@ public partial class ZoneLoader : Node3D
             }
 
             NpcPlacementCount++;
+            if (!SpawnNpcVisuals)
+            {
+                // Counted, not drawn: the placement count still says what the map
+                // authored, and what stands there is the shard's business.
+                continue;
+            }
+
             string modelSource = mobSources.FirstOrDefault() ?? placement.Hrefs.FirstOrDefault() ?? placement.ObjectType;
             NpcDefinition? definition = mobSources
                 .Select(ResolveNpcDefinition)
@@ -409,33 +430,12 @@ public partial class ZoneLoader : Node3D
     {
         AllodsResource? mob = LoadAllodsResource(mobSource);
         string visualMobSource = NormalizeHref(mobSource, ReadHref(mob?.raw_xml ?? string.Empty, "visMob"));
-        AllodsResource? visualMob = LoadAllodsResource(visualMobSource);
-        if (visualMob == null)
+        if (!_tree.TryResolveVisualMob(visualMobSource, out string scenePath, out float visualScale))
         {
             return null;
         }
 
-        string characterSource = NormalizeHref(visualMobSource, ReadHref(visualMob.raw_xml, "character"));
-        string visualObjectSource = characterSource;
-        if (!characterSource.Contains("(VisObjectTemplate).xdb", StringComparison.OrdinalIgnoreCase))
-        {
-            AllodsResource? character = LoadAllodsResource(characterSource);
-            visualObjectSource = NormalizeHref(
-                characterSource,
-                ReadHref(character?.raw_xml ?? string.Empty, "characterVisObject"));
-        }
-
-        if (string.IsNullOrEmpty(visualObjectSource))
-        {
-            return null;
-        }
-
-        float visualScale = ReadFloat(visualMob.raw_xml, "scale", 1.0f);
-        return new NpcDefinition(
-            mobSource,
-            visualMobSource,
-            $"{StripXdbSuffix(visualObjectSource)}.scene.tscn",
-            visualScale <= 0 ? 1.0f : visualScale);
+        return new NpcDefinition(mobSource, visualMobSource, scenePath, visualScale);
     }
 
     private void AddNpcPlaceholder(MapObjectPlacement placement, string modelSource)
@@ -513,72 +513,12 @@ public partial class ZoneLoader : Node3D
         return mesh == null ? null : new MeshInstance3D { Name = "ConvertedMesh", Mesh = mesh };
     }
 
-    private AllodsResource? LoadAllodsResource(string sourcePath)
-    {
-        string path = $"{ConvertedRoot.TrimEnd('/')}/resources/{sourcePath}.tres";
-        return ResourceLoader.Load<AllodsResource>(path);
-    }
+    private AllodsResource? LoadAllodsResource(string sourcePath) => _tree.Load(sourcePath);
 
-    private static string ReadHref(string xml, string elementName)
-    {
-        if (string.IsNullOrWhiteSpace(xml))
-        {
-            return string.Empty;
-        }
+    private static string ReadHref(string xml, string elementName) =>
+        AllodsResourceTree.ReadHref(xml, elementName);
 
-        try
-        {
-            XElement? element = XDocument.Parse(xml).Descendants()
-                .FirstOrDefault(candidate => candidate.Name.LocalName.Equals(elementName, StringComparison.OrdinalIgnoreCase));
-            return element?.Attribute("href")?.Value ?? string.Empty;
-        }
-        catch
-        {
-            return string.Empty;
-        }
-    }
-
-    private static IReadOnlyList<string> ReadHrefs(string xml)
-    {
-        if (string.IsNullOrWhiteSpace(xml))
-        {
-            return [];
-        }
-
-        try
-        {
-            return XDocument.Parse(xml).Descendants()
-                .Select(element => element.Attribute("href")?.Value ?? string.Empty)
-                .Where(href => !string.IsNullOrWhiteSpace(href))
-                .ToArray();
-        }
-        catch
-        {
-            return [];
-        }
-    }
-
-    private static float ReadFloat(string xml, string elementName, float fallback)
-    {
-        if (string.IsNullOrWhiteSpace(xml))
-        {
-            return fallback;
-        }
-
-        try
-        {
-            string? value = XDocument.Parse(xml).Descendants()
-                .FirstOrDefault(candidate => candidate.Name.LocalName.Equals(elementName, StringComparison.OrdinalIgnoreCase))
-                ?.Value;
-            return float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float parsed)
-                ? parsed
-                : fallback;
-        }
-        catch
-        {
-            return fallback;
-        }
-    }
+    private static IReadOnlyList<string> ReadHrefs(string xml) => AllodsResourceTree.ReadHrefs(xml);
 
     private void AddFlatTerrainFallback(IEnumerable<string> placementFiles)
     {
@@ -721,50 +661,10 @@ public partial class ZoneLoader : Node3D
             : Quaternion.Identity;
     }
 
-    private static string NormalizeHref(string ownerSource, string href)
-    {
-        string path = href.Split('#', 2)[0].Replace('\\', '/').Trim();
-        if (string.IsNullOrEmpty(path))
-        {
-            return string.Empty;
-        }
+    private static string NormalizeHref(string ownerSource, string href) =>
+        AllodsResourceTree.NormalizeHref(ownerSource, href);
 
-        bool absolute = path.StartsWith('/');
-        path = path.TrimStart('/');
-        if (!absolute && !string.IsNullOrEmpty(ownerSource))
-        {
-            int slash = ownerSource.LastIndexOf('/');
-            path = slash < 0 ? path : $"{ownerSource[..slash]}/{path}";
-        }
-
-        var segments = new List<string>();
-        foreach (string segment in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
-        {
-            if (segment == ".")
-            {
-                continue;
-            }
-
-            if (segment == "..")
-            {
-                if (segments.Count > 0)
-                {
-                    segments.RemoveAt(segments.Count - 1);
-                }
-            }
-            else
-            {
-                segments.Add(segment);
-            }
-        }
-
-        return string.Join('/', segments);
-    }
-
-    private static string StripXdbSuffix(string path)
-    {
-        return path.EndsWith(".xdb", StringComparison.OrdinalIgnoreCase) ? path[..^4] : path;
-    }
+    private static string StripXdbSuffix(string path) => AllodsResourceTree.StripXdbSuffix(path);
 
     private static bool IsSafeMapName(string mapName)
     {
