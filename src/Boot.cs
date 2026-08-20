@@ -1,125 +1,65 @@
 using Godot;
+using SarnautCore.Shell;
 
 namespace SarnautCore;
 
+/// <summary>
+/// The development hub: the way into the session shell, and the two offline
+/// tools that do not need a server.
+/// </summary>
+/// <remarks>
+/// The layout is <c>scenes/boot.tscn</c>. This file used to build a hundred and
+/// twenty-five lines of Controls in <c>_Ready</c>, which meant every styling
+/// question was a C# edit and nothing was visible in the editor. Scenes are
+/// declarative; scripts wire them.
+/// </remarks>
 public partial class Boot : Control
 {
+    private SessionHost _session = null!;
     private LineEdit _zoneName = null!;
-    private Label _zoneError = null!;
-    private CheckButton _onlineMode = null!;
-    private LineEdit _serverAddress = null!;
+    private Label _message = null!;
 
     public override void _Ready()
     {
-        var backdrop = new ColorRect
-        {
-            Color = new Color("10151d"),
-            MouseFilter = MouseFilterEnum.Ignore,
-        };
-        backdrop.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
-        AddChild(backdrop);
+        _session = SessionHost.Of(this);
+        _zoneName = GetNode<LineEdit>("%ZoneName");
+        _message = GetNode<Label>("%Message");
 
-        var center = new CenterContainer();
-        center.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
-        AddChild(center);
+        _zoneName.Text = _session.Zone.MapName;
+        _zoneName.TextSubmitted += _ => WalkOffline();
+        _message.AddThemeColorOverride("font_color", UiTheme.ErrorInk);
+        _message.Visible = false;
 
-        var menu = new VBoxContainer
-        {
-            CustomMinimumSize = new Vector2(320, 0),
-        };
-        menu.AddThemeConstantOverride("separation", 16);
-        center.AddChild(menu);
-
-        var title = new Label
-        {
-            Text = "SarnautCore",
-            HorizontalAlignment = HorizontalAlignment.Center,
-        };
-        title.AddThemeFontSizeOverride("font_size", 34);
-        menu.AddChild(title);
-        menu.AddChild(new Label
-        {
-            Text = "Development client",
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Modulate = new Color("9aa8b8"),
-        });
-
-        var assetViewer = new Button { Text = "Asset Viewer", CustomMinimumSize = new Vector2(0, 48) };
-        assetViewer.Pressed += OpenAssetViewer;
-        menu.AddChild(assetViewer);
-
-        var zoneLabel = new Label
-        {
-            Text = "Zone name",
-            Modulate = new Color("cbd5e1"),
-        };
-        menu.AddChild(zoneLabel);
-
-        _zoneName = new LineEdit
-        {
-            Text = ZoneLoader.DefaultMapName,
-            PlaceholderText = "Converted map directory",
-            CustomMinimumSize = new Vector2(0, 44),
-            TooltipText = "Directory name below converted/assets/classic-1.1/assets/Maps/",
-        };
-        _zoneName.TextSubmitted += _ => OpenZoneWalkabout();
-        menu.AddChild(_zoneName);
-
-        _onlineMode = new CheckButton
-        {
-            Text = "Online mode",
-            ButtonPressed = false,
-            TooltipText = "Join the local authoritative shard instead of moving offline.",
-        };
-        menu.AddChild(_onlineMode);
-
-        _serverAddress = new LineEdit
-        {
-            Text = System.Environment.GetEnvironmentVariable("SARNAUT_SERVER_ADDRESS") ?? "127.0.0.1:4242",
-            PlaceholderText = "Server host:port",
-            CustomMinimumSize = new Vector2(0, 44),
-            TooltipText = "QUIC shard endpoint",
-        };
-        _serverAddress.TextSubmitted += _ => OpenZoneWalkabout();
-        menu.AddChild(_serverAddress);
-
-        _zoneError = new Label
-        {
-            Text = "Enter a converted map name.",
-            Modulate = new Color("ef9a9a"),
-            Visible = false,
-            AutowrapMode = TextServer.AutowrapMode.WordSmart,
-        };
-        menu.AddChild(_zoneError);
-
-        var walkabout = new Button { Text = "Zone Walkabout", CustomMinimumSize = new Vector2(0, 48) };
-        walkabout.Pressed += OpenZoneWalkabout;
-        menu.AddChild(walkabout);
-
-        var quit = new Button { Text = "Quit", CustomMinimumSize = new Vector2(0, 48) };
-        quit.Pressed += () => GetTree().Quit();
-        menu.AddChild(quit);
+        GetNode<Button>("%Play").Pressed += Play;
+        GetNode<Button>("%AssetViewer").Pressed += () =>
+            GetTree().ChangeSceneToFile("res://scenes/asset_viewer.tscn");
+        GetNode<Button>("%Walkabout").Pressed += WalkOffline;
+        GetNode<Button>("%Quit").Pressed += () => GetTree().Quit();
+        GetNode<Label>("%Theme").Text = $"theme: {UiTheme.Source}";
     }
 
-    private void OpenAssetViewer()
+    private void Play()
     {
-        GetTree().ChangeSceneToFile("res://scenes/asset_viewer.tscn");
+        _session.Flow.BeginSignIn();
+        _session.Show(Screen.Login);
     }
 
-    private void OpenZoneWalkabout()
+    private void WalkOffline()
     {
         string mapName = _zoneName.Text.Trim();
         if (string.IsNullOrEmpty(mapName))
         {
-            _zoneError.Visible = true;
+            _message.Text = "Enter a converted map name.";
+            _message.Visible = true;
             _zoneName.GrabFocus();
             return;
         }
 
-        _zoneError.Visible = false;
-        ZoneWalkabout.RequestedMapName = mapName;
-        ZoneWalkabout.RequestedOnlineMode = _onlineMode.ButtonPressed;
-        ZoneWalkabout.RequestedServerAddress = _serverAddress.Text.Trim();
+        _message.Visible = false;
+        // Offline is a tool, not a game session: no account, no ticket, no
+        // shard. It keeps working when converted assets are the only thing
+        // present.
+        _session.Zone = ZoneRequest.Offline(mapName, _session.Zone.ZoneId);
         GetTree().ChangeSceneToFile("res://scenes/zone_walkabout.tscn");
     }
 }

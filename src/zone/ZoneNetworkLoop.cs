@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Godot;
 using Sarnaut.Protocol.V1;
 using SarnautCore.Networking;
+using SarnautCore.Shell;
 
 namespace SarnautCore;
 
@@ -34,6 +35,8 @@ public partial class ZoneNetworkLoop : Node
     private WalkaboutController _walker = null!;
     private Node3D _entityRoot = null!;
     private Action<string> _setStatus = null!;
+    private Action? _onAdmitted;
+    private Action<string>? _onRefused;
     private Task? _networkTask;
     private ulong _ownEntityId;
     private ulong _sequence;
@@ -44,19 +47,29 @@ public partial class ZoneNetworkLoop : Node
     [Export(PropertyHint.Range, "0.1,0.15,0.005")]
     public double InterpolationDelaySeconds { get; set; } = 0.125;
 
+    /// <param name="ticket">
+    /// The opaque single-use shard ticket the account service minted for this
+    /// character (ADR 0030). It travels in <c>EnterZoneRequest</c> and the shard
+    /// burns it on redemption; nothing here keeps or prints a copy.
+    /// </param>
     public void Start(
         WalkaboutController walker,
         Node3D entityRoot,
         string address,
         string zoneId,
-        Action<string> setStatus)
+        Secret ticket,
+        Action<string> setStatus,
+        Action? onAdmitted = null,
+        Action<string>? onRefused = null)
     {
         _walker = walker;
         _entityRoot = entityRoot;
         _setStatus = setStatus;
+        _onAdmitted = onAdmitted;
+        _onRefused = onRefused;
         _walker.NetworkControlled = true;
         _setStatus($"Online: connecting to {address}...");
-        _networkTask = RunNetworkAsync(address, zoneId, _shutdown.Token);
+        _networkTask = RunNetworkAsync(address, zoneId, ticket, _shutdown.Token);
     }
 
     public override void _PhysicsProcess(double delta)
@@ -118,7 +131,11 @@ public partial class ZoneNetworkLoop : Node
         _shutdown.Dispose();
     }
 
-    private async Task RunNetworkAsync(string address, string zoneId, CancellationToken cancellationToken)
+    private async Task RunNetworkAsync(
+        string address,
+        string zoneId,
+        Secret ticket,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -128,6 +145,7 @@ public partial class ZoneNetworkLoop : Node
                 zoneId,
                 "godot-sar20",
                 allowUntrustedDevelopmentCertificate: true,
+                ticket: ticket.Reveal(),
                 cancellationToken: cancellationToken);
 
             _connectionUpdates.Enqueue(ConnectionUpdate.Ready(
@@ -203,13 +221,17 @@ public partial class ZoneNetworkLoop : Node
                 _walker.NetworkControlled = false;
                 _setStatus($"Online connection failed: {update.Error}");
                 GD.PushError($"Zone network connection failed: {update.Error}");
+                _onRefused?.Invoke(update.Error);
                 continue;
             }
 
             _ownEntityId = update.OwnEntityId;
+            // The response's spawn is authoritative: it is the server's answer,
+            // not a confirmation of a client request (session spec rule 5.4.6).
             _walker.Position = ToGodot(update.SpawnPosition!);
             _connected = true;
             _setStatus($"Online: joined as entity {_ownEntityId} | server {update.ServerBuildId} | QUIC stream");
+            _onAdmitted?.Invoke();
         }
     }
 

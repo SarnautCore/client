@@ -4,6 +4,25 @@ namespace SarnautCore;
 
 public partial class WalkaboutController : CharacterBody3D
 {
+    /// <summary>
+    /// The named input actions this controller reads, declared in
+    /// <c>project.godot</c>'s <c>[input]</c> section.
+    /// </summary>
+    /// <remarks>
+    /// Movement used to be <c>Input.IsPhysicalKeyPressed(Key.W)</c> and friends.
+    /// Physical keycodes are not rebindable, are wrong on every non-QWERTY
+    /// layout, and put the key map in three source files instead of the one
+    /// place Godot already has for it.
+    /// </remarks>
+    public const string MoveForward = "move_forward";
+    public const string MoveBack = "move_back";
+    public const string MoveLeft = "move_left";
+    public const string MoveRight = "move_right";
+    public const string MoveJump = "move_jump";
+    public const string MoveDescend = "move_descend";
+    public const string MoveSprint = "move_sprint";
+    public const string MoveToggleFly = "move_toggle_fly";
+
     [Export] public float WalkSpeed { get; set; } = 9.0f;
     [Export] public float FlySpeed { get; set; } = 24.0f;
     [Export] public float FastFlyMultiplier { get; set; } = 3.0f;
@@ -48,7 +67,7 @@ public partial class WalkaboutController : CharacterBody3D
         {
             Input.MouseMode = Input.MouseModeEnum.Captured;
         }
-        else if (!NetworkControlled && inputEvent is InputEventKey key && key.Pressed && !key.Echo && MatchesKey(key, Key.F))
+        else if (!NetworkControlled && inputEvent.IsActionPressed(MoveToggleFly))
         {
             SetFlying(!IsFlying);
             GetViewport().SetInputAsHandled();
@@ -71,14 +90,9 @@ public partial class WalkaboutController : CharacterBody3D
 
         if (IsFlying)
         {
-            float vertical = IsKeyDown(Key.Space) ? 1.0f : 0.0f;
-            if (IsKeyDown(Key.Q) || IsKeyDown(Key.Ctrl))
-            {
-                vertical -= 1.0f;
-            }
-
+            float vertical = Input.GetActionStrength(MoveJump) - Input.GetActionStrength(MoveDescend);
             Vector3 flyDirection = (worldDirection + Vector3.Up * vertical).Normalized();
-            float multiplier = IsKeyDown(Key.Shift) ? FastFlyMultiplier : 1.0f;
+            float multiplier = Input.IsActionPressed(MoveSprint) ? FastFlyMultiplier : 1.0f;
             Velocity = flyDirection * FlySpeed * multiplier;
         }
         else
@@ -90,7 +104,7 @@ public partial class WalkaboutController : CharacterBody3D
             {
                 velocity.Y -= _gravity * (float)delta;
             }
-            else if (IsKeyDown(Key.Space))
+            else if (Input.IsActionPressed(MoveJump))
             {
                 velocity.Y = JumpVelocity;
             }
@@ -111,18 +125,6 @@ public partial class WalkaboutController : CharacterBody3D
 
     private static Vector2 ReadMovementInput()
     {
-        float x = (IsKeyDown(Key.D) ? 1.0f : 0.0f) - (IsKeyDown(Key.A) ? 1.0f : 0.0f);
-        float y = (IsKeyDown(Key.S) ? 1.0f : 0.0f) - (IsKeyDown(Key.W) ? 1.0f : 0.0f);
-        return new Vector2(x, y).LimitLength();
-    }
-
-    private static bool IsKeyDown(Key key)
-    {
-        return Input.IsPhysicalKeyPressed(key) || Input.IsKeyPressed(key);
-    }
-
-    private static bool MatchesKey(InputEventKey input, Key key)
-    {
-        return input.PhysicalKeycode == key || input.Keycode == key;
+        return Input.GetVector(MoveLeft, MoveRight, MoveForward, MoveBack).LimitLength();
     }
 }

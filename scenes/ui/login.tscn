@@ -1,0 +1,122 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://src/ui/LoginScreen.cs" id="1_login"]
+
+[node name="LoginScreen" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_login")
+
+[node name="Backdrop" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.063, 0.082, 0.114, 1)
+
+[node name="Content" type="CanvasLayer" parent="."]
+layer = 2
+
+[node name="Page" type="Control" parent="Content"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Center" type="CenterContainer" parent="Content/Page"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="Content/Page/Center"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+
+[node name="Column" type="VBoxContainer" parent="Content/Page/Center/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="Content/Page/Center/Panel/Column"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 26
+text = "Sign in"
+horizontal_alignment = 1
+
+[node name="EmailLabel" type="Label" parent="Content/Page/Center/Panel/Column"]
+modulate = Color(0.604, 0.659, 0.722, 1)
+layout_mode = 2
+text = "Email"
+
+[node name="Email" type="LineEdit" parent="Content/Page/Center/Panel/Column"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+placeholder_text = "you@example.invalid"
+
+[node name="PasswordLabel" type="Label" parent="Content/Page/Center/Panel/Column"]
+modulate = Color(0.604, 0.659, 0.722, 1)
+layout_mode = 2
+text = "Password"
+
+[node name="Password" type="LineEdit" parent="Content/Page/Center/Panel/Column"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+secret = true
+
+[node name="Message" type="Label" parent="Content/Page/Center/Panel/Column"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+autowrap_mode = 3
+
+[node name="Actions" type="HBoxContainer" parent="Content/Page/Center/Panel/Column"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="SignIn" type="Button" parent="Content/Page/Center/Panel/Column/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 46)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Sign in"
+
+[node name="Register" type="Button" parent="Content/Page/Center/Panel/Column/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 46)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Create account"
+
+[node name="Back" type="Button" parent="Content/Page/Center/Panel/Column"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+text = "Back"
+
+[node name="Service" type="Label" parent="Content/Page"]
+unique_name_in_owner = true
+modulate = Color(0.604, 0.659, 0.722, 1)
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 12.0
+offset_top = -32.0
+offset_right = 900.0
+offset_bottom = -8.0
+grow_vertical = 0
+text = "account service"
