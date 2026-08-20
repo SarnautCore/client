@@ -36,7 +36,28 @@ public sealed class SnapshotTimelineTests
         Assert.Equal((ulong)12, timeline.LatestServerTick);
     }
 
-    private static SnapshotBatch Snapshot(ulong tick, float x)
+    [Fact]
+    public void CarriesContentAndCombatFieldsThroughInterpolation()
+    {
+        var timeline = new SnapshotTimeline();
+        timeline.Add(Snapshot(tick: 10, x: 2, health: 120), receivedAtSeconds: 1.0);
+        timeline.Add(Snapshot(tick: 12, x: 4, health: 60), receivedAtSeconds: 1.2);
+
+        Assert.True(timeline.TrySample(7, 1.25, 0.15, out SampledEntity sample));
+
+        // Position interpolates; identity and combat state do not, because a
+        // level or a content id halfway between two values is not a thing.
+        Assert.Equal(3, sample.X, precision: 4);
+        Assert.Equal("mob.fixture.critter", sample.ContentId);
+        Assert.Equal("mob.fixture.critter.name", sample.NameKey);
+        Assert.Equal((uint)2, sample.Level);
+        Assert.Equal("faction.wild", sample.Faction);
+        Assert.Equal(60, sample.Health);
+        Assert.Equal(150, sample.MaxHealth);
+        Assert.True(sample.Alive);
+    }
+
+    private static SnapshotBatch Snapshot(ulong tick, float x, int health = 150)
     {
         var batch = new SnapshotBatch { ServerTick = tick };
         batch.Entities.Add(new EntitySnapshot
@@ -46,6 +67,13 @@ public sealed class SnapshotTimelineTests
             Position = new Vec3 { X = x },
             Velocity = new Vec3(),
             AnimationState = AnimationState.Moving,
+            ContentId = "mob.fixture.critter",
+            NameKey = "mob.fixture.critter.name",
+            Level = 2,
+            Faction = "faction.wild",
+            Health = health,
+            MaxHealth = 150,
+            Alive = true,
         });
         return batch;
     }

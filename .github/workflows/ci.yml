@@ -23,6 +23,15 @@ jobs:
           cache: true
           cache-dependency-path: SarnautCore.csproj
 
+      # The client commits no generated code, so a hand-edited proto here builds
+      # green and mis-parses against a live shard. The lock is byte-identical to
+      # server/proto/PROTO_LOCK.sha256 and catches that offline (ADR 0027).
+      # TODO(m2): add scripts/sync-proto.ps1 -Check against a second checkout of
+      # SarnautCore/server@main once the envelope is on that branch.
+      - name: Verify the proto lock
+        shell: pwsh
+        run: ./scripts/verify-proto-lock.ps1
+
       - name: Restore
         run: dotnet restore SarnautCore.sln
 

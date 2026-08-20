@@ -128,15 +128,24 @@ public partial class ZoneNetworkLoop : Node
                 zoneId,
                 "godot-sar20",
                 allowUntrustedDevelopmentCertificate: true,
-                cancellationToken);
+                cancellationToken: cancellationToken);
 
             _connectionUpdates.Enqueue(ConnectionUpdate.Ready(
                 session.EnteredZone.OwnEntityId,
                 session.EnteredZone.SpawnPosition ?? new Sarnaut.Protocol.V1.Vec3(),
                 session.ServerHello.BuildId));
-            await Task.WhenAll(
-                ReceiveSnapshotsAsync(session, cancellationToken),
-                SendMovementAsync(session, cancellationToken));
+            try
+            {
+                await Task.WhenAll(
+                    ReceiveSnapshotsAsync(session, cancellationToken),
+                    SendMovementAsync(session, cancellationToken));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Leaving the zone is a clean logout, so the shard's save
+                // checkpoint runs ahead of the disconnect rather than racing it.
+                await SendLogoutQuietlyAsync(session);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -144,6 +153,21 @@ public partial class ZoneNetworkLoop : Node
         catch (Exception exception)
         {
             _connectionUpdates.Enqueue(ConnectionUpdate.Failed(exception.Message));
+        }
+    }
+
+    private static async Task SendLogoutQuietlyAsync(GameSession session)
+    {
+        try
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+            await session.SendLogoutAsync(deadline.Token);
+        }
+        catch (Exception exception)
+        {
+            // The connection is going away either way; a failed goodbye is not
+            // worth a second failure path.
+            GD.PushWarning($"Zone logout was not delivered: {exception.Message}");
         }
     }
 
