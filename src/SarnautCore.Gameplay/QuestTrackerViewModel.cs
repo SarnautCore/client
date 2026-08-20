@@ -16,7 +16,31 @@ public sealed record QuestObjectiveUpdate(
     int Current,
     int Limit,
     bool ShowCount,
-    bool Internal);
+    bool Internal,
+    uint Index = 0);
+
+public enum QuestClientRefusal
+{
+    None,
+    UnknownQuest,
+    Unavailable,
+    LogFull,
+    OutOfRange,
+    WrongNpc,
+    NotComplete,
+    AlreadyComplete,
+    BagFull,
+    CannotCancel,
+    Internal,
+}
+
+public sealed record QuestRewardItemUpdate(string ItemId, int Count);
+
+public sealed record QuestRewardUpdate(
+    long Experience,
+    long Money,
+    long Honor,
+    IReadOnlyList<QuestRewardItemUpdate> Items);
 
 public sealed record QuestUpdate(
     string QuestId,
@@ -26,7 +50,9 @@ public sealed record QuestUpdate(
     IReadOnlyList<QuestObjectiveUpdate> Objectives,
     ulong StarterEntityId = 0,
     ulong FinisherEntityId = 0,
-    bool CanAbandon = false);
+    bool CanAbandon = false,
+    QuestClientRefusal Refusal = QuestClientRefusal.None,
+    QuestRewardUpdate? Reward = null);
 
 public sealed record QuestTrackerEntry(
     string QuestId,

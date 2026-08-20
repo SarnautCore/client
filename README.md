@@ -135,7 +135,7 @@ For the whole session slice — register, create a character, select it, enter t
 
 It boots auth and a shard, drives the client's own view models rather than a test double, and fails if the shard's spawn disagrees with `GET /v1/chargen/options` or if any output carries a password, an email address or a token.
 
-Add `-GameplayProbe` to drive the available combat/loot slice through the gameplay view models: target a live mob, cast to a killing blow, populate and take its loot offer, and verify the authoritative inventory update. Quest commands are included in the client envelope path, but their live probe waits for the server quest module and a non-placeholder `QuestStateUpdate`.
+Add `-GameplayProbe` to drive the gameplay slice through the gameplay view models: target a live mob, cast to a killing blow, populate and take its loot offer, and verify the authoritative inventory update. Quest state, objective counters, refusals, and turn-in rewards use the server's `QuestStateUpdate` payload; reliable spawn/despawn events own entity lifetime while snapshots update known entities.
 
 ## About SarnautCore
 

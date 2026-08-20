@@ -18,6 +18,10 @@ public sealed class QuestDialogueViewModel
 
     public ulong NpcEntityId { get; private set; }
 
+    public QuestClientRefusal LastRefusal { get; private set; }
+
+    public QuestRewardUpdate? LastReward { get; private set; }
+
     public bool IsOpen => Mode != QuestDialogueMode.None;
 
     public event Action? Changed;
@@ -83,6 +87,12 @@ public sealed class QuestDialogueViewModel
         }
 
         Quest = update;
+        LastRefusal = update.Refusal;
+        if (update.State == QuestClientState.TurnedIn)
+        {
+            LastReward = update.Reward;
+        }
+
         bool acceptedOffer = Mode == QuestDialogueMode.Offer
             && update.State is QuestClientState.Accepted or QuestClientState.InProgress or QuestClientState.Completable;
         bool finishedTurnIn = Mode == QuestDialogueMode.TurnIn && update.State == QuestClientState.TurnedIn;
@@ -114,6 +124,7 @@ public sealed class QuestDialogueViewModel
         Mode = mode;
         Quest = quest;
         NpcEntityId = npcEntityId;
+        LastRefusal = quest.Refusal;
         Changed?.Invoke();
     }
 }

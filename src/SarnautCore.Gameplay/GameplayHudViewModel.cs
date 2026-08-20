@@ -37,14 +37,16 @@ public sealed class GameplayHudViewModel
         QuestTracker = new QuestTrackerViewModel();
         Dialogue = new QuestDialogueViewModel();
         Focus = focus ?? new GameplayFocusOwner();
-        _questAdapter = questAdapter ?? NoQuestStateUpdateAdapter.Instance;
+        _questAdapter = questAdapter ?? new QuestStateUpdateAdapter();
         _router = new ServerMessageRouter
         {
             SnapshotBatch = Apply,
+            SpawnEvent = Apply,
+            DespawnEvent = Apply,
             CombatEvent = Apply,
             DeathEvent = Apply,
-            LootOffer = Loot.Apply,
-            LootResult = Loot.Apply,
+            LootOffer = Apply,
+            LootResult = Apply,
             InventoryUpdate = Inventory.Apply,
             QuestStateUpdate = Apply,
             Error = error => LastError = $"{error.Code}: {error.Detail}".TrimEnd(),
@@ -75,13 +77,35 @@ public sealed class GameplayHudViewModel
 
     public string LastError { get; private set; } = string.Empty;
 
+    public ulong InteractionEntityId { get; private set; }
+
     public ServerMessage.PayloadOneofCase Route(ServerMessage message) => _router.Route(message);
 
     public void SetOwnEntityId(ulong entityId) => OwnEntityId = entityId;
 
-    public void SelectTarget(EntityHudSnapshot snapshot) => Target.Select(snapshot);
+    public void SelectTarget(EntityHudSnapshot snapshot)
+    {
+        if (Target.EntityId != snapshot.EntityId)
+        {
+            InteractionEntityId = 0;
+        }
 
-    public void ClearTarget() => Target.Clear();
+        Target.Select(snapshot);
+    }
+
+    public void ClearTarget()
+    {
+        InteractionEntityId = 0;
+        Target.Clear();
+    }
+
+    public void BeginInteraction(ulong entityId)
+    {
+        if (entityId != 0)
+        {
+            InteractionEntityId = entityId;
+        }
+    }
 
     public void ObserveEntity(EntityHudSnapshot snapshot)
     {
@@ -97,9 +121,25 @@ public sealed class GameplayHudViewModel
         Dialogue.Apply(update);
         QuestLog.Apply(update);
         QuestTracker.Apply(update);
-        if (update.State == QuestClientState.Offered && update.StarterEntityId != 0)
+        ulong npcEntityId = update.State switch
         {
-            Dialogue.ShowOffer(update, update.StarterEntityId);
+            QuestClientState.Offered when update.StarterEntityId != 0 => update.StarterEntityId,
+            QuestClientState.Completable when update.FinisherEntityId != 0 => update.FinisherEntityId,
+            _ => InteractionEntityId,
+        };
+        if (update.Refusal == QuestClientRefusal.None
+            && update.State == QuestClientState.Offered
+            && npcEntityId != 0)
+        {
+            Dialogue.ShowOffer(update, npcEntityId);
+            InteractionEntityId = 0;
+        }
+        else if (update.Refusal == QuestClientRefusal.None
+            && update.State == QuestClientState.Completable
+            && npcEntityId != 0)
+        {
+            Dialogue.ShowTurnIn(update, npcEntityId);
+            InteractionEntityId = 0;
         }
     }
 
@@ -116,6 +156,34 @@ public sealed class GameplayHudViewModel
         {
             ObserveEntity(ToHudSnapshot(entity));
         }
+    }
+
+    private void Apply(SpawnEvent spawn)
+    {
+        if (spawn.Entity is not null)
+        {
+            ObserveEntity(ToHudSnapshot(spawn.Entity));
+        }
+    }
+
+    private void Apply(DespawnEvent despawn)
+    {
+        if (Target.EntityId == despawn.EntityId)
+        {
+            Target.Clear();
+        }
+    }
+
+    private void Apply(LootOffer offer)
+    {
+        InteractionEntityId = 0;
+        Loot.Apply(offer);
+    }
+
+    private void Apply(LootResult result)
+    {
+        InteractionEntityId = 0;
+        Loot.Apply(result);
     }
 
     private void Apply(CombatEvent combatEvent)
@@ -151,14 +219,4 @@ public sealed class GameplayHudViewModel
         entity.MaxHealth,
         entity.Alive);
 
-    private sealed class NoQuestStateUpdateAdapter : IQuestStateUpdateAdapter
-    {
-        internal static NoQuestStateUpdateAdapter Instance { get; } = new();
-
-        public bool TryMap(QuestStateUpdate message, out QuestUpdate update)
-        {
-            update = null!;
-            return false;
-        }
-    }
 }

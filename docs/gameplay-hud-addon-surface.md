@@ -90,7 +90,7 @@ View model: `QuestDialogueViewModel`.
 
 | Addon event | C# source | Payload |
 |---|---|---|
-| `QUEST_DIALOGUE_CHANGED` | `QuestDialogueViewModel.Changed` | `mode`, `quest`, `npc_entity_id` |
+| `QUEST_DIALOGUE_CHANGED` | `QuestDialogueViewModel.Changed` | `mode`, `quest`, `npc_entity_id`, `last_refusal`, `last_reward` |
 | `QUEST_ACCEPT_REQUESTED` | `QuestDialogueViewModel.AcceptRequested` | `quest_id`, `npc_entity_id` |
 | `QUEST_TURN_IN_REQUESTED` | `QuestDialogueViewModel.TurnInRequested` | `quest_id`, `npc_entity_id` |
 | `QUEST_DIALOGUE_CLOSED` | `QuestDialogueViewModel.Closed` | none |
@@ -99,4 +99,4 @@ Public commands are `ShowOffer`, `ShowTurnIn`, `RequestAccept`, `RequestTurnIn`,
 
 ## Envelope dispatch
 
-`GameplayHudViewModel.Route(ServerMessage)` is the single server-event entry point. It dispatches combat, death, loot, inventory, and quest messages into the view models above. `IQuestStateUpdateAdapter` isolates the quest protobuf from the widgets while the server quest module is still merging. The adapter maps one wire message to one `QuestUpdate`; no Godot type crosses this seam.
+`GameplayHudViewModel.Route(ServerMessage)` is the single server-event entry point. It dispatches spawn, despawn, combat, death, loot, inventory, and quest messages into the view models above. `QuestStateUpdateAdapter` maps the owning client's wire update to `QuestUpdate`, including objective indexes and counters, refusals, and turn-in rewards. The wire omits NPC entity ids, so `BeginInteraction(entityId)` binds an offer or completable response to the NPC the player used. No Godot type crosses this seam.

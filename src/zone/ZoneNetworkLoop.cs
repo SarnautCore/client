@@ -271,6 +271,7 @@ public partial class ZoneNetworkLoop : Node
     {
         if (targetEntityId != 0)
         {
+            _hud.BeginInteraction(targetEntityId);
             EnqueueCommand(new ClientMessage { Interact = new Interact { TargetEntityId = targetEntityId } });
         }
     }
@@ -472,6 +473,21 @@ public partial class ZoneNetworkLoop : Node
         _hud.Route(message);
         switch (message.PayloadCase)
         {
+            case ServerMessage.PayloadOneofCase.SpawnEvent:
+                if (message.SpawnEvent.Entity is not null)
+                {
+                    Entities.Spawn(message.SpawnEvent.Entity, _ownEntityId);
+                }
+
+                break;
+            case ServerMessage.PayloadOneofCase.DespawnEvent:
+                Entities.Remove(message.DespawnEvent.EntityId);
+                if (TargetEntityId == message.DespawnEvent.EntityId)
+                {
+                    SetTarget(0);
+                }
+
+                break;
             case ServerMessage.PayloadOneofCase.CombatEvent:
                 CombatEvent combat = message.CombatEvent;
                 if (combat.CasterId == _ownEntityId)

@@ -9,13 +9,11 @@ public sealed class GameplayHudViewModelTests
     [Fact]
     public void Server_messages_dispatch_into_each_gameplay_model()
     {
-        var quests = new SyntheticQuestAdapter();
         var hud = new GameplayHudViewModel(
             ownEntityId: 7,
             abilities: [new AbilityDefinition("ability.m2.strike", "ability.m2.strike.name", string.Empty)],
             inventoryCapacity: 2,
-            stackLimit: _ => 20,
-            questAdapter: quests);
+            stackLimit: _ => 20);
         hud.SelectTarget(new EntityHudSnapshot(42, "mob.name", "mob.earth", 2, 120, 120, true));
 
         hud.Route(new ServerMessage
@@ -59,43 +57,85 @@ public sealed class GameplayHudViewModelTests
         hud.Route(new ServerMessage { InventoryUpdate = bag });
         Assert.Equal("item.trash-hoof", hud.Inventory.Slots[0]!.ItemId);
 
-        quests.Current = Quest(QuestClientState.Offered);
-        hud.Route(new ServerMessage { QuestStateUpdate = new QuestStateUpdate() });
+        hud.BeginInteraction(70);
+        hud.Route(new ServerMessage { QuestStateUpdate = Quest(QuestState.Offered) });
         Assert.Equal(QuestDialogueMode.Offer, hud.Dialogue.Mode);
+        Assert.Equal((ulong)70, hud.Dialogue.NpcEntityId);
 
-        quests.Current = Quest(QuestClientState.Accepted);
-        hud.Route(new ServerMessage { QuestStateUpdate = new QuestStateUpdate() });
+        hud.Route(new ServerMessage { QuestStateUpdate = Quest(QuestState.Accepted) });
         Assert.Single(hud.QuestLog.Quests);
         Assert.Single(hud.QuestTracker.Quests);
         Assert.False(hud.Dialogue.IsOpen);
 
-        quests.Current = Quest(QuestClientState.Completable);
-        hud.Route(new ServerMessage { QuestStateUpdate = new QuestStateUpdate() });
-        Assert.True(hud.QuestTracker.Quests[0].Complete);
+        hud.Route(new ServerMessage { QuestStateUpdate = Quest(QuestState.InProgress, current: 2) });
+        Assert.Equal(2, hud.QuestLog.Quests[0].Objectives[0].Current);
+        Assert.Equal(2, hud.QuestTracker.Quests[0].Objectives[0].Current);
 
-        quests.Current = Quest(QuestClientState.TurnedIn);
-        hud.Route(new ServerMessage { QuestStateUpdate = new QuestStateUpdate() });
+        hud.Route(new ServerMessage { QuestStateUpdate = Quest(QuestState.Completable, current: 3) });
+        Assert.True(hud.QuestTracker.Quests[0].Complete);
+        Assert.False(hud.Dialogue.IsOpen);
+
+        hud.BeginInteraction(71);
+        hud.Route(new ServerMessage { QuestStateUpdate = Quest(QuestState.Completable, current: 3) });
+        Assert.Equal(QuestDialogueMode.TurnIn, hud.Dialogue.Mode);
+        Assert.Equal((ulong)71, hud.Dialogue.NpcEntityId);
+
+        QuestStateUpdate turnedIn = Quest(QuestState.TurnedIn, current: 3);
+        turnedIn.Experience = 8;
+        turnedIn.Items.Add(new LootItem { ItemId = "item.reward.sword", Count = 1 });
+        hud.Route(new ServerMessage { QuestStateUpdate = turnedIn });
         Assert.Empty(hud.QuestLog.Quests);
         Assert.Empty(hud.QuestTracker.Quests);
+        Assert.False(hud.Dialogue.IsOpen);
+        Assert.Equal(8, hud.Dialogue.LastReward!.Experience);
+        Assert.Equal("item.reward.sword", Assert.Single(hud.Dialogue.LastReward.Items).ItemId);
     }
 
-    private static QuestUpdate Quest(QuestClientState state) => new(
-        "quest.overlay.m2.slay-earth-elementals",
-        "quest.overlay.m2.slay-earth-elementals.title",
-        "quest.overlay.m2.slay-earth-elementals.description",
-        state,
-        [new QuestObjectiveUpdate("quest.kill-earth-elementals", state == QuestClientState.Completable ? 3 : 0, 3, true, false)],
-        StarterEntityId: 70,
-        FinisherEntityId: 71);
-
-    private sealed class SyntheticQuestAdapter : IQuestStateUpdateAdapter
+    [Fact]
+    public void SpawnAndDespawnEventsRefreshAndClearTheSelectedTarget()
     {
-        public QuestUpdate Current { get; set; } = Quest(QuestClientState.Offered);
+        var hud = new GameplayHudViewModel(7, []);
+        hud.SelectTarget(new EntityHudSnapshot(42, "mob.old", "mob.earth", 2, 20, 120, true));
 
-        public bool TryMap(QuestStateUpdate message, out QuestUpdate update)
+        hud.Route(new ServerMessage
         {
-            update = Current;
-            return true;
-        }
+            SpawnEvent = new SpawnEvent
+            {
+                Entity = new EntitySnapshot
+                {
+                    EntityId = 42,
+                    NameKey = "mob.new",
+                    ContentId = "mob.earth",
+                    Level = 2,
+                    Health = 120,
+                    MaxHealth = 120,
+                    Alive = true,
+                },
+            },
+        });
+        Assert.Equal("mob.new", hud.Target.NameKey);
+        Assert.Equal(120, hud.Target.Health);
+
+        hud.Route(new ServerMessage { DespawnEvent = new DespawnEvent { EntityId = 42 } });
+        Assert.Equal((ulong)0, hud.Target.EntityId);
+    }
+
+    private static QuestStateUpdate Quest(QuestState state, int current = 0)
+    {
+        var update = new QuestStateUpdate
+        {
+            QuestId = "quest.overlay.m2.slay-earth-elementals",
+            State = state,
+            Refusal = QuestRefusal.None,
+        };
+        update.Objectives.Add(new QuestObjectiveProgress
+        {
+            Index = 0,
+            Counter = current,
+            Limit = 3,
+            ShowCount = true,
+            CounterKey = "quest.kill-earth-elementals",
+        });
+        return update;
     }
 }
