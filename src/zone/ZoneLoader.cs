@@ -1,11 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Godot;
 
@@ -22,16 +20,10 @@ public partial class ZoneLoader : Node3D
     {
         PropertyNameCaseInsensitive = true,
     };
-    private static readonly Regex ConvertedSceneDependency = new(
-        "ext_resource type=\"PackedScene\" path=\"res://assets/(?<path>[^\"]+)\"",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex ConvertedResourceDependency = new(
-        "ext_resource type=\"[^\"]+\" path=\"res://assets/(?<path>[^\"]+)\"",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
-    private readonly Dictionary<string, PackedScene?> _sceneCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _npcModelFailures = new(StringComparer.OrdinalIgnoreCase);
     private Node3D _terrainRoot = null!;
     private Node3D _objectsRoot = null!;
+    private Node3D _charactersRoot = null!;
 
     [Export] public string MapName { get; set; } = DefaultMapName;
     [Export(PropertyHint.Dir)] public string ConvertedRoot { get; set; } = DefaultConvertedRoot;
@@ -44,6 +36,9 @@ public partial class ZoneLoader : Node3D
     public int VisualObjectCount { get; private set; }
     public int UnresolvedObjectCount { get; private set; }
     public int ServerObjectCount { get; private set; }
+    public int NpcPlacementCount { get; private set; }
+    public int NpcVisualCount { get; private set; }
+    public int NpcPlaceholderCount { get; private set; }
     public int PlacementFileCount { get; private set; }
     public int ServerPlacementFileCount { get; private set; }
     public int SplatMapCount { get; private set; }
@@ -52,6 +47,7 @@ public partial class ZoneLoader : Node3D
     public string LastError { get; private set; } = string.Empty;
     public Aabb TerrainBounds { get; private set; }
     public bool HasTerrainBounds { get; private set; }
+    public IReadOnlyCollection<string> NpcModelFailures => _npcModelFailures;
 
     public Vector3 SuggestedSpawnPosition => HasTerrainBounds
         ? new Vector3(TerrainBounds.GetCenter().X, TerrainBounds.End.Y + 5.0f, TerrainBounds.GetCenter().Z)
@@ -82,8 +78,10 @@ public partial class ZoneLoader : Node3D
 
         _terrainRoot = new Node3D { Name = "Terrain" };
         _objectsRoot = new Node3D { Name = "StaticObjects" };
+        _charactersRoot = new Node3D { Name = "NpcCharacters" };
         AddChild(_terrainRoot);
         AddChild(_objectsRoot);
+        AddChild(_charactersRoot);
 
         var files = EnumerateFiles(mapRoot);
         var terrainFiles = files.Where(path => path.EndsWith(TerrainSuffix, StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -113,13 +111,13 @@ public partial class ZoneLoader : Node3D
 
         foreach (string serverPath in serverFiles)
         {
-            MapPlacementDocument? document = ReadPlacementDocument(serverPath);
-            ServerObjectCount += document?.Objects?.Length ?? 0;
+            LoadServerPlacements(serverPath);
         }
 
         GD.Print(
             $"ZoneLoader: {MapName} | terrain={TerrainTileCount} | placements={PlacedObjectCount} " +
-            $"| visual={VisualObjectCount} | unresolved={UnresolvedObjectCount} | server={ServerObjectCount}");
+            $"| visual={VisualObjectCount} | unresolved={UnresolvedObjectCount} | server={ServerObjectCount} " +
+            $"| npc={NpcVisualCount}/{NpcPlacementCount} | npc_placeholders={NpcPlaceholderCount}");
         return TerrainTileCount > 0 && PlacedObjectCount > 0;
     }
 
@@ -131,13 +129,16 @@ public partial class ZoneLoader : Node3D
             child.QueueFree();
         }
 
-        _sceneCache.Clear();
+        _npcModelFailures.Clear();
         TerrainTileCount = 0;
         TerrainVertexCount = 0;
         PlacedObjectCount = 0;
         VisualObjectCount = 0;
         UnresolvedObjectCount = 0;
         ServerObjectCount = 0;
+        NpcPlacementCount = 0;
+        NpcVisualCount = 0;
+        NpcPlaceholderCount = 0;
         PlacementFileCount = 0;
         ServerPlacementFileCount = 0;
         SplatMapCount = 0;
@@ -150,6 +151,11 @@ public partial class ZoneLoader : Node3D
 
     private void AddTerrainTile(string terrainPath, IReadOnlyList<string> layerTextures)
     {
+        if (!ConvertedSceneLoader.IsLoadable(terrainPath, "Mesh"))
+        {
+            return;
+        }
+
         Mesh? mesh = ResourceLoader.Load<Mesh>(terrainPath);
         if (mesh == null || mesh.GetSurfaceCount() == 0)
         {
@@ -307,6 +313,150 @@ public partial class ZoneLoader : Node3D
         }
     }
 
+    private void LoadServerPlacements(string placementPath)
+    {
+        MapPlacementDocument? document = ReadPlacementDocument(placementPath);
+        if (document?.Objects == null)
+        {
+            return;
+        }
+
+        ServerObjectCount += document.Objects.Length;
+        foreach (MapObjectPlacement placement in document.Objects)
+        {
+            IReadOnlyList<string> mobSources = FindMobSources(placement);
+            bool explicitMob = placement.ObjectType.Contains("MobSingleSpawn", StringComparison.OrdinalIgnoreCase);
+            if (mobSources.Count == 0 && !explicitMob)
+            {
+                continue;
+            }
+
+            NpcPlacementCount++;
+            string modelSource = mobSources.FirstOrDefault() ?? placement.Hrefs.FirstOrDefault() ?? placement.ObjectType;
+            NpcDefinition? definition = mobSources
+                .Select(ResolveNpcDefinition)
+                .FirstOrDefault(candidate => candidate != null);
+
+            if (definition == null)
+            {
+                AddNpcPlaceholder(placement, modelSource);
+                _npcModelFailures.Add(modelSource);
+                continue;
+            }
+
+            var character = new ConvertedCharacter
+            {
+                Name = $"Npc_{NpcPlacementCount}",
+                AutoLoad = false,
+                LocomotionOnly = true,
+                ConvertedRoot = ConvertedRoot,
+                CharacterScene = definition.ScenePath,
+                Position = ConvertPosition(placement.Position),
+                Quaternion = ConvertServerRotation(placement),
+                Scale = Vector3.One * definition.Scale,
+            };
+            character.SetMeta("allods_mob", definition.MobSource);
+            character.SetMeta("allods_visual_mob", definition.VisualMobSource);
+            _charactersRoot.AddChild(character);
+
+            if (character.LoadCharacter())
+            {
+                NpcVisualCount++;
+            }
+            else
+            {
+                NpcPlaceholderCount++;
+                _npcModelFailures.Add($"{definition.MobSource}: {character.LastError}");
+            }
+        }
+    }
+
+    private IReadOnlyList<string> FindMobSources(MapObjectPlacement placement)
+    {
+        var mobSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string href in placement.Hrefs)
+        {
+            string source = NormalizeHref(string.Empty, href);
+            if (source.Contains("(MobWorld).xdb", StringComparison.OrdinalIgnoreCase))
+            {
+                mobSources.Add(source);
+                continue;
+            }
+
+            if (!source.Contains("(MobSpawnTable).xdb", StringComparison.OrdinalIgnoreCase)
+                && !source.Contains("(SpawnTable).xdb", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            AllodsResource? spawnTable = LoadAllodsResource(source);
+            if (spawnTable == null)
+            {
+                continue;
+            }
+
+            foreach (string mobHref in ReadHrefs(spawnTable.raw_xml)
+                         .Where(candidate => candidate.Contains("(MobWorld).xdb", StringComparison.OrdinalIgnoreCase)))
+            {
+                mobSources.Add(NormalizeHref(source, mobHref));
+            }
+        }
+
+        return mobSources.OrderBy(source => source, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private NpcDefinition? ResolveNpcDefinition(string mobSource)
+    {
+        AllodsResource? mob = LoadAllodsResource(mobSource);
+        string visualMobSource = NormalizeHref(mobSource, ReadHref(mob?.raw_xml ?? string.Empty, "visMob"));
+        AllodsResource? visualMob = LoadAllodsResource(visualMobSource);
+        if (visualMob == null)
+        {
+            return null;
+        }
+
+        string characterSource = NormalizeHref(visualMobSource, ReadHref(visualMob.raw_xml, "character"));
+        string visualObjectSource = characterSource;
+        if (!characterSource.Contains("(VisObjectTemplate).xdb", StringComparison.OrdinalIgnoreCase))
+        {
+            AllodsResource? character = LoadAllodsResource(characterSource);
+            visualObjectSource = NormalizeHref(
+                characterSource,
+                ReadHref(character?.raw_xml ?? string.Empty, "characterVisObject"));
+        }
+
+        if (string.IsNullOrEmpty(visualObjectSource))
+        {
+            return null;
+        }
+
+        float visualScale = ReadFloat(visualMob.raw_xml, "scale", 1.0f);
+        return new NpcDefinition(
+            mobSource,
+            visualMobSource,
+            $"{StripXdbSuffix(visualObjectSource)}.scene.tscn",
+            visualScale <= 0 ? 1.0f : visualScale);
+    }
+
+    private void AddNpcPlaceholder(MapObjectPlacement placement, string modelSource)
+    {
+        var placeholder = new MeshInstance3D
+        {
+            Name = $"NpcPlaceholder_{NpcPlacementCount}",
+            Position = ConvertPosition(placement.Position) + Vector3.Up * 0.9f,
+            Quaternion = ConvertServerRotation(placement),
+            Mesh = new CapsuleMesh { Radius = 0.42f, Height = 1.8f },
+            MaterialOverride = new StandardMaterial3D
+            {
+                AlbedoColor = new Color("d06a55"),
+                Roughness = 0.85f,
+            },
+        };
+        placeholder.SetMeta("allods_mob", modelSource);
+        _charactersRoot.AddChild(placeholder);
+        NpcPlaceholderCount++;
+    }
+
     private Node3D? InstantiateStaticObject(string templateHref)
     {
         string staticSource = NormalizeHref(string.Empty, templateHref);
@@ -329,77 +479,13 @@ public partial class ZoneLoader : Node3D
         }
 
         string scenePath = $"{ConvertedRoot.TrimEnd('/')}/assets/{StripXdbSuffix(visualSource)}.scene.tscn";
-        PackedScene? scene = LoadRelocatedScene(scenePath);
+        PackedScene? scene = ConvertedSceneLoader.Load(ConvertedRoot, scenePath, out _);
         if (scene?.Instantiate() is Node3D instance)
         {
             return instance;
         }
 
         return InstantiateGeometryFallback(visualSource);
-    }
-
-    private PackedScene? LoadRelocatedScene(string scenePath)
-    {
-        if (_sceneCache.TryGetValue(scenePath, out PackedScene? cached))
-        {
-            return cached;
-        }
-
-        _sceneCache[scenePath] = null;
-        string source = FileAccess.GetFileAsString(scenePath);
-        if (string.IsNullOrWhiteSpace(source))
-        {
-            return null;
-        }
-
-        string assetsRoot = $"{ConvertedRoot.TrimEnd('/')}/assets/";
-        foreach (Match match in ConvertedResourceDependency.Matches(source))
-        {
-            string dependencyPath = assetsRoot + match.Groups["path"].Value;
-            if (!FileAccess.FileExists(dependencyPath))
-            {
-                GD.PushWarning($"ZoneLoader skipped {scenePath}: missing converted dependency {dependencyPath}");
-                return null;
-            }
-        }
-
-        foreach (Match match in ConvertedSceneDependency.Matches(source))
-        {
-            string childPath = assetsRoot + match.Groups["path"].Value;
-            PackedScene? child = LoadRelocatedScene(childPath);
-            if (child == null)
-            {
-                return null;
-            }
-
-            child?.TakeOverPath(childPath);
-        }
-
-        string relocated = source.Replace("res://assets/", assetsRoot, StringComparison.Ordinal);
-        string cacheDirectory = "user://zone_walkabout_scene_cache";
-        Error directoryError = DirAccess.MakeDirRecursiveAbsolute(ProjectSettings.GlobalizePath(cacheDirectory));
-        if (directoryError != Error.Ok && directoryError != Error.AlreadyExists)
-        {
-            GD.PushWarning($"ZoneLoader could not create its scene cache: {directoryError}");
-            return null;
-        }
-
-        string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scenePath))).ToLowerInvariant();
-        string cachePath = $"{cacheDirectory}/{hash}.tscn";
-        using (FileAccess? file = FileAccess.Open(cachePath, FileAccess.ModeFlags.Write))
-        {
-            if (file == null)
-            {
-                return null;
-            }
-
-            file.StoreString(relocated);
-        }
-
-        PackedScene? scene = ResourceLoader.Load<PackedScene>(cachePath, string.Empty, ResourceLoader.CacheMode.Replace);
-        scene?.TakeOverPath(scenePath);
-        _sceneCache[scenePath] = scene;
-        return scene;
     }
 
     private Node3D? InstantiateGeometryFallback(string visualSource)
@@ -418,7 +504,7 @@ public partial class ZoneLoader : Node3D
         }
 
         string meshPath = $"{ConvertedRoot.TrimEnd('/')}/assets/{StripXdbSuffix(geometrySource)}.obj";
-        if (!FileAccess.FileExists(meshPath))
+        if (!ConvertedSceneLoader.IsLoadable(meshPath, "Mesh"))
         {
             return null;
         }
@@ -449,6 +535,48 @@ public partial class ZoneLoader : Node3D
         catch
         {
             return string.Empty;
+        }
+    }
+
+    private static IReadOnlyList<string> ReadHrefs(string xml)
+    {
+        if (string.IsNullOrWhiteSpace(xml))
+        {
+            return [];
+        }
+
+        try
+        {
+            return XDocument.Parse(xml).Descendants()
+                .Select(element => element.Attribute("href")?.Value ?? string.Empty)
+                .Where(href => !string.IsNullOrWhiteSpace(href))
+                .ToArray();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static float ReadFloat(string xml, string elementName, float fallback)
+    {
+        if (string.IsNullOrWhiteSpace(xml))
+        {
+            return fallback;
+        }
+
+        try
+        {
+            string? value = XDocument.Parse(xml).Descendants()
+                .FirstOrDefault(candidate => candidate.Name.LocalName.Equals(elementName, StringComparison.OrdinalIgnoreCase))
+                ?.Value;
+            return float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float parsed)
+                ? parsed
+                : fallback;
+        }
+        catch
+        {
+            return fallback;
         }
     }
 
@@ -577,6 +705,22 @@ public partial class ZoneLoader : Node3D
         return yaw * pitch * roll;
     }
 
+    private static Quaternion ConvertServerRotation(MapObjectPlacement placement)
+    {
+        if (placement.RotationYawPitchRoll is { Length: >= 3 }
+            && placement.RotationYawPitchRoll.Any(value => MathF.Abs(value) > 0.0001f))
+        {
+            return ConvertRotation(placement.RotationYawPitchRoll);
+        }
+
+        string? yawText = placement.Properties
+            .FirstOrDefault(property => property.Key.EndsWith(".yaw", StringComparison.OrdinalIgnoreCase))
+            .Value;
+        return float.TryParse(yawText, NumberStyles.Float, CultureInfo.InvariantCulture, out float yaw)
+            ? new Quaternion(Vector3.Up, yaw)
+            : Quaternion.Identity;
+    }
+
     private static string NormalizeHref(string ownerSource, string href)
     {
         string path = href.Split('#', 2)[0].Replace('\\', '/').Trim();
@@ -650,10 +794,15 @@ public partial class ZoneLoader : Node3D
 
     private sealed class MapObjectPlacement
     {
+        [JsonPropertyName("object_type")] public string ObjectType { get; set; } = string.Empty;
         [JsonPropertyName("position")] public float[]? Position { get; set; }
         [JsonPropertyName("rotation_yaw_pitch_roll")] public float[]? RotationYawPitchRoll { get; set; }
         [JsonPropertyName("scale")] public float Scale { get; set; } = 1.0f;
         [JsonPropertyName("template_href")] public string TemplateHref { get; set; } = string.Empty;
         [JsonPropertyName("ai_collision")] public bool AiCollision { get; set; } = true;
+        [JsonPropertyName("hrefs")] public string[] Hrefs { get; set; } = [];
+        [JsonPropertyName("properties")] public Dictionary<string, string> Properties { get; set; } = new();
     }
+
+    private sealed record NpcDefinition(string MobSource, string VisualMobSource, string ScenePath, float Scale);
 }

@@ -1,4 +1,5 @@
 // Ported from ao-godot-converter runtime templates (Apache-2.0).
+using System.Collections.Generic;
 using Godot;
 
 /// <summary>
@@ -8,6 +9,9 @@ using Godot;
 [GlobalClass]
 public partial class ConvertedSkinnedMesh : Node3D
 {
+    private static readonly Dictionary<string, LoadedSkinMesh> MeshCache = new();
+    private static readonly Dictionary<string, Texture2D?> TextureCache = new();
+
     public override void _Ready()
     {
         string skinMeshPath = (string)GetMeta("allods_skin_mesh", "");
@@ -84,6 +88,11 @@ public partial class ConvertedSkinnedMesh : Node3D
 
     private static LoadedSkinMesh? LoadSkinMesh(string path)
     {
+        if (MeshCache.TryGetValue(path, out LoadedSkinMesh? cached))
+        {
+            return cached;
+        }
+
         using var file = FileAccess.Open(path, FileAccess.ModeFlags.Read);
         if (file == null)
         {
@@ -109,11 +118,8 @@ public partial class ConvertedSkinnedMesh : Node3D
         Texture2D? bodyAtlas = null;
         if (version >= 3)
         {
-            string atlasPath = ReadString(file);
-            if (!string.IsNullOrEmpty(atlasPath) && ResourceLoader.Exists(atlasPath))
-            {
-                bodyAtlas = ResourceLoader.Load<Texture2D>(atlasPath);
-            }
+            string atlasPath = ResolveAssetPath(ReadString(file), path);
+            bodyAtlas = LoadTexture(atlasPath);
         }
 
         var full = new ArrayMesh();
@@ -129,7 +135,7 @@ public partial class ConvertedSkinnedMesh : Node3D
             bool defaultVisible = version < 3 || ((flags >> 16) & 0xff) != 0;
             bool usesBodyAtlas = version >= 3 && ((flags >> 24) & 0xff) != 0;
             string partName = ReadString(file);
-            string texturePath = ReadString(file);
+            string texturePath = ResolveAssetPath(ReadString(file), path);
             string blendEffect = ReadString(file);
             string slot = partName;
             int variant = -1;
@@ -209,12 +215,14 @@ public partial class ConvertedSkinnedMesh : Node3D
             });
         }
 
-        return new LoadedSkinMesh
+        var loaded = new LoadedSkinMesh
         {
             FullMesh = full,
             DefaultMesh = defaults.GetSurfaceCount() > 0 ? defaults : full,
             SurfacesJson = Json.Stringify(surfaces),
         };
+        MeshCache[path] = loaded;
+        return loaded;
     }
 
     private static string ReadString(FileAccess file)
@@ -234,9 +242,10 @@ public partial class ConvertedSkinnedMesh : Node3D
         {
             CullMode = BaseMaterial3D.CullModeEnum.Back,
         };
-        if (!string.IsNullOrEmpty(texturePath) && ResourceLoader.Exists(texturePath))
+        Texture2D? texture = LoadTexture(texturePath);
+        if (texture != null)
         {
-            material.AlbedoTexture = ResourceLoader.Load<Texture2D>(texturePath);
+            material.AlbedoTexture = texture;
         }
 
         if (transparent && blendEffect.Contains("ADD"))
@@ -256,5 +265,51 @@ public partial class ConvertedSkinnedMesh : Node3D
         }
 
         return material;
+    }
+
+    private static string ResolveAssetPath(string assetPath, string skinMeshPath)
+    {
+        const string originalRoot = "res://assets/";
+        if (!assetPath.StartsWith(originalRoot, System.StringComparison.Ordinal))
+        {
+            return assetPath;
+        }
+
+        int assetsMarker = skinMeshPath.LastIndexOf("/assets/", System.StringComparison.Ordinal);
+        return assetsMarker < 0
+            ? assetPath
+            : skinMeshPath[..(assetsMarker + "/assets/".Length)] + assetPath[originalRoot.Length..];
+    }
+
+    private static Texture2D? LoadTexture(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return null;
+        }
+
+        if (TextureCache.TryGetValue(path, out Texture2D? cached))
+        {
+            return cached;
+        }
+
+        if (SarnautCore.ConvertedSceneLoader.IsLoadable(path))
+        {
+            Texture2D? imported = ResourceLoader.Load<Texture2D>(path);
+            TextureCache[path] = imported;
+            return imported;
+        }
+
+        if (!FileAccess.FileExists(path))
+        {
+            TextureCache[path] = null;
+            return null;
+        }
+
+        string absolutePath = ProjectSettings.GlobalizePath(path);
+        Image? image = Image.LoadFromFile(absolutePath);
+        Texture2D? texture = image == null || image.IsEmpty() ? null : ImageTexture.CreateFromImage(image);
+        TextureCache[path] = texture;
+        return texture;
     }
 }

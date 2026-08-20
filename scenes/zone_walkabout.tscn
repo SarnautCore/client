@@ -1,8 +1,9 @@
-[gd_scene load_steps=7 format=3]
+[gd_scene load_steps=8 format=3]
 
 [ext_resource type="Script" path="res://src/zone/ZoneWalkabout.cs" id="1_walkabout"]
 [ext_resource type="Script" path="res://src/zone/ZoneLoader.cs" id="2_loader"]
 [ext_resource type="Script" path="res://src/zone/WalkaboutController.cs" id="3_controller"]
+[ext_resource type="Script" path="res://src/characters/ConvertedCharacter.cs" id="4_character"]
 
 [sub_resource type="Environment" id="Environment_walkabout"]
 background_mode = 1
@@ -61,10 +62,17 @@ script = ExtResource("3_controller")
 position = Vector3(0, 0.9, 0)
 shape = SubResource("Capsule_walker")
 
-[node name="Head" type="Node3D" parent="Walker"]
-position = Vector3(0, 1.62, 0)
+[node name="Character" type="Node3D" parent="Walker"]
+script = ExtResource("4_character")
 
-[node name="Camera3D" type="Camera3D" parent="Walker/Head"]
+[node name="Head" type="Node3D" parent="Walker"]
+position = Vector3(0, 1.45, 0)
+
+[node name="SpringArm3D" type="SpringArm3D" parent="Walker/Head"]
+spring_length = 4.5
+margin = 0.12
+
+[node name="Camera3D" type="Camera3D" parent="Walker/Head/SpringArm3D"]
 current = true
 near = 0.05
 far = 5000.0
