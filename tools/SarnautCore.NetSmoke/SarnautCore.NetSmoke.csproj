@@ -9,5 +9,6 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/SarnautCore.Network/SarnautCore.Network.csproj" />
+    <ProjectReference Include="../../src/SarnautCore.Shell/SarnautCore.Shell.csproj" />
   </ItemGroup>
 </Project>
