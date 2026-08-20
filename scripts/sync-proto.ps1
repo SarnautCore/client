@@ -49,12 +49,14 @@ function Sync-File {
     param([string]$Source, [string]$Target, [string]$Label)
 
     $sourceBytes = [System.IO.File]::ReadAllBytes($Source)
-    $matches = $false
+    # Not $matches: that is a PowerShell automatic variable and assigning to it
+    # silently discards the last regex capture set for the rest of the scope.
+    $identical = $false
     if (Test-Path -LiteralPath $Target -PathType Leaf) {
         $targetBytes = [System.IO.File]::ReadAllBytes($Target)
-        $matches = [System.Linq.Enumerable]::SequenceEqual($sourceBytes, $targetBytes)
+        $identical = [System.Linq.Enumerable]::SequenceEqual($sourceBytes, $targetBytes)
     }
-    if ($matches) {
+    if ($identical) {
         return
     }
 
@@ -71,9 +73,24 @@ function Sync-File {
     Write-Host "copied $Label"
 }
 
-$sourceNames = Get-ChildItem -LiteralPath $sourceProtoRoot -File -Filter "*.proto" |
-    Select-Object -ExpandProperty Name |
-    Sort-Object -CaseSensitive
+# Recursive, because both lock scripts hash the tree recursively. A proto added
+# at sarnaut/v1/<subdir>/x.proto changes the server's lock, and a
+# non-recursive copy would leave the client's tree without it while the client's
+# own self-check still passed — the two locks would diverge with no error until
+# somebody ran the cross-repo check.
+function Get-RelativeProtoNames {
+    param([string]$Root)
+
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+        return @()
+    }
+    $prefix = (Resolve-Path -LiteralPath $Root).Path.TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+    return Get-ChildItem -LiteralPath $Root -File -Filter "*.proto" -Recurse |
+        ForEach-Object { $_.FullName.Substring($prefix.Length + 1).Replace([System.IO.Path]::DirectorySeparatorChar, "/") } |
+        Sort-Object -CaseSensitive
+}
+
+$sourceNames = @(Get-RelativeProtoNames -Root $sourceProtoRoot)
 
 foreach ($name in $sourceNames) {
     Sync-File `
@@ -90,18 +107,16 @@ Sync-File `
 # A proto that no longer exists upstream is deleted rather than left behind: a
 # stale message the shard has forgotten is worse than a missing one, because it
 # still compiles.
-if (Test-Path -LiteralPath $targetProtoRoot -PathType Container) {
-    foreach ($existing in Get-ChildItem -LiteralPath $targetProtoRoot -File -Filter "*.proto") {
-        if ($sourceNames -contains $existing.Name) {
-            continue
-        }
-        if ($Check) {
-            $differences.Add("stale: sarnaut/v1/$($existing.Name)")
-            continue
-        }
-        Remove-Item -LiteralPath $existing.FullName -Force
-        Write-Host "removed sarnaut/v1/$($existing.Name)"
+foreach ($existing in Get-RelativeProtoNames -Root $targetProtoRoot) {
+    if ($sourceNames -contains $existing) {
+        continue
     }
+    if ($Check) {
+        $differences.Add("stale: sarnaut/v1/$existing")
+        continue
+    }
+    Remove-Item -LiteralPath (Join-Path $targetProtoRoot $existing) -Force
+    Write-Host "removed sarnaut/v1/$existing"
 }
 
 if ($Check) {
