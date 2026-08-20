@@ -57,3 +57,18 @@ index built when it is published, and staleness is a stamp comparison. Intake
 dropped as well because `Add` no longer clones a batch it is handed ownership of.
 
 Measured on Windows 11, .NET 10.0.10, Release.
+
+## Gameplay HUD regression check (2026-08-20)
+
+The standard 288-entity, 20,000-frame run was repeated before and after the
+gameplay HUD work on the same machine. The HUD observes only the selected
+entity, by registry lookup; it does not walk the replicated population.
+
+| revision | registry update us/frame | update bytes/frame | intake us/frame | intake bytes/frame |
+|---|---:|---:|---:|---:|
+| `615e5a7` before HUD | 17.6 | 0 | 1.9 | 2,794 |
+| `feat/m2-gameplay-hud` | 17.3 | 0 | 1.6 | 2,795 |
+
+The update pass changed by -0.3 us/frame (-1.7%), within ordinary run-to-run
+noise, and still allocates zero bytes per frame. No 288-entity frame-time
+regression was measured.

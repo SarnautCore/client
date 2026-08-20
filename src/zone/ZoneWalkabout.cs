@@ -1,4 +1,5 @@
 using Godot;
+using SarnautCore.Gameplay;
 using SarnautCore.Shell;
 
 namespace SarnautCore;
@@ -19,6 +20,10 @@ public partial class ZoneWalkabout : Node3D
     /// <summary>The named input actions this scene reads, declared in <c>project.godot</c>.</summary>
     public const string TargetClick = "target_click";
     public const string TargetNearest = "target_nearest";
+    public const string Interact = "interact";
+    public const string OpenQuestLog = "journal";
+    public const string OpenInventory = "inventory";
+    public const string AbilitySlot1 = "ability_slot_1";
 
     [Export] public string DefaultMapName { get; set; } = ZoneLoader.DefaultMapName;
     [Export] public string DefaultZoneId { get; set; } = "InstLeague1";
@@ -31,9 +36,12 @@ public partial class ZoneWalkabout : Node3D
     [Export] public NodePath StatusLabelPath { get; set; } = new("%Status");
 
     private SessionHost _session = null!;
+    private readonly GameplayFocusOwner _focus = new();
     private ZoneLoader _loader = null!;
     private WalkaboutController _walker = null!;
     private ZoneNetworkLoop? _networkLoop;
+    private GameplayHudViewModel? _hudModel;
+    private GameplayHudControl? _hudControl;
     private Label _status = null!;
     private string _zoneStatus = "";
 
@@ -43,6 +51,8 @@ public partial class ZoneWalkabout : Node3D
         _loader = GetNode<ZoneLoader>("ZoneLoader");
         _walker = GetNode<WalkaboutController>("Walker");
         _status = GetNode<Label>(StatusLabelPath);
+        _focus.Changed += ApplyFocusState;
+        ApplyFocusState();
 
         ZoneRequest request = _session.Zone;
         string mapName = string.IsNullOrWhiteSpace(request.MapName) ? DefaultMapName : request.MapName.Trim();
@@ -55,7 +65,7 @@ public partial class ZoneWalkabout : Node3D
         if (!_loader.LoadZone(mapName))
         {
             _status.Text = _loader.LastError;
-            Input.MouseMode = Input.MouseModeEnum.Visible;
+            _focus.Cancel();
             return;
         }
 
@@ -78,6 +88,21 @@ public partial class ZoneWalkabout : Node3D
 
         _networkLoop = new ZoneNetworkLoop { Name = "NetworkLoop" };
         AddChild(_networkLoop);
+        _hudModel = new GameplayHudViewModel(
+            ownEntityId: 0,
+            abilities:
+            [
+                new AbilityDefinition(
+                    "ability.melee.harbor-cleave",
+                    "ability.melee.harbor-cleave.name",
+                    string.Empty),
+            ],
+            inventoryCapacity: 16,
+            stackLimit: _ => 20,
+            focus: _focus);
+        _hudControl = new GameplayHudControl();
+        _hudControl.Initialize(_hudModel, _networkLoop);
+        GetNode<CanvasLayer>("Interface").AddChild(_hudControl);
         _networkLoop.Start(
             _walker,
             entityRoot,
@@ -87,6 +112,7 @@ public partial class ZoneWalkabout : Node3D
             string.IsNullOrWhiteSpace(request.ZoneId) ? DefaultZoneId : request.ZoneId,
             _session.ContentPackId,
             request.Ticket,
+            _hudModel,
             SetNetworkStatus,
             OnAdmitted,
             OnRefused);
@@ -123,11 +149,7 @@ public partial class ZoneWalkabout : Node3D
     {
         if (inputEvent.IsActionPressed("ui_cancel"))
         {
-            if (Input.MouseMode == Input.MouseModeEnum.Captured)
-            {
-                Input.MouseMode = Input.MouseModeEnum.Visible;
-            }
-            else
+            if (_focus.Cancel() == FocusCancelResult.LeaveWalkabout)
             {
                 Leave();
             }
@@ -136,8 +158,45 @@ public partial class ZoneWalkabout : Node3D
             return;
         }
 
-        if (_networkLoop is null)
+        if (inputEvent is InputEventMouseButton button
+            && button.Pressed
+            && button.ButtonIndex == MouseButton.Right
+            && _focus.TryCaptureWorld())
         {
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (_hudControl is not null && inputEvent.IsActionPressed(OpenInventory))
+        {
+            _hudControl.ToggleInventory();
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (_hudControl is not null && inputEvent.IsActionPressed(OpenQuestLog))
+        {
+            _hudControl.ToggleQuestLog();
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (_networkLoop is null || !_focus.WorldInputEnabled)
+        {
+            return;
+        }
+
+        if (inputEvent.IsActionPressed(AbilitySlot1))
+        {
+            _hudModel?.Abilities.TryRequestUse(0, _networkLoop.TargetEntityId);
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (inputEvent.IsActionPressed(Interact))
+        {
+            _networkLoop.RequestInteract(_networkLoop.TargetEntityId);
+            GetViewport().SetInputAsHandled();
             return;
         }
 
@@ -154,7 +213,7 @@ public partial class ZoneWalkabout : Node3D
             // pick goes through the middle of the screen, which is where the
             // crosshair would be.
             Viewport viewport = GetViewport();
-            Vector2 point = Input.MouseMode == Input.MouseModeEnum.Captured
+            Vector2 point = _focus.MouseCaptured
                 ? viewport.GetVisibleRect().Size * 0.5f
                 : viewport.GetMousePosition();
             if (_networkLoop.TryTargetAtScreenPoint(point, out _))
@@ -180,5 +239,23 @@ public partial class ZoneWalkabout : Node3D
 
         // The offline walkabout came from the hub and goes back to it.
         GetTree().ChangeSceneToFile("res://scenes/boot.tscn");
+    }
+
+    public override void _ExitTree()
+    {
+        _focus.Changed -= ApplyFocusState;
+        Input.MouseMode = Input.MouseModeEnum.Visible;
+    }
+
+    private void ApplyFocusState()
+    {
+        _walker.InputEnabled = _focus.WorldInputEnabled;
+        _walker.LookInputEnabled = _focus.WorldLookEnabled;
+        if (DisplayServer.GetName() != "headless")
+        {
+            Input.MouseMode = _focus.MouseCaptured
+                ? Input.MouseModeEnum.Captured
+                : Input.MouseModeEnum.Visible;
+        }
     }
 }

@@ -115,6 +115,6 @@ theme_override_styles/panel = SubResource("Panel_help")
 
 [node name="Help" type="Label" parent="Interface/Margin/Column/HelpPanel"]
 layout_mode = 2
-text = "WASD move  |  Mouse look  |  Space jump/up  |  Q down  |  Shift boost  |  F fly/walk  |  Esc release/back"
+text = "WASD move  |  1 cast  |  E interact  |  I bags  |  J quests  |  Tab/left-click target  |  Esc close/release/back"
 horizontal_alignment = 1
 theme_override_colors/font_color = Color(0.76, 0.81, 0.88, 1)

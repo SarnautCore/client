@@ -369,6 +369,12 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
         ApplyHealth(sample);
     }
 
+    public bool PlayAttack() => _character?.PlayAttack() ?? false;
+
+    public bool PlayHit() => _character?.PlayHit() ?? false;
+
+    public bool PlayDeath() => _character?.PlayDeath() ?? false;
+
     private void ApplyIdentity(SampledEntity sample)
     {
         if (_nameText.Length > 0 && _shownLevel == sample.Level)

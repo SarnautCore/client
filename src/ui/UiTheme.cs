@@ -29,7 +29,10 @@ public static class UiTheme
     /// rather than from a constant keeps <c>project.godot</c> the single place
     /// the theme is chosen.
     /// </summary>
-    public const string ProjectThemeSetting = "gui/theme/custom";
+    // Godot eagerly loads gui/theme/custom before an autoload can install the
+    // code-built fallback. Keep the optional private resource under our own
+    // setting so a checkout with no converted tree can reach Resolve().
+    public const string ProjectThemeSetting = "sarnaut/ui/converted_theme";
 
     private static readonly Color Ink = new("e6edf6");
     private static readonly Color Muted = new("9aa8b8");

@@ -6,7 +6,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>SarnautCore</AssemblyName>
     <RootNamespace>SarnautCore</RootNamespace>
-    <DefaultItemExcludes>$(DefaultItemExcludes);converted/**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);converted*/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,6 +14,7 @@
          project only references them. Godot.NET.Sdk globs every .cs below the
          project directory, so each one has to be removed here as well. -->
     <Compile Remove="src/SarnautCore.Network/**" />
+    <Compile Remove="src/SarnautCore.Gameplay/**" />
     <Compile Remove="src/SarnautCore.Shell/**" />
     <Compile Remove="tests/**" />
     <Compile Remove="tools/**" />
@@ -23,6 +24,7 @@
          instantiate its own script. -->
     <Compile Include="tests/*.cs" />
     <ProjectReference Include="src/SarnautCore.Network/SarnautCore.Network.csproj" />
+    <ProjectReference Include="src/SarnautCore.Gameplay/SarnautCore.Gameplay.csproj" />
     <ProjectReference Include="src/SarnautCore.Shell/SarnautCore.Shell.csproj" />
   </ItemGroup>
 </Project>

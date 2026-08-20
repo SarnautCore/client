@@ -26,7 +26,8 @@ internal static class ConvertedSceneLoader
         "^\\[ext_resource type=\"Animation\" path=\"(?<path>[^\"]+)\" id=\"(?<id>[^\"]+)\"\\]\\r?\\n",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Multiline);
     private static readonly Regex LocomotionAnimationPath = new(
-        "\\.(Idle|Run|Walk)\\.\\(SkeletalAnimation\\)\\.animation\\.tres$",
+        "\\.(Idle[^.]*|Run[^.]*|Walk[^.]*|Attack[^.]*|Battle[^.]*|Hit[^.]*|Damage[^.]*|Death[^.]*|Dead[^.]*)" +
+        "\\.\\(SkeletalAnimation\\)\\.animation\\.tres$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly Regex AnimationLibraryDataLine = new(
         "^_data = \\{(?<entries>.*)\\}\\r?$",
