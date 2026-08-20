@@ -35,7 +35,10 @@ internal static class ConvertedSceneLoader
         "&\"(?<name>[^\"]+)\"\\s*:\\s*ExtResource\\(\"(?<id>[^\"]+)\"\\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Dictionary<string, PackedScene?> SceneCache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, Resource?> ResourceCache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, string> ErrorCache = new(StringComparer.OrdinalIgnoreCase);
+
+    private const string CacheDirectory = "user://converted_scene_cache";
 
     public static PackedScene? Load(
         string convertedRoot,
@@ -49,7 +52,13 @@ internal static class ConvertedSceneLoader
             ? scenePath
             : $"{normalizedRoot}/assets/{scenePath.TrimStart('/')}";
 
-        string cacheKey = $"{normalizedScenePath}|skinned={enableRuntimeSkinnedMesh}|locomotion={locomotionOnly}";
+        // The modification time is part of the key, not just the path and the
+        // flags. Without it a reconversion writes a new scene and this cache
+        // keeps serving the patched copy of the old one, which looks like the
+        // converter silently doing nothing.
+        string cacheKey =
+            $"{normalizedScenePath}|skinned={enableRuntimeSkinnedMesh}|locomotion={locomotionOnly}" +
+            $"|mtime={FileAccess.GetModifiedTime(normalizedScenePath)}";
         if (SceneCache.TryGetValue(cacheKey, out PackedScene? cached))
         {
             error = ErrorCache.GetValueOrDefault(cacheKey, string.Empty);
@@ -106,27 +115,9 @@ internal static class ConvertedSceneLoader
         }
 
         string relocated = source.Replace("res://assets/", assetsRoot, StringComparison.Ordinal);
-        string cacheDirectory = "user://converted_scene_cache";
-        Error directoryError = DirAccess.MakeDirRecursiveAbsolute(ProjectSettings.GlobalizePath(cacheDirectory));
-        if (directoryError != Error.Ok && directoryError != Error.AlreadyExists)
+        if (!TryWritePatchedCopy(cacheKey, relocated, ".tscn", out string cachePath, out string writeError))
         {
-            return Fail(
-                cacheKey,
-                $"Could not create converted-scene cache: {directoryError}",
-                out error);
-        }
-
-        string hash = System.Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(cacheKey)))
-            .ToLowerInvariant();
-        string cachePath = $"{cacheDirectory}/{hash}.tscn";
-        using (FileAccess? file = FileAccess.Open(cachePath, FileAccess.ModeFlags.Write))
-        {
-            if (file == null)
-            {
-                return Fail(cacheKey, $"Could not write converted-scene cache file {cachePath}", out error);
-            }
-
-            file.StoreString(relocated);
+            return Fail(cacheKey, writeError, out error);
         }
 
         PackedScene? scene = ResourceLoader.Load<PackedScene>(cachePath, string.Empty, ResourceLoader.CacheMode.Replace);
@@ -140,6 +131,74 @@ internal static class ConvertedSceneLoader
         ErrorCache[cacheKey] = string.Empty;
         error = string.Empty;
         return scene;
+    }
+
+    /// <summary>
+    /// Loads one converted <c>.tres</c>, patching the converter's own
+    /// <c>res://assets/</c> prefixes the same way <see cref="Load"/> does.
+    /// </summary>
+    /// <remarks>
+    /// The converter writes every dependency relative to the tree it emitted, so
+    /// a converted theme's font references resolve nowhere when the tree is
+    /// mounted under <c>converted/</c>. Returns null with a reason rather than
+    /// throwing: every caller of this has a code-built fallback, because
+    /// <c>converted/</c> is gitignored and a fresh clone has none of it.
+    /// </remarks>
+    public static T? LoadResource<T>(string convertedRoot, string resourcePath, out string error)
+        where T : Resource
+    {
+        string normalizedRoot = convertedRoot.TrimEnd('/');
+        string normalizedPath = resourcePath.StartsWith("res://", StringComparison.Ordinal)
+            ? resourcePath
+            : $"{normalizedRoot}/assets/{resourcePath.TrimStart('/')}";
+
+        string cacheKey = $"{normalizedPath}|as={typeof(T).Name}|mtime={FileAccess.GetModifiedTime(normalizedPath)}";
+        if (ResourceCache.TryGetValue(cacheKey, out Resource? cached))
+        {
+            error = ErrorCache.GetValueOrDefault(cacheKey, string.Empty);
+            return cached as T;
+        }
+
+        ResourceCache[cacheKey] = null;
+        string source = FileAccess.GetFileAsString(normalizedPath);
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return FailResource<T>(cacheKey, $"Converted resource not found: {normalizedPath}", out error);
+        }
+
+        string assetsRoot = $"{normalizedRoot}/assets/";
+        foreach (Match match in ConvertedResourceDependency.Matches(source))
+        {
+            string dependencyPath = assetsRoot + match.Groups["path"].Value;
+            if (!IsLoadable(dependencyPath))
+            {
+                return FailResource<T>(
+                    cacheKey,
+                    $"Converted resource {normalizedPath} is missing dependency {dependencyPath}",
+                    out error);
+            }
+        }
+
+        string relocated = source.Replace("res://assets/", assetsRoot, StringComparison.Ordinal);
+        if (!TryWritePatchedCopy(cacheKey, relocated, ".tres", out string cachePath, out string writeError))
+        {
+            return FailResource<T>(cacheKey, writeError, out error);
+        }
+
+        Resource? loaded = ResourceLoader.Load(cachePath, typeof(T).Name, ResourceLoader.CacheMode.Replace);
+        if (loaded is not T typed)
+        {
+            return FailResource<T>(
+                cacheKey,
+                $"Converted resource {normalizedPath} is not a {typeof(T).Name}",
+                out error);
+        }
+
+        typed.TakeOverPath(normalizedPath);
+        ResourceCache[cacheKey] = typed;
+        ErrorCache[cacheKey] = string.Empty;
+        error = string.Empty;
+        return typed;
     }
 
     public static bool IsLoadable(string resourcePath, string typeHint = "")
@@ -187,9 +246,53 @@ internal static class ConvertedSceneLoader
         });
     }
 
+    /// <summary>
+    /// Writes the relocated copy under <c>user://</c> and hands back its path.
+    /// The file name is the SHA-256 of the cache key, which now carries the
+    /// source's modification time, so a reconversion writes a new file rather
+    /// than reusing the old one.
+    /// </summary>
+    private static bool TryWritePatchedCopy(
+        string cacheKey,
+        string content,
+        string extension,
+        out string cachePath,
+        out string error)
+    {
+        cachePath = string.Empty;
+        Error directoryError = DirAccess.MakeDirRecursiveAbsolute(ProjectSettings.GlobalizePath(CacheDirectory));
+        if (directoryError != Error.Ok && directoryError != Error.AlreadyExists)
+        {
+            error = $"Could not create converted-scene cache: {directoryError}";
+            return false;
+        }
+
+        string hash = System.Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(cacheKey)))
+            .ToLowerInvariant();
+        cachePath = $"{CacheDirectory}/{hash}{extension}";
+        using FileAccess? file = FileAccess.Open(cachePath, FileAccess.ModeFlags.Write);
+        if (file == null)
+        {
+            error = $"Could not write converted-scene cache file {cachePath}";
+            return false;
+        }
+
+        file.StoreString(content);
+        error = string.Empty;
+        return true;
+    }
+
     private static PackedScene? Fail(string scenePath, string message, out string error)
     {
         ErrorCache[scenePath] = message;
+        error = message;
+        return null;
+    }
+
+    private static T? FailResource<T>(string cacheKey, string message, out string error)
+        where T : Resource
+    {
+        ErrorCache[cacheKey] = message;
         error = message;
         return null;
     }
