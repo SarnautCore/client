@@ -76,6 +76,8 @@ Without the manifest, or without `converted/` at all, every entity renders as a 
 
 Set `SARNAUT_SERVER_ADDRESS` before starting Godot to change the endpoint default. Online mode accepts the shard's ephemeral self-signed certificate for local development. Production certificate validation remains future work.
 
+`pack_id` is a gate rather than a version banner (ADR 0029): a shard with a pack refuses a client that names a different one, and refuses a client that names none unless it was started with `content.allow_unverified_pack`. Point `SARNAUT_CONTENT_PACK` at the pack directory and the client reads `pack_id` out of its `manifest.json`, the same way the shard does; `SARNAUT_CONTENT_PACK_ID` states it outright. Neither is required — an empty id is what a client with no content has, and the shard decides whether that is welcome.
+
 The networking assembly uses `System.Net.Quic`, backed by MsQuic on Windows 11 and Windows Server 2022 or later. .NET 10 exposes QUIC streams but not QUIC datagram send or receive calls. SarnautCore therefore uses SAR-19's ordered QUIC-stream fallback for `ClientMoveIntent` and `SnapshotBatch`. The stream framing is a 4-byte big-endian payload length followed by protobuf bytes. The copied protocol files under `src/SarnautCore.Network/Proto` match the server's `proto/sarnaut/v1` wire definitions and add only the C# namespace option.
 
 Client-side prediction is intentionally left behind the `WalkaboutController.NetworkControlled` seam. SAR-20 displays interpolated authoritative state without predicting ahead of the server.
@@ -113,6 +115,12 @@ For an asset-free end-to-end network check, keep the `server` repository beside 
 
 ```powershell
 ../server/scripts/sar20-client-smoke.ps1 -ClientRepository .
+```
+
+For the same rig with the real zone scene on top of it, adding `-EntityProbe` runs `res://tests/zone_online_probe.tscn`: it signs in through the same view models the screens use, enters the live shard, and then checks what the client actually drew — one visual per replicated entity, the controller standing where the shard says, a nameplate and a health bar on each, and `Tab` and a screen-point pick agreeing on the same entity id.
+
+```powershell
+./scripts/m2-session-smoke.ps1 -EntityProbe -Godot <path to godot_console>
 ```
 
 The script starts the production shard with a temporary synthetic content fixture and runs `tools/SarnautCore.NetSmoke`. It passes only after the client joins, sends movement, and observes its authoritative position advance. The smoke is kept as a local cross-repository check because the two repositories publish independently and Linux runners require a separately installed `libmsquic`. The pure C# protocol, session and interpolation tests run in this repository's CI.

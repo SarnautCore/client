@@ -85,6 +85,7 @@ public partial class ZoneWalkabout : Node3D
             _loader.ConvertedRoot,
             request.ServerAddress,
             string.IsNullOrWhiteSpace(request.ZoneId) ? DefaultZoneId : request.ZoneId,
+            _session.ContentPackId,
             request.Ticket,
             SetNetworkStatus,
             OnAdmitted,

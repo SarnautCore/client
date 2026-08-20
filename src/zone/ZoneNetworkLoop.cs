@@ -75,6 +75,7 @@ public partial class ZoneNetworkLoop : Node
         string convertedRoot,
         string address,
         string zoneId,
+        string contentPackId,
         Secret ticket,
         Action<string> setStatus,
         Action? onAdmitted = null,
@@ -90,7 +91,7 @@ public partial class ZoneNetworkLoop : Node
         _onRefused = onRefused;
         _walker.NetworkControlled = true;
         _setStatus($"Online: connecting to {address}...");
-        _networkTask = RunNetworkAsync(address, zoneId, ticket, _shutdown.Token);
+        _networkTask = RunNetworkAsync(address, zoneId, contentPackId, ticket, _shutdown.Token);
     }
 
     public override void _PhysicsProcess(double delta)
@@ -215,6 +216,7 @@ public partial class ZoneNetworkLoop : Node
     private async Task RunNetworkAsync(
         string address,
         string zoneId,
+        string contentPackId,
         Secret ticket,
         CancellationToken cancellationToken)
     {
@@ -226,6 +228,7 @@ public partial class ZoneNetworkLoop : Node
                 zoneId,
                 "godot-sar20",
                 allowUntrustedDevelopmentCertificate: true,
+                packId: contentPackId,
                 ticket: ticket.Reveal(),
                 cancellationToken: cancellationToken);
 
