@@ -3,14 +3,37 @@ using System.Collections.Generic;
 using Godot;
 
 /// <summary>
-/// Builds a skinned ArrayMesh from the converter's .skmesh artifact and binds
-/// it to the exported Skeleton3D using the authored inverse-bind palette.
+/// Builds a Skeleton3D, skinned ArrayMesh, and Skin from the converter's
+/// .skmesh artifact. Format version 4 is self-contained: it embeds the
+/// Godot-converted skeleton and skinning palette and stores indices in
+/// Godot's clockwise front-face winding. Versions 2 and 3 predate that:
+/// they rely on a .skeleton.tscn instanced into the scene plus skeleton
+/// metadata, and carry counter-clockwise indices, so their materials render
+/// double-sided.
 /// </summary>
 [GlobalClass]
 public partial class ConvertedSkinnedMesh : Node3D
 {
-    private static readonly Dictionary<string, LoadedSkinMesh> MeshCache = new();
+    private static readonly Dictionary<string, LoadedSkinMesh?> MeshCache = new();
     private static readonly Dictionary<string, Texture2D?> TextureCache = new();
+
+    public override void _EnterTree()
+    {
+        // The skeleton must exist before sibling AnimationPlayer nodes run
+        // _Ready and resolve their "Skeleton3D:bone" track paths, and a
+        // parent's _EnterTree runs before any child's, so it is built here.
+        string skinMeshPath = (string)GetMeta("allods_skin_mesh", "");
+        if (string.IsNullOrEmpty(skinMeshPath) || GetNodeOrNull<Skeleton3D>("Skeleton3D") != null)
+        {
+            return;
+        }
+
+        Skeleton3D? skeleton = BuildSkeletonFromFile(skinMeshPath);
+        if (skeleton != null)
+        {
+            AddChild(skeleton);
+        }
+    }
 
     public override void _Ready()
     {
@@ -20,27 +43,26 @@ public partial class ConvertedSkinnedMesh : Node3D
             return;
         }
 
-        var skeleton = GetNodeOrNull<Skeleton3D>("Skeleton3D");
-        if (skeleton == null)
-        {
-            GD.PushWarning($"ConvertedSkinnedMesh: no Skeleton3D under {GetPath()}");
-            return;
-        }
-
         var loaded = LoadSkinMesh(skinMeshPath);
         if (loaded == null)
         {
             return;
         }
 
-        var instance = new MeshInstance3D
-        {
-            Mesh = loaded.DefaultMesh,
-            Skin = BuildSkin(skeleton),
-        };
+        var skeleton = GetNodeOrNull<Skeleton3D>("Skeleton3D");
+        var instance = new MeshInstance3D { Mesh = loaded.DefaultMesh };
         instance.SetMeta("allods_source_mesh", loaded.FullMesh);
         instance.SetMeta("allods_surfaces", loaded.SurfacesJson);
-        skeleton.AddChild(instance);
+        if (skeleton != null)
+        {
+            instance.Skin = BuildSkin(loaded, skeleton);
+            skeleton.AddChild(instance);
+        }
+        else
+        {
+            AddChild(instance);
+        }
+
         GetNodeOrNull<MeshInstance3D>("Mesh")?.Hide();
     }
 
@@ -50,35 +72,85 @@ public partial class ConvertedSkinnedMesh : Node3D
         return LoadSkinMesh(path)?.DefaultMesh;
     }
 
+    /// <summary>Builds the Skeleton3D embedded in a version-4 .skmesh, or null.</summary>
+    public static Skeleton3D? BuildSkeletonFromFile(string path)
+    {
+        var loaded = LoadSkinMesh(path);
+        if (loaded == null || loaded.BoneNames.Length == 0)
+        {
+            return null;
+        }
+
+        var skeleton = new Skeleton3D { Name = "Skeleton3D" };
+        for (int bone = 0; bone < loaded.BoneNames.Length; bone++)
+        {
+            skeleton.AddBone(loaded.BoneNames[bone]);
+        }
+
+        for (int bone = 0; bone < loaded.BoneNames.Length; bone++)
+        {
+            if (loaded.BoneParents[bone] >= 0)
+            {
+                skeleton.SetBoneParent(bone, loaded.BoneParents[bone]);
+            }
+
+            skeleton.SetBoneRest(bone, loaded.BoneRests[bone]);
+        }
+
+        skeleton.ResetBonePoses();
+        return skeleton;
+    }
+
+    /// <summary>
+    /// Builds the Skin from the version-4 embedded palette, falling back to the
+    /// legacy skeleton metadata written next to version-2/3 artifacts.
+    /// </summary>
+    public static Skin BuildSkinForSkeleton(string path, Skeleton3D skeleton)
+    {
+        LoadedSkinMesh? loaded = string.IsNullOrEmpty(path) ? null : LoadSkinMesh(path);
+        return loaded == null ? LegacySkinFromMetadata(skeleton) : BuildSkin(loaded, skeleton);
+    }
+
     private sealed class LoadedSkinMesh
     {
+        public required uint Version { get; init; }
         public required ArrayMesh FullMesh { get; init; }
         public required ArrayMesh DefaultMesh { get; init; }
         public required string SurfacesJson { get; init; }
+        public required string[] BoneNames { get; init; }
+        public required int[] BoneParents { get; init; }
+        public required Transform3D[] BoneRests { get; init; }
+        public required int[] SlotBones { get; init; }
+        public required Transform3D[] SlotBinds { get; init; }
     }
 
-    private static Skin BuildSkin(Skeleton3D skeleton)
+    private static Skin BuildSkin(LoadedSkinMesh loaded, Skeleton3D skeleton)
+    {
+        if (loaded.SlotBones.Length == 0)
+        {
+            return LegacySkinFromMetadata(skeleton);
+        }
+
+        var skin = new Skin();
+        for (int slot = 0; slot < loaded.SlotBones.Length; slot++)
+        {
+            skin.AddBind(slot, loaded.SlotBinds[slot]);
+            skin.SetBindBone(skin.GetBindCount() - 1, loaded.SlotBones[slot]);
+        }
+
+        return skin;
+    }
+
+    private static Skin LegacySkinFromMetadata(Skeleton3D skeleton)
     {
         var visual = (int[])skeleton.GetMeta("allods_visual_bones", System.Array.Empty<int>());
         var binds = (float[])skeleton.GetMeta("allods_skin_binds", System.Array.Empty<float>());
         var skin = new Skin();
         for (int slot = 0; slot < visual.Length; slot++)
         {
-            Transform3D bind;
-            if (binds.Length == visual.Length * 12)
-            {
-                int offset = slot * 12;
-                bind = new Transform3D(
-                    new Vector3(binds[offset], binds[offset + 3], binds[offset + 6]),
-                    new Vector3(binds[offset + 1], binds[offset + 4], binds[offset + 7]),
-                    new Vector3(binds[offset + 2], binds[offset + 5], binds[offset + 8]),
-                    new Vector3(binds[offset + 9], binds[offset + 10], binds[offset + 11]));
-            }
-            else
-            {
-                bind = skeleton.GetBoneGlobalRest(visual[slot]).AffineInverse();
-            }
-
+            Transform3D bind = binds.Length == visual.Length * 12
+                ? ReadTransform(binds, slot * 12)
+                : skeleton.GetBoneGlobalRest(visual[slot]).AffineInverse();
             skin.AddBind(slot, bind);
             skin.SetBindBone(skin.GetBindCount() - 1, visual[slot]);
         }
@@ -93,6 +165,13 @@ public partial class ConvertedSkinnedMesh : Node3D
             return cached;
         }
 
+        LoadedSkinMesh? loaded = LoadSkinMeshUncached(path);
+        MeshCache[path] = loaded;
+        return loaded;
+    }
+
+    private static LoadedSkinMesh? LoadSkinMeshUncached(string path)
+    {
         using var file = FileAccess.Open(path, FileAccess.ModeFlags.Read);
         if (file == null)
         {
@@ -108,7 +187,7 @@ public partial class ConvertedSkinnedMesh : Node3D
         }
 
         uint version = file.Get32();
-        if (version != 2 && version != 3)
+        if (version < 2 || version > 4)
         {
             GD.PushWarning($"ConvertedSkinnedMesh: unsupported version {version} in {path}");
             return null;
@@ -120,6 +199,34 @@ public partial class ConvertedSkinnedMesh : Node3D
         {
             string atlasPath = ResolveAssetPath(ReadString(file), path);
             bodyAtlas = LoadTexture(atlasPath);
+        }
+
+        string[] boneNames = System.Array.Empty<string>();
+        int[] boneParents = System.Array.Empty<int>();
+        Transform3D[] boneRests = System.Array.Empty<Transform3D>();
+        int[] slotBones = System.Array.Empty<int>();
+        Transform3D[] slotBinds = System.Array.Empty<Transform3D>();
+        if (version >= 4)
+        {
+            uint boneCount = file.Get32();
+            boneNames = new string[boneCount];
+            boneParents = new int[boneCount];
+            boneRests = new Transform3D[boneCount];
+            for (uint bone = 0; bone < boneCount; bone++)
+            {
+                boneNames[bone] = ReadString(file);
+                boneParents[bone] = (int)file.Get32();
+                boneRests[bone] = ReadTransform(file);
+            }
+
+            uint slotCount = file.Get32();
+            slotBones = new int[slotCount];
+            slotBinds = new Transform3D[slotCount];
+            for (uint slot = 0; slot < slotCount; slot++)
+            {
+                slotBones[slot] = (int)file.Get32();
+                slotBinds[slot] = ReadTransform(file);
+            }
         }
 
         var full = new ArrayMesh();
@@ -187,7 +294,7 @@ public partial class ConvertedSkinnedMesh : Node3D
                 arrays[(int)Mesh.ArrayType.Weights] = weights;
             }
 
-            var material = BuildMaterial(texturePath, blendEffect, transparent);
+            var material = BuildMaterial(texturePath, blendEffect, transparent, version);
             if (usesBodyAtlas && bodyAtlas != null && material is BaseMaterial3D baseMaterial)
             {
                 baseMaterial.AlbedoTexture = bodyAtlas;
@@ -215,14 +322,40 @@ public partial class ConvertedSkinnedMesh : Node3D
             });
         }
 
-        var loaded = new LoadedSkinMesh
+        return new LoadedSkinMesh
         {
+            Version = version,
             FullMesh = full,
             DefaultMesh = defaults.GetSurfaceCount() > 0 ? defaults : full,
             SurfacesJson = Json.Stringify(surfaces),
+            BoneNames = boneNames,
+            BoneParents = boneParents,
+            BoneRests = boneRests,
+            SlotBones = slotBones,
+            SlotBinds = slotBinds,
         };
-        MeshCache[path] = loaded;
-        return loaded;
+    }
+
+    private static Transform3D ReadTransform(FileAccess file)
+    {
+        var values = new float[12];
+        for (int i = 0; i < 12; i++)
+        {
+            values[i] = file.GetFloat();
+        }
+
+        return ReadTransform(values, 0);
+    }
+
+    private static Transform3D ReadTransform(float[] values, int offset)
+    {
+        // The 12 floats use Transform3D text order: 9 basis floats row-major
+        // followed by the origin. Axis N is basis column N.
+        return new Transform3D(
+            new Vector3(values[offset], values[offset + 3], values[offset + 6]),
+            new Vector3(values[offset + 1], values[offset + 4], values[offset + 7]),
+            new Vector3(values[offset + 2], values[offset + 5], values[offset + 8]),
+            new Vector3(values[offset + 9], values[offset + 10], values[offset + 11]));
     }
 
     private static string ReadString(FileAccess file)
@@ -236,11 +369,15 @@ public partial class ConvertedSkinnedMesh : Node3D
         return System.Text.Encoding.UTF8.GetString(file.GetBuffer(length));
     }
 
-    private static Material BuildMaterial(string texturePath, string blendEffect, bool transparent)
+    private static Material BuildMaterial(string texturePath, string blendEffect, bool transparent, uint version)
     {
         var material = new StandardMaterial3D
         {
-            CullMode = BaseMaterial3D.CullModeEnum.Back,
+            // Version-4 indices wind clockwise for Godot; older artifacts kept
+            // the source's counter-clockwise order and must render double-sided.
+            CullMode = version >= 4
+                ? BaseMaterial3D.CullModeEnum.Back
+                : BaseMaterial3D.CullModeEnum.Disabled,
         };
         Texture2D? texture = LoadTexture(texturePath);
         if (texture != null)
