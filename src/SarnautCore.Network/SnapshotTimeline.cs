@@ -25,7 +25,36 @@ public readonly record struct SampledEntity(
     string Faction,
     int Health,
     int MaxHealth,
-    bool Alive);
+    bool Alive)
+{
+    /// <summary>Builds a non-interpolated sample from a reliable spawn event.</summary>
+    public static SampledEntity FromSnapshot(EntitySnapshot entity)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        Vec3 position = entity.Position ?? EmptyVec;
+        Vec3 velocity = entity.Velocity ?? EmptyVec;
+        return new SampledEntity(
+            entity.EntityId,
+            entity.Kind,
+            position.X,
+            position.Y,
+            position.Z,
+            entity.Heading,
+            velocity.X,
+            velocity.Y,
+            velocity.Z,
+            entity.AnimationState,
+            entity.ContentId,
+            entity.NameKey,
+            entity.Level,
+            entity.Faction,
+            entity.Health,
+            entity.MaxHealth,
+            entity.Alive);
+    }
+
+    private static readonly Vec3 EmptyVec = new();
+}
 
 /// <summary>
 /// The two snapshots the render clock currently sits between, and the entity

@@ -38,6 +38,12 @@ public partial class WalkaboutController : CharacterBody3D
 
     public bool NetworkControlled { get; set; }
 
+    /// <summary>Whether movement and walkabout commands may read input.</summary>
+    public bool InputEnabled { get; set; } = true;
+
+    /// <summary>Whether mouse motion may rotate the camera.</summary>
+    public bool LookInputEnabled { get; set; } = true;
+
     // TODO: add client-side prediction and reconciliation without changing the offline controller path.
     public Vector3 NetworkMoveDirection { get; private set; }
 
@@ -47,15 +53,11 @@ public partial class WalkaboutController : CharacterBody3D
         _collision = GetNode<CollisionShape3D>("CollisionShape3D");
         _character = GetNodeOrNull<ConvertedCharacter>("Character");
         _gravity = (float)ProjectSettings.GetSetting("physics/3d/default_gravity", 9.8).AsDouble();
-        if (DisplayServer.GetName() != "headless")
-        {
-            Input.MouseMode = Input.MouseModeEnum.Captured;
-        }
     }
 
     public override void _UnhandledInput(InputEvent inputEvent)
     {
-        if (inputEvent is InputEventMouseMotion motion && Input.MouseMode == Input.MouseModeEnum.Captured)
+        if (inputEvent is InputEventMouseMotion motion && LookInputEnabled)
         {
             RotateY(-motion.Relative.X * MouseSensitivity);
             Vector3 headRotation = _head.Rotation;
@@ -63,19 +65,7 @@ public partial class WalkaboutController : CharacterBody3D
             _head.Rotation = headRotation;
             GetViewport().SetInputAsHandled();
         }
-        else if (inputEvent is InputEventMouseButton button
-                 && button.Pressed
-                 && button.ButtonIndex == MouseButton.Right
-                 && Input.MouseMode != Input.MouseModeEnum.Captured)
-        {
-            // Recapture is the right button's job. It used to be the left
-            // button's, which meant the controller ate every left click before
-            // anything could target with one: the first click after Esc did
-            // nothing but grab the cursor back.
-            Input.MouseMode = Input.MouseModeEnum.Captured;
-            GetViewport().SetInputAsHandled();
-        }
-        else if (!NetworkControlled && inputEvent.IsActionPressed(MoveToggleFly))
+        else if (InputEnabled && !NetworkControlled && inputEvent.IsActionPressed(MoveToggleFly))
         {
             SetFlying(!IsFlying);
             GetViewport().SetInputAsHandled();
@@ -84,7 +74,7 @@ public partial class WalkaboutController : CharacterBody3D
 
     public override void _PhysicsProcess(double delta)
     {
-        Vector2 input = ReadMovementInput();
+        Vector2 input = InputEnabled ? ReadMovementInput() : Vector2.Zero;
         Vector3 localDirection = new(input.X, 0, input.Y);
         Vector3 worldDirection = (Basis * localDirection).Normalized();
         NetworkMoveDirection = worldDirection;
@@ -122,6 +112,12 @@ public partial class WalkaboutController : CharacterBody3D
 
         MoveAndSlide();
     }
+
+    public bool PlayAttack() => _character?.PlayAttack() ?? false;
+
+    public bool PlayHit() => _character?.PlayHit() ?? false;
+
+    public bool PlayDeath() => _character?.PlayDeath() ?? false;
 
     private void SetFlying(bool flying)
     {

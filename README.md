@@ -54,7 +54,7 @@ Controls are named input actions in `project.godot`'s `[input]` section, so they
 
 The loader currently applies the dominant converted terrain-layer texture to each terrain tile. Splat and light maps are present in the conversion, but full layered terrain materials are pending converter support.
 
-Walkabout loads the classic Elf male skinned scene for the local player and crossfades between its `idle` and `run` clips from controller movement state. The camera follows from a third-person spring arm. Server-object placements resolve `MobWorld` and spawn-table references into the zone's converted character or creature scene, then play `idle`; NPC scene loading keeps only `idle`, `run`, and `walk` resources to avoid loading unrelated combat and emote clips. A missing or incomplete converted model becomes a colored capsule and is counted in `NpcPlaceholderCount` and `NpcModelFailures`.
+Walkabout loads the classic Elf male skinned scene for the local player and crossfades between its `idle` and `run` clips from controller movement state. The camera follows from a third-person spring arm. Server-object placements resolve `MobWorld` and spawn-table references into the zone's converted character or creature scene, then play `idle`; NPC scene loading keeps locomotion plus attack, hit and death families while stripping unrelated emotes. A missing or incomplete converted model becomes a colored capsule and is counted in `NpcPlaceholderCount` and `NpcModelFailures`.
 
 ### Online walkabout
 
@@ -63,6 +63,8 @@ Entering the world is now part of the session shell rather than a toggle on the 
 #### Server entities
 
 The shard decides what exists. Online, `ZoneLoader` counts the map's authored mob placements but does not draw them (`spawn_npc_visuals` is off), because a placement is where a mob *may* spawn and not proof that one is there; the offline walkabout turns it back on because there is no shard to ask. Every replicated entity is one `NetworkEntityVisual` under `NetworkEntities`, carrying its model, an `Area3D` on the entity physics layer for picking, a billboard nameplate and a health bar. `ZoneNetworkLoop.Entities` is the registry: it answers *entity by id* and, through `TryTargetAtScreenPoint`, *entity under the cursor*. `Tab` cycles targets outwards from the player and wraps.
+
+The online walkabout also mounts the gameplay HUD: target frame, one-slot ability bar, pooled floating damage, death feedback, loot, bags, quest log/tracker and quest dialogue. `1` casts, `E` interacts, `I` opens bags and `J` opens the quest log. One focus owner arbitrates the pointer and windows: `Esc` closes the top window, then releases a captured pointer, then leaves walkabout; right-click recaptures it. The widgets use converted Ingame forms when present and code-built frames when `converted/` is absent. Their addon-facing model and event contract is in [`docs/gameplay-hud-addon-surface.md`](docs/gameplay-hud-addon-surface.md).
 
 Nameplates come from `name_key` and never from the wire (ADR 0007). When there is no locale string the key is slugged — `Rat1_1_Name.txt` reads `Rat  (2)` — so a nameplate is always readable and never a raw key.
 
@@ -132,6 +134,8 @@ For the whole session slice — register, create a character, select it, enter t
 ```
 
 It boots auth and a shard, drives the client's own view models rather than a test double, and fails if the shard's spawn disagrees with `GET /v1/chargen/options` or if any output carries a password, an email address or a token.
+
+Add `-GameplayProbe` to drive the gameplay slice through the gameplay view models: target a live mob, cast to a killing blow, populate and take its loot offer, and verify the authoritative inventory update. Quest state, objective counters, refusals, and turn-in rewards use the server's `QuestStateUpdate` payload; reliable spawn/despawn events own entity lifetime while snapshots update known entities.
 
 ## About SarnautCore
 

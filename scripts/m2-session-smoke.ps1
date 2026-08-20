@@ -38,10 +38,15 @@
     that Tab and a screen-point pick agree on the same entity id. It needs Godot
     on PATH, and the converted assets if the models are to be anything but
     capsules.
+
+.PARAMETER GameplayProbe
+    Drive target, cast, damage, death, loot offer/take and authoritative bag
+    update through the client's gameplay view models against the live shard.
 #>
 param(
     [string]$ServerRepo = "../server",
     [switch]$EntityProbe,
+    [switch]$GameplayProbe,
     [string]$Godot = "godot",
     [string]$Address = "127.0.0.1:4452",
     [string]$AuthAddress = "127.0.0.1:8593",
@@ -145,8 +150,15 @@ try {
         }
         $stdout = Join-Path $temporaryRoot ($service.Name + ".stdout.log")
         $stderr = Join-Path $temporaryRoot ($service.Name + ".stderr.log")
-        $process = Start-Process -FilePath (Join-Path $temporaryRoot ($service.Name + $binaryExtension)) `
-            -WorkingDirectory $serverRoot -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+        $startParameters = @{
+            FilePath = Join-Path $temporaryRoot ($service.Name + $binaryExtension)
+            WorkingDirectory = $serverRoot
+            RedirectStandardOutput = $stdout
+            RedirectStandardError = $stderr
+            PassThru = $true
+        }
+        if ($IsWindows) { $startParameters.WindowStyle = "Hidden" }
+        $process = Start-Process @startParameters
         $processes += $process
         Wait-Ready -Uri $service.Ready -Process $process -Name $service.Name -ErrorLog $stderr
     }
@@ -196,6 +208,21 @@ try {
         }
     }
     Write-Output "PASS no password, email or token appears in the client output"
+
+    if ($GameplayProbe) {
+        Write-Output "== gameplay HUD models against the live shard =="
+        $gameplayCharacter = "Hud" + $runId
+        $gameplay = & dotnet $smoke --address $Address --zone $zoneId --pack $packId `
+            --auth "http://$AuthAddress" --email $email --password $password `
+            --character $gameplayCharacter --duration 30 --gameplay
+        if ($LASTEXITCODE -ne 0) { throw "The gameplay probe failed with exit code $LASTEXITCODE." }
+        $gameplay | ForEach-Object { Write-Output $_ }
+        $gameplayLine = $gameplay | Select-String -Pattern "M2_GAMEPLAY_LIVE result=(\w+)"
+        if ($null -eq $gameplayLine -or $gameplayLine.Matches[0].Groups[1].Value -ne "PASS") {
+            throw "The live gameplay probe did not pass."
+        }
+        Write-Output "PASS target, cast, damage, death, loot window and bag used live envelopes"
+    }
 
     if ($EntityProbe) {
         Write-Output "== entity binding against the live shard =="

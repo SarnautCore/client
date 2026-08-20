@@ -86,6 +86,8 @@ public sealed class EnvelopeTests
         var router = new ServerMessageRouter
         {
             SnapshotBatch = batch => routed.Add($"snapshot:{batch.ServerTick}"),
+            SpawnEvent = spawn => routed.Add($"spawn:{spawn.Entity.EntityId}"),
+            DespawnEvent = despawn => routed.Add($"despawn:{despawn.EntityId}"),
             CombatEvent = _ => routed.Add("combat"),
             DeathEvent = _ => routed.Add("death"),
             LootOffer = _ => routed.Add("loot_offer"),
@@ -98,6 +100,15 @@ public sealed class EnvelopeTests
         Assert.Equal(
             ServerMessage.PayloadOneofCase.SnapshotBatch,
             router.Route(new ServerMessage { SnapshotBatch = new SnapshotBatch { ServerTick = 5 } }));
+        Assert.Equal(
+            ServerMessage.PayloadOneofCase.SpawnEvent,
+            router.Route(new ServerMessage
+            {
+                SpawnEvent = new SpawnEvent { Entity = new EntitySnapshot { EntityId = 41 } },
+            }));
+        Assert.Equal(
+            ServerMessage.PayloadOneofCase.DespawnEvent,
+            router.Route(new ServerMessage { DespawnEvent = new DespawnEvent { EntityId = 39 } }));
         Assert.Equal(
             ServerMessage.PayloadOneofCase.CombatEvent,
             router.Route(new ServerMessage { CombatEvent = new CombatEvent() }));
@@ -126,6 +137,8 @@ public sealed class EnvelopeTests
         Assert.Equal(
             [
                 "snapshot:5",
+                "spawn:41",
+                "despawn:39",
                 "combat",
                 "death",
                 "loot_offer",
@@ -153,13 +166,13 @@ public sealed class EnvelopeTests
             ServerMessage.PayloadOneofCase.None,
             router.Route(new ServerMessage { ServerTick = 11 }));
 
-        // A case this build's schema does not define. Field 18 is the next free
-        // oneof number: 0x92 0x01 is its length-delimited tag and 0x00 an empty
+        // A case this build's schema does not define. Field 20 is the next free
+        // oneof number: 0xa2 0x01 is its length-delimited tag and 0x00 an empty
         // payload, so the frame decodes with PayloadCase unset and the case in
         // unknown fields, which is exactly how a newer peer looks from here.
         var future = new ServerMessage { ServerTick = 12 };
         ServerMessage decoded = ServerMessage.Parser.ParseFrom(
-            Concat(future.ToByteArray(), [0x92, 0x01, 0x00]));
+            Concat(future.ToByteArray(), [0xa2, 0x01, 0x00]));
         Assert.Equal(ServerMessage.PayloadOneofCase.None, router.Route(decoded));
 
         Assert.Equal([(ulong)11, 12], unrecognized);

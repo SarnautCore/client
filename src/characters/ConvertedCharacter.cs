@@ -26,7 +26,12 @@ public partial class ConvertedCharacter : Node3D
     private AnimationPlayer? _animationPlayer;
     private string _idleClip = string.Empty;
     private string _moveClip = string.Empty;
+    private string _attackClip = string.Empty;
+    private string _hitClip = string.Empty;
+    private string _deathClip = string.Empty;
+    private string _oneShotClip = string.Empty;
     private bool _moving;
+    private bool _dead;
 
     public override void _Ready()
     {
@@ -69,6 +74,10 @@ public partial class ConvertedCharacter : Node3D
 
         _idleClip = FindAnimation(_animationPlayer!, "idle", "default");
         _moveClip = FindAnimation(_animationPlayer!, "run", "walk");
+        _attackClip = FindAnimationContaining(_animationPlayer!, "attack", "battle");
+        _hitClip = FindAnimationContaining(_animationPlayer!, "hit", "damage");
+        _deathClip = FindAnimationContaining(_animationPlayer!, "death", "dead");
+        _animationPlayer!.AnimationFinished += OnAnimationFinished;
         HasConvertedModel = true;
         LastError = string.Empty;
         Play(_idleClip, 0);
@@ -83,9 +92,23 @@ public partial class ConvertedCharacter : Node3D
         }
 
         _moving = moving;
+        if (_oneShotClip.Length > 0 || _dead)
+        {
+            return;
+        }
+
         string requested = moving ? _moveClip : _idleClip;
         Play(requested, CrossFadeSeconds);
     }
+
+    /// <summary>Plays the converted attack clip, then returns to locomotion.</summary>
+    public bool PlayAttack() => PlayOneShot(_attackClip, staysLocked: false);
+
+    /// <summary>Plays the converted hit reaction, then returns to locomotion.</summary>
+    public bool PlayHit() => PlayOneShot(_hitClip, staysLocked: false);
+
+    /// <summary>Plays and holds the converted death clip.</summary>
+    public bool PlayDeath() => PlayOneShot(_deathClip, staysLocked: true);
 
     private void Play(string clip, float blendSeconds)
     {
@@ -96,6 +119,30 @@ public partial class ConvertedCharacter : Node3D
 
         _animationPlayer.Play(clip, blendSeconds);
         ActiveClip = clip;
+    }
+
+    private bool PlayOneShot(string clip, bool staysLocked)
+    {
+        if (!HasConvertedModel || _animationPlayer == null || string.IsNullOrEmpty(clip))
+        {
+            return false;
+        }
+
+        _oneShotClip = clip;
+        _dead = staysLocked;
+        Play(clip, CrossFadeSeconds);
+        return true;
+    }
+
+    private void OnAnimationFinished(StringName animationName)
+    {
+        if (_dead || _oneShotClip.Length == 0 || animationName.ToString() != _oneShotClip)
+        {
+            return;
+        }
+
+        _oneShotClip = string.Empty;
+        Play(_moving ? _moveClip : _idleClip, CrossFadeSeconds);
     }
 
     private bool Fail(string message)
@@ -117,6 +164,11 @@ public partial class ConvertedCharacter : Node3D
 
     private void ClearModel()
     {
+        if (_animationPlayer != null)
+        {
+            _animationPlayer.AnimationFinished -= OnAnimationFinished;
+        }
+
         if (Model != null && IsInstanceValid(Model))
         {
             RemoveChild(Model);
@@ -127,7 +179,12 @@ public partial class ConvertedCharacter : Node3D
         _animationPlayer = null;
         _idleClip = string.Empty;
         _moveClip = string.Empty;
+        _attackClip = string.Empty;
+        _hitClip = string.Empty;
+        _deathClip = string.Empty;
+        _oneShotClip = string.Empty;
         _moving = false;
+        _dead = false;
         HasConvertedModel = false;
         SkeletonBoneCount = 0;
         ClipCount = 0;
@@ -175,6 +232,23 @@ public partial class ConvertedCharacter : Node3D
             {
                 string name = animationName.ToString();
                 if (name.Equals(candidate, StringComparison.OrdinalIgnoreCase))
+                {
+                    return name;
+                }
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string FindAnimationContaining(AnimationPlayer player, params string[] candidates)
+    {
+        foreach (string candidate in candidates)
+        {
+            foreach (StringName animationName in player.GetAnimationList())
+            {
+                string name = animationName.ToString();
+                if (name.Contains(candidate, StringComparison.OrdinalIgnoreCase))
                 {
                     return name;
                 }

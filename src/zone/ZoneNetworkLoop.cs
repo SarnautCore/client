@@ -6,6 +6,7 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using Godot;
 using Sarnaut.Protocol.V1;
+using SarnautCore.Gameplay;
 using SarnautCore.Networking;
 using SarnautCore.Shell;
 
@@ -18,6 +19,7 @@ public partial class ZoneNetworkLoop : Node
 
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentQueue<SnapshotBatch> _receivedSnapshots = new();
+    private readonly ConcurrentQueue<ServerMessage> _receivedMessages = new();
     private readonly ConcurrentQueue<ConnectionUpdate> _connectionUpdates = new();
     private readonly Channel<ClientMoveIntent> _moveIntents = Channel.CreateBounded<ClientMoveIntent>(
         new BoundedChannelOptions(1)
@@ -26,6 +28,8 @@ public partial class ZoneNetworkLoop : Node
             SingleReader = true,
             SingleWriter = true,
         });
+    private readonly Channel<ClientMessage> _commands = Channel.CreateUnbounded<ClientMessage>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly SnapshotTimeline _timeline = new();
     private readonly MoveIntentCadence _cadence = new(SendIntervalSeconds);
     private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -33,6 +37,7 @@ public partial class ZoneNetworkLoop : Node
     private WalkaboutController _walker = null!;
     private ZoneEntityVisualFactory _visuals = null!;
     private ZoneEntityPicker _picker = null!;
+    private GameplayHudViewModel _hud = null!;
     private Action<string> _setStatus = null!;
     private Action? _onAdmitted;
     private Action<string>? _onRefused;
@@ -77,6 +82,7 @@ public partial class ZoneNetworkLoop : Node
         string zoneId,
         string contentPackId,
         Secret ticket,
+        GameplayHudViewModel hud,
         Action<string> setStatus,
         Action? onAdmitted = null,
         Action<string>? onRefused = null)
@@ -86,6 +92,7 @@ public partial class ZoneNetworkLoop : Node
         Entities = new EntityRegistry(_visuals);
         _picker = new ZoneEntityPicker();
         AddChild(_picker);
+        _hud = hud;
         _setStatus = setStatus;
         _onAdmitted = onAdmitted;
         _onRefused = onRefused;
@@ -112,6 +119,11 @@ public partial class ZoneNetworkLoop : Node
     public override void _Process(double delta)
     {
         DrainConnectionUpdates();
+        while (_receivedMessages.TryDequeue(out ServerMessage? message))
+        {
+            ApplyServerMessage(message);
+        }
+
         while (_receivedSnapshots.TryDequeue(out SnapshotBatch? snapshot))
         {
             _timeline.Add(snapshot, _clock.Elapsed.TotalSeconds);
@@ -142,6 +154,7 @@ public partial class ZoneNetworkLoop : Node
         _walker.NetworkControlled = false;
         _shutdown.Cancel();
         _moveIntents.Writer.TryComplete();
+        _commands.Writer.TryComplete();
         _shutdown.Dispose();
     }
 
@@ -204,13 +217,95 @@ public partial class ZoneNetworkLoop : Node
         }
 
         TargetEntityId = entityId;
-        if (entityId != 0 && Entities.TryGet(entityId, out TrackedEntity? current)
-            && current.Visual is NetworkEntityVisual currentVisual)
+        if (entityId != 0 && Entities.TryGet(entityId, out TrackedEntity? current))
         {
-            currentVisual.Targeted = true;
+            if (current.Visual is NetworkEntityVisual currentVisual)
+            {
+                currentVisual.Targeted = true;
+            }
+
+            _hud.SelectTarget(ToHudSnapshot(current.Latest));
+        }
+        else
+        {
+            _hud.ClearTarget();
         }
 
         TargetChanged?.Invoke(entityId);
+    }
+
+    public bool TryGetEntityScreenPoint(ulong entityId, out Vector2 point)
+    {
+        point = default;
+        if (Entities is null || !Entities.TryGet(entityId, out TrackedEntity? entity))
+        {
+            return false;
+        }
+
+        Camera3D? camera = GetViewport().GetCamera3D();
+        Vector3 worldPosition = new(entity.Latest.X, entity.Latest.Z + 2.2f, entity.Latest.Y);
+        if (camera is null || camera.IsPositionBehind(worldPosition))
+        {
+            return false;
+        }
+
+        point = camera.UnprojectPosition(worldPosition);
+        return true;
+    }
+
+    public void RequestAbilityUse(AbilityUseRequest request)
+    {
+        EnqueueCommand(new ClientMessage
+        {
+            AbilityUse = new AbilityUse
+            {
+                CasterId = _ownEntityId,
+                TargetId = request.TargetEntityId,
+                ClientTick = request.ClientTick == 0 ? _timeline.LatestServerTick : request.ClientTick,
+                AbilityId = request.AbilityId,
+            },
+        });
+    }
+
+    public void RequestInteract(ulong targetEntityId)
+    {
+        if (targetEntityId != 0)
+        {
+            _hud.BeginInteraction(targetEntityId);
+            EnqueueCommand(new ClientMessage { Interact = new Interact { TargetEntityId = targetEntityId } });
+        }
+    }
+
+    public void RequestLootTake(ulong corpseEntityId)
+    {
+        if (corpseEntityId != 0)
+        {
+            EnqueueCommand(new ClientMessage { LootTake = new LootTake { CorpseEntityId = corpseEntityId } });
+        }
+    }
+
+    public void RequestQuestAccept(QuestCommandRequest request)
+    {
+        EnqueueCommand(new ClientMessage
+        {
+            QuestAccept = new QuestAccept { QuestId = request.QuestId, StarterEntityId = request.NpcEntityId },
+        });
+    }
+
+    public void RequestQuestTurnIn(QuestCommandRequest request)
+    {
+        EnqueueCommand(new ClientMessage
+        {
+            QuestTurnIn = new QuestTurnIn { QuestId = request.QuestId, FinisherEntityId = request.NpcEntityId },
+        });
+    }
+
+    public void RequestQuestAbandon(string questId)
+    {
+        if (!string.IsNullOrWhiteSpace(questId))
+        {
+            EnqueueCommand(new ClientMessage { QuestAbandon = new QuestAbandon { QuestId = questId } });
+        }
     }
 
     private async Task RunNetworkAsync(
@@ -239,8 +334,9 @@ public partial class ZoneNetworkLoop : Node
             try
             {
                 await Task.WhenAll(
-                    ReceiveSnapshotsAsync(session, cancellationToken),
-                    SendMovementAsync(session, cancellationToken));
+                    ReceiveMessagesAsync(session, cancellationToken),
+                    SendMovementAsync(session, cancellationToken),
+                    SendCommandsAsync(session, cancellationToken));
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -273,12 +369,19 @@ public partial class ZoneNetworkLoop : Node
         }
     }
 
-    private async Task ReceiveSnapshotsAsync(GameSession session, CancellationToken cancellationToken)
+    private async Task ReceiveMessagesAsync(GameSession session, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            SnapshotBatch snapshot = await session.ReadSnapshotAsync(cancellationToken);
-            _receivedSnapshots.Enqueue(snapshot);
+            ServerMessage message = await session.ReadAsync(cancellationToken);
+            if (message.PayloadCase == ServerMessage.PayloadOneofCase.SnapshotBatch)
+            {
+                _receivedSnapshots.Enqueue(message.SnapshotBatch);
+            }
+            else
+            {
+                _receivedMessages.Enqueue(message);
+            }
         }
     }
 
@@ -287,6 +390,14 @@ public partial class ZoneNetworkLoop : Node
         await foreach (ClientMoveIntent intent in _moveIntents.Reader.ReadAllAsync(cancellationToken))
         {
             await session.SendMoveIntentAsync(intent, cancellationToken);
+        }
+    }
+
+    private async Task SendCommandsAsync(GameSession session, CancellationToken cancellationToken)
+    {
+        await foreach (ClientMessage command in _commands.Reader.ReadAllAsync(cancellationToken))
+        {
+            await session.SendAsync(command, cancellationToken);
         }
     }
 
@@ -310,6 +421,7 @@ public partial class ZoneNetworkLoop : Node
             }
 
             _ownEntityId = update.OwnEntityId;
+            _hud.SetOwnEntityId(_ownEntityId);
             // The response's spawn is authoritative: it is the server's answer,
             // not a confirmation of a client request (session spec rule 5.4.6).
             _walker.Position = ToGodot(update.SpawnPosition!);
@@ -338,6 +450,10 @@ public partial class ZoneNetworkLoop : Node
         {
             SampledEntity local = Entities.LocalSample;
             _walker.Position = new Vector3(local.X, local.Z, local.Y);
+            // The local player deliberately has no registry visual. Observe its
+            // one authoritative sample here so a death followed by Alive=true
+            // can produce respawn feedback without walking all 288 entities.
+            _hud.ObserveEntity(ToHudSnapshot(local));
         }
 
         if (TargetEntityId != 0 && !Entities.Contains(TargetEntityId))
@@ -346,7 +462,84 @@ public partial class ZoneNetworkLoop : Node
             // or it left the subscription. Either way the selection is gone.
             SetTarget(0);
         }
+        else if (TargetEntityId != 0 && Entities.TryGet(TargetEntityId, out TrackedEntity? target))
+        {
+            _hud.ObserveEntity(ToHudSnapshot(target.Latest));
+        }
     }
+
+    private void ApplyServerMessage(ServerMessage message)
+    {
+        _hud.Route(message);
+        switch (message.PayloadCase)
+        {
+            case ServerMessage.PayloadOneofCase.SpawnEvent:
+                if (message.SpawnEvent.Entity is not null)
+                {
+                    Entities.Spawn(message.SpawnEvent.Entity, _ownEntityId);
+                }
+
+                break;
+            case ServerMessage.PayloadOneofCase.DespawnEvent:
+                Entities.Remove(message.DespawnEvent.EntityId);
+                if (TargetEntityId == message.DespawnEvent.EntityId)
+                {
+                    SetTarget(0);
+                }
+
+                break;
+            case ServerMessage.PayloadOneofCase.CombatEvent:
+                CombatEvent combat = message.CombatEvent;
+                if (combat.CasterId == _ownEntityId)
+                {
+                    _walker.PlayAttack();
+                }
+                else if (Entities.TryGet(combat.CasterId, out TrackedEntity? caster)
+                    && caster.Visual is NetworkEntityVisual casterVisual)
+                {
+                    casterVisual.PlayAttack();
+                }
+
+                if (!combat.KillingBlow
+                    && combat.Rejection == AbilityRejection.None
+                    && Entities.TryGet(combat.TargetId, out TrackedEntity? target)
+                    && target.Visual is NetworkEntityVisual targetVisual)
+                {
+                    targetVisual.PlayHit();
+                }
+
+                break;
+            case ServerMessage.PayloadOneofCase.DeathEvent:
+                if (message.DeathEvent.VictimEntityId == _ownEntityId)
+                {
+                    _walker.PlayDeath();
+                }
+                else if (Entities.TryGet(message.DeathEvent.VictimEntityId, out TrackedEntity? victim)
+                    && victim.Visual is NetworkEntityVisual victimVisual)
+                {
+                    victimVisual.PlayDeath();
+                }
+
+                break;
+        }
+    }
+
+    private void EnqueueCommand(ClientMessage message)
+    {
+        if (_connected)
+        {
+            _commands.Writer.TryWrite(message);
+        }
+    }
+
+    private static EntityHudSnapshot ToHudSnapshot(SampledEntity sample) => new(
+        sample.EntityId,
+        sample.NameKey,
+        sample.ContentId,
+        checked((int)sample.Level),
+        sample.Health,
+        sample.MaxHealth,
+        sample.Alive);
 
     private static Vector3 ToGodot(Sarnaut.Protocol.V1.Vec3 value) => new(value.X, value.Z, value.Y);
 

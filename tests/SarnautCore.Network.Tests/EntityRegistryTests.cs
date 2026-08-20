@@ -9,14 +9,12 @@ public sealed class EntityRegistryTests
     private const double Delay = 0.1;
 
     [Fact]
-    public void AddsAVisualTheFirstTimeAnEntityIsSeen()
+    public void ReliableSpawnAddsAVisual()
     {
         var factory = new FakeEntityVisualFactory();
         var registry = new EntityRegistry(factory);
-        var timeline = new SnapshotTimeline();
-        timeline.Add(SnapshotFixtures.Batch(tick: 1, entityCount: 3), receivedAtSeconds: 1.0);
 
-        registry.Reconcile(timeline.OpenWindow(1.1, Delay), localEntityId: 0);
+        Spawn(registry, SnapshotFixtures.Batch(tick: 1, entityCount: 3));
 
         Assert.Equal(3, registry.Count);
         Assert.Equal(3, factory.CreateCount);
@@ -32,6 +30,7 @@ public sealed class EntityRegistryTests
         var registry = new EntityRegistry(factory);
         var timeline = new SnapshotTimeline();
         timeline.Add(SnapshotFixtures.Batch(tick: 1, entityCount: 2), receivedAtSeconds: 1.0);
+        Spawn(registry, SnapshotFixtures.Batch(tick: 1, entityCount: 2));
         registry.Reconcile(timeline.OpenWindow(1.1, Delay), localEntityId: 0);
 
         timeline.Add(SnapshotFixtures.Batch(tick: 2, entityCount: 2, drift: 4), receivedAtSeconds: 1.05);
@@ -39,28 +38,51 @@ public sealed class EntityRegistryTests
 
         Assert.Equal(2, factory.CreateCount);
         Assert.True(registry.TryGet(1, out TrackedEntity? entity));
-        Assert.Equal(2, factory[1].ApplyCount);
+        Assert.Equal(3, factory[1].ApplyCount);
         Assert.Same(factory[1], entity.Visual);
         Assert.Equal(4.5f, entity.Latest.X, precision: 3);
     }
 
     [Fact]
-    public void RetiresEntitiesTheShardStoppedSending()
+    public void MissingSnapshotDoesNotDespawnButReliableEventDoes()
     {
         var factory = new FakeEntityVisualFactory();
         var registry = new EntityRegistry(factory);
         var timeline = new SnapshotTimeline();
         timeline.Add(SnapshotFixtures.Batch(tick: 1, entityCount: 3), receivedAtSeconds: 1.0);
+        Spawn(registry, SnapshotFixtures.Batch(tick: 1, entityCount: 3));
         registry.Reconcile(timeline.OpenWindow(1.1, Delay), localEntityId: 0);
 
         timeline.Add(SnapshotFixtures.Batch(tick: 2, entityCount: 1), receivedAtSeconds: 1.05);
         registry.Reconcile(timeline.OpenWindow(1.15, Delay), localEntityId: 0);
 
-        Assert.Equal(1, registry.Count);
-        Assert.False(registry.TryGet(3, out _));
+        Assert.Equal(3, registry.Count);
+        Assert.True(registry.TryGet(3, out _));
+        Assert.False(factory[3].Retired);
+
+        Assert.True(registry.Remove(3));
+
+        Assert.Equal(2, registry.Count);
         Assert.True(factory[3].Retired);
         Assert.False(factory[1].Retired);
         Assert.False(registry.TryGetByPickKey(FakeEntityVisualFactory.PickKeyOf(3), out _));
+    }
+
+    [Fact]
+    public void LateSnapshotCannotRecreateADespawnedEntity()
+    {
+        var factory = new FakeEntityVisualFactory();
+        var registry = new EntityRegistry(factory);
+        registry.Spawn(SnapshotFixtures.Entity(7), localEntityId: 0);
+        Assert.True(registry.Remove(7));
+
+        var timeline = new SnapshotTimeline();
+        timeline.Add(SnapshotFixtures.Batch(tick: 2, entityCount: 7), receivedAtSeconds: 1.0);
+        registry.Reconcile(timeline.OpenWindow(1.1, Delay), localEntityId: 0);
+
+        Assert.Equal(0, registry.Count);
+        Assert.Equal(1, factory.CreateCount);
+        Assert.True(factory[7].Retired);
     }
 
     [Fact]
@@ -100,6 +122,7 @@ public sealed class EntityRegistryTests
         var registry = new EntityRegistry(factory);
         var timeline = new SnapshotTimeline();
         timeline.Add(SnapshotFixtures.Batch(tick: 1, entityCount: 3), receivedAtSeconds: 1.0);
+        Spawn(registry, SnapshotFixtures.Batch(tick: 1, entityCount: 3), localEntityId: 2);
 
         registry.Reconcile(timeline.OpenWindow(1.1, Delay), localEntityId: 2);
 
@@ -175,6 +198,7 @@ public sealed class EntityRegistryTests
 
         // Warm up: spawn every visual, JIT every path, and let the timeline's id
         // buffer reach its final capacity.
+        Spawn(registry, SnapshotFixtures.Batch(tick, SnapshotFixtures.ZoneEntityCount), localEntityId: 1);
         Pump(20);
         Assert.Equal(SnapshotFixtures.ZoneEntityCount - 1, registry.Count);
 
@@ -197,6 +221,14 @@ public sealed class EntityRegistryTests
         for (int index = 0; index < updates; index++)
         {
             registry.Reconcile(timeline.OpenWindow(clock + 0.02, Delay), localEntityId: 1);
+        }
+    }
+
+    private static void Spawn(EntityRegistry registry, SnapshotBatch batch, ulong localEntityId = 0)
+    {
+        foreach (EntitySnapshot entity in batch.Entities)
+        {
+            registry.Spawn(entity, localEntityId);
         }
     }
 

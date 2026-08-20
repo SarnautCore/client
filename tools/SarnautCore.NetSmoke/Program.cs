@@ -1,4 +1,5 @@
 using Sarnaut.Protocol.V1;
+using SarnautCore.Gameplay;
 using SarnautCore.Networking;
 using SarnautCore.Shell;
 
@@ -33,6 +34,14 @@ try
 
     ulong ownEntityId = session.EnteredZone.OwnEntityId;
     Vec3 spawn = session.EnteredZone.SpawnPosition ?? new Vec3();
+    if (HasFlag(args, "--gameplay"))
+    {
+        string gameplay = await RunGameplayAsync(session, ownEntityId, timeout.Token);
+        await session.SendLogoutAsync(timeout.Token);
+        Console.WriteLine($"M2_GAMEPLAY_LIVE result=PASS entity={ownEntityId} {gameplay}");
+        return 0;
+    }
+
     float startX = spawn.X;
     var advanced = new TaskCompletionSource<(float X, ulong Tick, bool Alive)>(
         TaskCreationOptions.RunContinuationsAsynchronously);
@@ -184,6 +193,196 @@ static async Task ReceiveUntilAdvanced(
     }
 }
 
+static async Task<string> RunGameplayAsync(
+    GameSession session,
+    ulong ownEntityId,
+    CancellationToken cancellationToken)
+{
+    const string abilityId = "ability.melee.harbor-cleave";
+    const string lootMobId = "mob.paper-harbor.copper-sparrow";
+    var hud = new GameplayHudViewModel(
+        ownEntityId,
+        [new AbilityDefinition(abilityId, $"{abilityId}.name", string.Empty)],
+        inventoryCapacity: 16,
+        stackLimit: _ => 20);
+
+    int spawnedDamageNumbers = 0;
+    hud.DamageNumbers.Spawned += _ => spawnedDamageNumbers++;
+    EntitySnapshot target = await ReadUntilEntityAsync(
+        session,
+        hud,
+        entity => entity.EntityId != ownEntityId && entity.ContentId == lootMobId && entity.Alive,
+        cancellationToken);
+    hud.SelectTarget(ToHudSnapshot(target));
+
+    ulong clientSequence = 0;
+    int successfulCasts = 0;
+    DeathEvent? death = null;
+    for (int attempt = 0; attempt < 200 && death is null; attempt++)
+    {
+        hud.Advance(2);
+        AbilityUseRequest? requested = null;
+        void Capture(AbilityUseRequest request) => requested = request;
+        hud.Abilities.AbilityRequested += Capture;
+        bool accepted = hud.Abilities.TryRequestUse(0, target.EntityId);
+        hud.Abilities.AbilityRequested -= Capture;
+        if (!accepted || requested is null)
+        {
+            throw new InvalidOperationException("The live ability bar refused an available slot.");
+        }
+
+        await session.SendAsync(new ClientMessage
+        {
+            ClientSeq = ++clientSequence,
+            AbilityUse = new AbilityUse
+            {
+                CasterId = ownEntityId,
+                TargetId = requested.TargetEntityId,
+                AbilityId = requested.AbilityId,
+            },
+        }, cancellationToken);
+
+        while (true)
+        {
+            ServerMessage message = await session.ReadAsync(cancellationToken);
+            hud.Route(message);
+            if (message.PayloadCase == ServerMessage.PayloadOneofCase.DeathEvent
+                && message.DeathEvent.VictimEntityId == target.EntityId)
+            {
+                death = message.DeathEvent;
+                break;
+            }
+
+            if (message.PayloadCase != ServerMessage.PayloadOneofCase.CombatEvent
+                || message.CombatEvent.CasterId != ownEntityId
+                || message.CombatEvent.TargetId != target.EntityId)
+            {
+                continue;
+            }
+
+            CombatEvent combat = message.CombatEvent;
+            if (combat.Rejection == AbilityRejection.OnCooldown)
+            {
+                await Task.Delay(100, cancellationToken);
+                break;
+            }
+
+            if (combat.Rejection != AbilityRejection.None)
+            {
+                throw new InvalidOperationException($"Cast rejected: {combat.Rejection}.");
+            }
+
+            successfulCasts++;
+            if (!combat.KillingBlow)
+            {
+                await Task.Delay(1050, cancellationToken);
+                break;
+            }
+        }
+    }
+
+    if (death is null || death.KillerEntityId != ownEntityId || spawnedDamageNumbers == 0)
+    {
+        throw new InvalidOperationException("The live combat loop did not reach a client-observed killing blow.");
+    }
+
+    EntitySnapshot corpse = await ReadUntilEntityAsync(
+        session,
+        hud,
+        entity => entity.EntityId != target.EntityId
+            && entity.ContentId == target.ContentId
+            && !entity.Alive
+            && entity.MaxHealth == 0,
+        cancellationToken);
+    await session.SendAsync(new ClientMessage
+    {
+        ClientSeq = ++clientSequence,
+        Interact = new Interact { TargetEntityId = corpse.EntityId },
+    }, cancellationToken);
+
+    LootOffer? offer = null;
+    while (offer is null)
+    {
+        ServerMessage message = await session.ReadAsync(cancellationToken);
+        hud.Route(message);
+        if (message.PayloadCase == ServerMessage.PayloadOneofCase.LootOffer)
+        {
+            offer = message.LootOffer;
+        }
+    }
+
+    ulong requestedCorpse = 0;
+    hud.Loot.TakeRequested += entityId => requestedCorpse = entityId;
+    if (!hud.Loot.RequestTake() || requestedCorpse != corpse.EntityId)
+    {
+        throw new InvalidOperationException("The populated live loot window did not request its corpse.");
+    }
+
+    await session.SendAsync(new ClientMessage
+    {
+        ClientSeq = ++clientSequence,
+        LootTake = new LootTake { CorpseEntityId = requestedCorpse },
+    }, cancellationToken);
+
+    LootResult? result = null;
+    InventoryUpdate? inventory = null;
+    while (result is null || inventory is null)
+    {
+        ServerMessage message = await session.ReadAsync(cancellationToken);
+        hud.Route(message);
+        if (message.PayloadCase == ServerMessage.PayloadOneofCase.LootResult)
+        {
+            result = message.LootResult;
+        }
+        else if (message.PayloadCase == ServerMessage.PayloadOneofCase.InventoryUpdate)
+        {
+            inventory = message.InventoryUpdate;
+        }
+    }
+
+    if (result.Refusal != LootRefusal.None || hud.Loot.IsOpen || hud.Inventory.OccupiedSlots == 0)
+    {
+        throw new InvalidOperationException(
+            $"Loot did not reach the bag: refusal={result.Refusal}, slots={hud.Inventory.OccupiedSlots}.");
+    }
+
+    int units = hud.Inventory.Slots.Where(slot => slot is not null).Sum(slot => slot!.Count);
+    return $"target={target.EntityId} casts={successfulCasts} damage_numbers={spawnedDamageNumbers} "
+        + $"corpse={corpse.EntityId} offered_items={offer.Items.Count} bag_slots={hud.Inventory.OccupiedSlots} bag_units={units}";
+}
+
+static async Task<EntitySnapshot> ReadUntilEntityAsync(
+    GameSession session,
+    GameplayHudViewModel hud,
+    Func<EntitySnapshot, bool> predicate,
+    CancellationToken cancellationToken)
+{
+    while (true)
+    {
+        ServerMessage message = await session.ReadAsync(cancellationToken);
+        hud.Route(message);
+        if (message.PayloadCase != ServerMessage.PayloadOneofCase.SnapshotBatch)
+        {
+            continue;
+        }
+
+        EntitySnapshot? entity = message.SnapshotBatch.Entities.FirstOrDefault(predicate);
+        if (entity is not null)
+        {
+            return entity;
+        }
+    }
+}
+
+static EntityHudSnapshot ToHudSnapshot(EntitySnapshot entity) => new(
+    entity.EntityId,
+    entity.NameKey,
+    entity.ContentId,
+    checked((int)entity.Level),
+    entity.Health,
+    entity.MaxHealth,
+    entity.Alive);
+
 static string? ArgumentValue(string[] arguments, string name)
 {
     for (int index = 0; index < arguments.Length - 1; index++)
@@ -196,3 +395,6 @@ static string? ArgumentValue(string[] arguments, string name)
 
     return null;
 }
+
+static bool HasFlag(string[] arguments, string name) =>
+    arguments.Any(argument => string.Equals(argument, name, StringComparison.OrdinalIgnoreCase));

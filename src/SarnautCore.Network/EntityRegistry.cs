@@ -23,7 +23,7 @@ public interface IEntityVisual
     /// <summary>Moves and redresses the visual for a newly sampled state.</summary>
     void Apply(SampledEntity sample);
 
-    /// <summary>The entity left the snapshot; free the scene nodes.</summary>
+    /// <summary>The entity left the reliable interest set; free the scene nodes.</summary>
     void Retire();
 }
 
@@ -36,12 +36,11 @@ public interface IEntityVisualFactory
 /// <summary>One replicated entity, its last sampled state and its visual.</summary>
 public sealed class TrackedEntity
 {
-    internal TrackedEntity(ulong entityId, IEntityVisual visual, SampledEntity sample, int stamp)
+    internal TrackedEntity(ulong entityId, IEntityVisual visual, SampledEntity sample)
     {
         EntityId = entityId;
         Visual = visual;
         Latest = sample;
-        Stamp = stamp;
     }
 
     public ulong EntityId { get; }
@@ -51,8 +50,6 @@ public sealed class TrackedEntity
     /// <summary>The most recent sample applied to the visual.</summary>
     public SampledEntity Latest { get; internal set; }
 
-    /// <summary>The reconcile pass that last saw this entity.</summary>
-    internal int Stamp { get; set; }
 }
 
 /// <summary>
@@ -79,14 +76,6 @@ public sealed class EntityRegistry(IEntityVisualFactory factory)
     private readonly Dictionary<ulong, TrackedEntity> _entities = [];
     private readonly Dictionary<ulong, TrackedEntity> _byPickKey = [];
 
-    /// <summary>
-    /// Scratch space for the ids a reconcile pass has to drop. Reused rather
-    /// than allocated: a dictionary cannot be written to while it is iterated,
-    /// and a per-frame array of stale ids was half the old loop's garbage.
-    /// </summary>
-    private readonly List<ulong> _stale = [];
-    private int _stamp;
-
     public int Count => _entities.Count;
 
     /// <summary>Every tracked entity id. Iterating this allocates nothing.</summary>
@@ -109,25 +98,19 @@ public sealed class EntityRegistry(IEntityVisualFactory factory)
     public bool Contains(ulong entityId) => _entities.ContainsKey(entityId);
 
     /// <summary>
-    /// Brings the registry in line with one snapshot window: spawns what is new,
-    /// applies what moved, and retires what the shard stopped sending.
+    /// Applies latest-value samples to entities announced by reliable spawn events.
     /// </summary>
     /// <remarks>
     /// This runs every frame at whatever entity count the shard subscribes the
-    /// client to, so it allocates only when an entity is genuinely new. Staleness
-    /// is a stamp comparison rather than a membership test against the tick's id
-    /// list, which is what made the old prune quadratic.
+    /// client to, so it allocates nothing. A missing entity proves nothing because
+    /// a snapshot or one of its chunks may have been dropped. Only a reliable
+    /// despawn event retires an entity.
     /// </remarks>
     public void Reconcile(SnapshotWindow window, ulong localEntityId)
     {
         if (window.IsEmpty)
         {
             return;
-        }
-
-        unchecked
-        {
-            _stamp++;
         }
 
         foreach (ulong entityId in window.EntityIds)
@@ -144,10 +127,26 @@ public sealed class EntityRegistry(IEntityVisualFactory factory)
                 continue;
             }
 
-            Upsert(sample);
+            if (_entities.TryGetValue(entityId, out TrackedEntity? tracked))
+            {
+                tracked.Latest = sample;
+                tracked.Visual.Apply(sample);
+            }
+        }
+    }
+
+    /// <summary>Creates or refreshes the entity carried by a reliable spawn event.</summary>
+    public void Spawn(EntitySnapshot entity, ulong localEntityId)
+    {
+        SampledEntity sample = SampledEntity.FromSnapshot(entity);
+        if (sample.EntityId == localEntityId)
+        {
+            LocalSample = sample;
+            HasLocalSample = true;
+            return;
         }
 
-        Prune();
+        Upsert(sample);
     }
 
     /// <summary>
@@ -158,13 +157,12 @@ public sealed class EntityRegistry(IEntityVisualFactory factory)
         if (_entities.TryGetValue(sample.EntityId, out TrackedEntity? tracked))
         {
             tracked.Latest = sample;
-            tracked.Stamp = _stamp;
             tracked.Visual.Apply(sample);
             return tracked;
         }
 
         IEntityVisual visual = _factory.Create(sample);
-        tracked = new TrackedEntity(sample.EntityId, visual, sample, _stamp);
+        tracked = new TrackedEntity(sample.EntityId, visual, sample);
         _entities.Add(sample.EntityId, tracked);
         _byPickKey[visual.PickKey] = tracked;
         visual.Apply(sample);
@@ -281,20 +279,4 @@ public sealed class EntityRegistry(IEntityVisualFactory factory)
         return (dx * dx) + (dy * dy) + (dz * dz);
     }
 
-    private void Prune()
-    {
-        _stale.Clear();
-        foreach (KeyValuePair<ulong, TrackedEntity> pair in _entities)
-        {
-            if (pair.Value.Stamp != _stamp)
-            {
-                _stale.Add(pair.Key);
-            }
-        }
-
-        foreach (ulong entityId in _stale)
-        {
-            Remove(entityId);
-        }
-    }
 }

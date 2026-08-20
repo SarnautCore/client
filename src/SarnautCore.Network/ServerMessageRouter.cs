@@ -22,6 +22,10 @@ public sealed class ServerMessageRouter
 {
     public Action<SnapshotBatch>? SnapshotBatch { get; init; }
 
+    public Action<SpawnEvent>? SpawnEvent { get; init; }
+
+    public Action<DespawnEvent>? DespawnEvent { get; init; }
+
     public Action<CombatEvent>? CombatEvent { get; init; }
 
     public Action<DeathEvent>? DeathEvent { get; init; }
@@ -50,6 +54,12 @@ public sealed class ServerMessageRouter
         {
             case ServerMessage.PayloadOneofCase.SnapshotBatch:
                 SnapshotBatch?.Invoke(message.SnapshotBatch);
+                break;
+            case ServerMessage.PayloadOneofCase.SpawnEvent:
+                SpawnEvent?.Invoke(message.SpawnEvent);
+                break;
+            case ServerMessage.PayloadOneofCase.DespawnEvent:
+                DespawnEvent?.Invoke(message.DespawnEvent);
                 break;
             case ServerMessage.PayloadOneofCase.CombatEvent:
                 CombatEvent?.Invoke(message.CombatEvent);
