@@ -2,7 +2,7 @@
 
 The SarnautCore game client uses Godot 4.7.2 .NET and C#. C++ GDExtensions are reserved for measured hot paths. The Lua addon interface will come later.
 
-The current milestone includes a boot menu, an Asset Viewer, and a 3D Zone Walkabout for locally converted Allods assets.
+The current milestone includes a development hub, the session shell (login, character select, character create), an Asset Viewer, and a 3D Zone Walkabout for locally converted Allods assets.
 
 ## Development quickstart
 
@@ -13,21 +13,43 @@ dotnet build SarnautCore.sln
 godot --editor --path .
 ```
 
-The default scene opens a small boot menu. Choose **Asset Viewer** to browse supported files below `converted/`.
+The default scene opens a small development hub. Choose **Asset Viewer** to browse supported files below `converted/`, **Walk a converted zone** for the offline walkabout, or **Play** for the session shell.
+
+### The session shell
+
+**Play** opens login, then character select, then character create — three view-model and scene pairs backed by the `Session` autoload, which carries the account, its token and the chosen character across scene changes.
+
+Everything decidable lives in `src/SarnautCore.Shell`, a plain-C# assembly with no Godot reference: the account client, the three view models, the character-name rule, and the screen-flow state machine. A Godot headless smoke needs converted assets and libmsquic and cannot run in CI, so anything left in a `Control` subclass would ship untested. `tests/SarnautCore.Shell.Tests` covers all of it and runs on every push.
+
+The screens talk to the account service over HTTP (`POST /v1/accounts`, `POST /v1/sessions`, the character routes, `POST /v1/tickets`, `GET /v1/chargen/options`; ADR 0030). Set `SARNAUT_AUTH_ADDRESS` to move it off `http://127.0.0.1:8083`.
+
+The race and class list, the starting kit and the spawn come entirely from the server's chargen table (ADR 0032). There is no built-in option list and no fallback: a client that invented one would offer a race the server refuses to create.
+
+Passwords and tokens are carried in `Secret`, whose every conversion returns `[redacted]`; reaching the characters requires `Reveal()`. That mirrors the server's rule (ADR 0030 §5) and is what keeps a credential out of a log by construction rather than by habit.
+
+#### Interface theme
+
+`gui/theme/custom` names the converted Allods widget theme. That file is MY.GAMES-derived, lives only in the gitignored `converted/` tree, and embeds absolute source paths in its metadata, so it is never committed. `UiTheme` loads it through the converted-scene loader — its font references are written against the converter's own root — and falls back to a theme built in code when the tree is absent. Godot itself also tries the raw file before any autoload runs and logs that it could not load it; that message is expected, and the fallback is what a fresh clone renders with.
 
 ### Zone Walkabout
 
 The Boot menu defaults the zone field to `Inst_LeagueStart`, the classic League tutorial map. Choose **Zone Walkabout** to assemble the map from converted terrain OBJ files and MapRegion placement JSON.
 
-Controls:
+Controls are named input actions in `project.godot`'s `[input]` section, so they are rebindable and correct on a non-QWERTY layout. The defaults:
 
-- `WASD`: move
-- Mouse: look
-- `Space`: jump while walking, rise while flying
-- `Q`: descend while flying
-- `Shift`: fly faster
-- `F`: toggle walk/fly mode
-- `Esc`: release the mouse; press it again to return to Boot
+| Action | Default | Meaning |
+|---|---|---|
+| `move_forward` / `move_back` / `move_left` / `move_right` | `W` `S` `A` `D` | move |
+| `move_jump` | `Space` | jump while walking, rise while flying |
+| `move_descend` | `Q`, `Ctrl` | descend while flying |
+| `move_sprint` | `Shift` | fly faster |
+| `move_toggle_fly` | `F` | toggle walk/fly mode |
+| `camera_orbit` / `camera_zoom_in` / `camera_zoom_out` | right mouse, wheel | orbit and zoom a preview camera |
+| `target_nearest` | `Tab` | target |
+| `interact` | `E` | interact |
+| `journal` | `J` | journal |
+| `inventory` | `I` | inventory |
+| `ui_cancel` | `Esc` | release the mouse; press it again to leave the zone |
 
 The loader currently applies the dominant converted terrain-layer texture to each terrain tile. Splat and light maps are present in the conversion, but full layered terrain materials are pending converter support.
 
@@ -35,7 +57,7 @@ Walkabout loads the classic Elf male skinned scene for the local player and cros
 
 ### Online walkabout
 
-Start the shard, enable **Online mode** on the Boot menu, and leave the endpoint at `127.0.0.1:4242`. The walkabout then joins network zone `InstLeague1`, sends the controller's world-space WASD input at 20 Hz, and renders authoritative snapshots with a 125 ms interpolation delay. The existing `Walker` node represents the local player. Other players and NPCs appear as colored capsules. Disable the toggle to use the original offline controller unchanged.
+Entering the world is now part of the session shell rather than a toggle on the hub: choose a character and press **Enter the world**. Character select mints the opaque single-use shard ticket, and the zone scene presents it in `EnterZoneRequest` (ADR 0030 §2). The walkabout joins the chargen option's spawn zone, sends the controller's world-space movement at 20 Hz, and renders authoritative snapshots with a 125 ms interpolation delay. The spawn the server answers with is authoritative and the client snaps to it. Other players and NPCs appear as colored capsules. **Walk a converted zone** on the hub is the offline controller, unchanged and with no shard involved.
 
 Set `SARNAUT_SERVER_ADDRESS` before starting Godot to change the endpoint default. Online mode accepts the shard's ephemeral self-signed certificate for local development. Production certificate validation remains future work.
 
@@ -60,7 +82,7 @@ The client contains the converter's C# runtime resource classes and skinned-mesh
 
 ```powershell
 dotnet build SarnautCore.sln
-dotnet test tests/SarnautCore.Network.Tests/SarnautCore.Network.Tests.csproj
+dotnet test SarnautCore.sln
 godot_console --headless --import --path .
 godot_console --headless --path . --scene res://tests/asset_viewer_smoke.tscn
 godot_console --headless --path . --scene res://tests/zone_walkabout_smoke.tscn
@@ -74,7 +96,15 @@ For an asset-free end-to-end network check, keep the `server` repository beside 
 ../server/scripts/sar20-client-smoke.ps1 -ClientRepository .
 ```
 
-The script starts the production shard with a temporary synthetic content fixture and runs `tools/SarnautCore.NetSmoke`. It passes only after the client joins, sends movement, and observes its authoritative position advance. The smoke is kept as a local cross-repository check because the two repositories publish independently and Linux runners require a separately installed `libmsquic`. The pure C# protocol and interpolation tests run in this repository's CI.
+The script starts the production shard with a temporary synthetic content fixture and runs `tools/SarnautCore.NetSmoke`. It passes only after the client joins, sends movement, and observes its authoritative position advance. The smoke is kept as a local cross-repository check because the two repositories publish independently and Linux runners require a separately installed `libmsquic`. The pure C# protocol, session and interpolation tests run in this repository's CI.
+
+For the whole session slice — register, create a character, select it, enter the zone at the character's own spawn, then sign in again and land on the saved position — start `infra/compose` and run:
+
+```powershell
+./scripts/m2-session-smoke.ps1 -ServerRepo ../server
+```
+
+It boots auth and a shard, drives the client's own view models rather than a test double, and fails if the shard's spawn disagrees with `GET /v1/chargen/options` or if any output carries a password, an email address or a token.
 
 ## About SarnautCore
 

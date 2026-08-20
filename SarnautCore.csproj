@@ -10,9 +10,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The plain-C# assemblies and their tests build on their own; the Godot
+         project only references them. Godot.NET.Sdk globs every .cs below the
+         project directory, so each one has to be removed here as well. -->
     <Compile Remove="src/SarnautCore.Network/**" />
-    <Compile Remove="tests/SarnautCore.Network.Tests/**" />
+    <Compile Remove="src/SarnautCore.Shell/**" />
+    <Compile Remove="tests/**" />
     <Compile Remove="tools/**" />
     <ProjectReference Include="src/SarnautCore.Network/SarnautCore.Network.csproj" />
+    <ProjectReference Include="src/SarnautCore.Shell/SarnautCore.Shell.csproj" />
   </ItemGroup>
 </Project>

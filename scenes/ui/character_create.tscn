@@ -1,0 +1,146 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://src/ui/CharacterCreateScreen.cs" id="1_create"]
+[ext_resource type="Script" path="res://src/ui/CharacterPreview.cs" id="2_preview"]
+
+[node name="CharacterCreateScreen" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_create")
+
+[node name="Backdrop" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.063, 0.082, 0.114, 1)
+
+[node name="Content" type="CanvasLayer" parent="."]
+layer = 2
+
+[node name="Page" type="MarginContainer" parent="Content"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 32
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 32
+theme_override_constants/margin_bottom = 24
+
+[node name="Column" type="VBoxContainer" parent="Content/Page"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="Content/Page/Column"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 26
+text = "Create a character"
+
+[node name="Body" type="HBoxContainer" parent="Content/Page/Column"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 16
+
+[node name="OptionsPanel" type="PanelContainer" parent="Content/Page/Column/Body"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+
+[node name="OptionsColumn" type="VBoxContainer" parent="Content/Page/Column/Body/OptionsPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="OptionsHeading" type="Label" parent="Content/Page/Column/Body/OptionsPanel/OptionsColumn"]
+modulate = Color(0.604, 0.659, 0.722, 1)
+layout_mode = 2
+text = "Offered by the server"
+
+[node name="Options" type="ItemList" parent="Content/Page/Column/Body/OptionsPanel/OptionsColumn"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+allow_reselect = true
+
+[node name="PreviewPanel" type="PanelContainer" parent="Content/Page/Column/Body"]
+custom_minimum_size = Vector2(360, 0)
+layout_mode = 2
+
+[node name="PreviewHost" type="Control" parent="Content/Page/Column/Body/PreviewPanel"]
+clip_contents = true
+layout_mode = 2
+
+[node name="Preview" type="SubViewportContainer" parent="Content/Page/Column/Body/PreviewPanel/PreviewHost"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+stretch = true
+script = ExtResource("2_preview")
+
+[node name="FormPanel" type="PanelContainer" parent="Content/Page/Column/Body"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Form" type="VBoxContainer" parent="Content/Page/Column/Body/FormPanel"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Description" type="Label" parent="Content/Page/Column/Body/FormPanel/Form"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+text = "Reading character options..."
+autowrap_mode = 3
+
+[node name="NameLabel" type="Label" parent="Content/Page/Column/Body/FormPanel/Form"]
+modulate = Color(0.604, 0.659, 0.722, 1)
+layout_mode = 2
+text = "Name"
+
+[node name="Name" type="LineEdit" parent="Content/Page/Column/Body/FormPanel/Form"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+
+[node name="NameMessage" type="Label" parent="Content/Page/Column/Body/FormPanel/Form"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+autowrap_mode = 3
+
+[node name="Message" type="Label" parent="Content/Page/Column"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+autowrap_mode = 3
+
+[node name="Actions" type="HBoxContainer" parent="Content/Page/Column"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Back" type="Button" parent="Content/Page/Column/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Back"
+
+[node name="Create" type="Button" parent="Content/Page/Column/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+size_flags_horizontal = 3
+disabled = true
+text = "Create"

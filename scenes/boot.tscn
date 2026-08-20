@@ -10,3 +10,95 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_boot")
+
+[node name="Backdrop" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.063, 0.082, 0.114, 1)
+
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Menu" type="VBoxContainer" parent="Center"]
+custom_minimum_size = Vector2(360, 0)
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Title" type="Label" parent="Center/Menu"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 34
+text = "SarnautCore"
+horizontal_alignment = 1
+
+[node name="Subtitle" type="Label" parent="Center/Menu"]
+modulate = Color(0.604, 0.659, 0.722, 1)
+layout_mode = 2
+text = "Development client"
+horizontal_alignment = 1
+
+[node name="Play" type="Button" parent="Center/Menu"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 52)
+layout_mode = 2
+text = "Play"
+
+[node name="OfflineHeading" type="Label" parent="Center/Menu"]
+modulate = Color(0.604, 0.659, 0.722, 1)
+layout_mode = 2
+text = "Offline tools"
+
+[node name="ZoneName" type="LineEdit" parent="Center/Menu"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+placeholder_text = "Converted map directory"
+tooltip_text = "Directory name below converted/assets/classic-1.1/assets/Maps/"
+
+[node name="Walkabout" type="Button" parent="Center/Menu"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Walk a converted zone"
+
+[node name="AssetViewer" type="Button" parent="Center/Menu"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Asset Viewer"
+
+[node name="Message" type="Label" parent="Center/Menu"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+text = "Enter a converted map name."
+autowrap_mode = 3
+
+[node name="Quit" type="Button" parent="Center/Menu"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Quit"
+
+[node name="Theme" type="Label" parent="."]
+unique_name_in_owner = true
+modulate = Color(0.604, 0.659, 0.722, 1)
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 12.0
+offset_top = -32.0
+offset_right = 400.0
+offset_bottom = -8.0
+grow_vertical = 0
+text = "theme:"
