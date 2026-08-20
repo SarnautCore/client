@@ -26,11 +26,25 @@ jobs:
       # The client commits no generated code, so a hand-edited proto here builds
       # green and mis-parses against a live shard. The lock is byte-identical to
       # server/proto/PROTO_LOCK.sha256 and catches that offline (ADR 0027).
-      # TODO(m2): add scripts/sync-proto.ps1 -Check against a second checkout of
-      # SarnautCore/server@main once the envelope is on that branch.
       - name: Verify the proto lock
         shell: pwsh
         run: ./scripts/verify-proto-lock.ps1
+
+      # The lock above is recomputed from this tree, so a hand-edited proto plus
+      # a regenerated lock is still green. Only a byte comparison against the
+      # server can catch that, and server/proto is the canonical tree: every wire
+      # change is a server pull request first, so main is what this must match.
+      - name: Check out the server's canonical proto tree
+        uses: actions/checkout@v4
+        with:
+          repository: SarnautCore/server
+          ref: main
+          path: .server-proto
+          sparse-checkout: proto
+
+      - name: Check the proto tree against the server
+        shell: pwsh
+        run: ./scripts/sync-proto.ps1 -Check -ServerRepo .server-proto
 
       - name: Restore
         run: dotnet restore SarnautCore.sln
