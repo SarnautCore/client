@@ -1,4 +1,4 @@
-[gd_scene load_steps=15 format=3]
+[gd_scene load_steps=16 format=3]
 
 [sub_resource type="CapsuleMesh" id="mesh_lod0"]
 radius = 0.42
@@ -36,6 +36,9 @@ radial_segments = 8
 rings = 4
 radius = 0.2
 height = 0.4
+
+[sub_resource type="BoxMesh" id="attachment_single"]
+size = Vector3(0.2, 0.2, 0.2)
 
 [sub_resource type="Animation" id="idle"]
 resource_name = "idle"
@@ -139,6 +142,19 @@ visibility_range_begin_margin = 0.0
 visibility_range_end_margin = 0.0
 visibility_range_fade_mode = 0
 mesh = SubResource("attachment_lod2")
+
+[node name="Attach_Single" type="BoneAttachment3D" parent="Skeleton3D"]
+bone_name = "Root"
+bone_idx = 0
+
+[node name="Attach_SingleMesh" type="MeshInstance3D" parent="Skeleton3D/Attach_Single"]
+position = Vector3(-0.25, 0, 0)
+visibility_range_begin = 0.0
+visibility_range_end = 0.0
+visibility_range_begin_margin = 0.0
+visibility_range_end_margin = 0.0
+visibility_range_fade_mode = 0
+mesh = SubResource("attachment_single")
 
 [node name="AnimationPlayer" type="AnimationPlayer" parent="."]
 libraries/ = SubResource("library")

@@ -34,6 +34,13 @@ public sealed class NativeCharacterManifestTests
         Assert.Equal(1, rat.Lod.GetLevelAtDistance(27.999f));
         Assert.Equal(2, rat.Lod.GetLevelAtDistance(28.0f));
         Assert.Equal(2, rat.Lod.GetLevelAtDistance(500.0f));
+        Assert.Equal(2, rat.Lod.Attachments.Count);
+        NativeCharacterAttachmentLod attachment = rat.Lod.Attachments["Attach_Test"];
+        Assert.Equal(3, attachment.Levels);
+        Assert.Equal([8.0f, 20.0f], attachment.SwitchDistances);
+        NativeCharacterAttachmentLod single = rat.Lod.Attachments["Attach_Single"];
+        Assert.Equal(1, single.Levels);
+        Assert.Empty(single.SwitchDistances);
 
         Assert.True(manifest.TryResolve("50032", out NativeCharacterModel decimalRat));
         Assert.Same(rat, decimalRat);
@@ -104,5 +111,20 @@ public sealed class NativeCharacterManifestTests
         Assert.Throws<ArgumentOutOfRangeException>(() => rat.Lod!.GetLevelAtDistance(float.NaN));
         Assert.Throws<ArgumentOutOfRangeException>(
             () => rat.Lod!.GetLevelAtDistance(float.PositiveInfinity));
+    }
+
+    [Fact]
+    public void Invalid_single_level_attachment_switch_is_rejected()
+    {
+        string json = File.ReadAllText(FixturePath)
+            .Replace(
+                "\"node\": \"Attach_Single\",\n            \"levels\": 1,\n            \"switch_distances\": []",
+                "\"node\": \"Attach_Single\",\n            \"levels\": 1,\n            \"switch_distances\": [9.0]",
+                StringComparison.Ordinal);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(
+            () => NativeCharacterManifest.Parse(json));
+
+        Assert.Contains("switch distances for 1 levels", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 }
