@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using Godot;
 using Sarnaut.Protocol.V1;
+using SarnautCore.Content;
 using SarnautCore.Networking;
 using SarnautCore.Shell;
 
@@ -175,7 +176,7 @@ public partial class ConvertedModelAnimationSmoke : Node3D
         "faction.league",
         "M2.Chargen.LeagueWarrior.Name",
         "M2.Chargen.LeagueWarrior.Description",
-        "res://characters/kania/female-warrior.tscn",
+        "unused-by-native-runtime",
         "zone.inst-league1",
         1,
         113.0f,
@@ -207,19 +208,44 @@ public partial class ConvertedModelAnimationSmoke : Node3D
 
     private void CheckCuratedWarriorAppearance(CharacterRig player)
     {
-        Expect(
-            (string?)player.Model?.GetMeta("sarnaut_appearance_id", string.Empty) == "chargen.league.warrior",
-            "local player loads the authored Kania female warrior assembly");
+        var manifest = new NativeCharacterManifestReader();
+        bool resolved = manifest.TryResolve("chargen.league.warrior", out NativeCharacterModel model);
+        Expect(resolved, "the native manifest resolves the selected League warrior");
+        if (resolved)
+        {
+            Expect(player.ScenePath.Equals(
+                    manifest.ResolveScenePath(model),
+                    StringComparison.OrdinalIgnoreCase),
+                $"local player loads the manifest scene, got '{player.ScenePath}'");
 
-        Skeleton3D? skeleton = player.Model == null ? null : FindDescendant<Skeleton3D>(player.Model);
-        MeshInstance3D? mesh = skeleton == null ? null : FindBoundMesh(skeleton);
-        Expect((string?)mesh?.GetMeta("sarnaut_body_atlas", string.Empty) == "kania-female-warrior-starting-kit",
-            "local player uses the exact starting armor and boots atlas");
-        Expect(mesh?.Mesh?.GetSurfaceCount() == 12,
-            $"local player selects exactly one authored geoset per body slot, got {mesh?.Mesh?.GetSurfaceCount() ?? 0}");
-        Expect(player.Model?.FindChild("Mainhand", recursive: true, owned: false) is BoneAttachment3D,
+            NativeCharacterLod? lod = model.Lod;
+            Expect(lod != null, "the selected League warrior declares authored LOD ranges");
+            if (player.Model != null && lod != null)
+            {
+                try
+                {
+                    IReadOnlyList<MeshInstance3D> levels = NativeCharacterLodContract.Inspect(
+                        player.Model,
+                        lod);
+                    Expect(levels.Count == lod.Levels,
+                        $"local player loads all {lod.Levels} authored body LODs");
+                }
+                catch (Exception exception)
+                {
+                    Expect(false, $"local player satisfies the native LOD contract: {exception.Message}");
+                }
+            }
+        }
+
+        Expect(NativeCharacterLodContract.HasAttachment(
+                player.Model,
+                "Attach_Mace_1H_Club_A_01",
+                "Slot_Hand_R"),
             "local player equips the starting mace on Slot_Hand_R");
-        Expect(player.Model?.FindChild("Offhand", recursive: true, owned: false) is BoneAttachment3D,
+        Expect(NativeCharacterLodContract.HasAttachment(
+                player.Model,
+                "Attach_Shield_1H_Simple_A_01",
+                "Slot_Shield_Hand"),
             "local player equips the starting shield on Slot_Shield_Hand");
     }
 

@@ -67,11 +67,6 @@ internal static class PlayerCharacterModel
             yield return option.Id.Trim();
         }
 
-        if (!string.IsNullOrWhiteSpace(option.VisualRef))
-        {
-            yield return option.VisualRef.Trim();
-        }
-
         string race = CanonicalToken(option.Race);
         string sex = CanonicalToken(option.Sex);
         if (RaceKeys.TryGetValue(race, out string? raceKey) && sex.Length > 0)

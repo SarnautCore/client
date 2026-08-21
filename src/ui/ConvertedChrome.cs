@@ -37,7 +37,7 @@ public static class ConvertedChrome
     {
         ArgumentNullException.ThrowIfNull(host);
         PackedScene? form = ConvertedSceneLoader.Load(
-            ConvertedCharacter.DefaultConvertedRoot,
+            ConvertedSceneLoader.DefaultConvertedRoot,
             formPath,
             out string error);
         if (form?.Instantiate() is not Control instance)

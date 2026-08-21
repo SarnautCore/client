@@ -88,8 +88,14 @@ public partial class PlayerAppearancePixelProbe : Node3D
             ? Error.InvalidParameter
             : GetViewport().GetTexture().GetImage().SavePng($"{prefix}-front.png");
 
-        bool hasMace = character.Model?.FindChild("Mainhand", recursive: true, owned: false) is BoneAttachment3D;
-        bool hasShield = character.Model?.FindChild("Offhand", recursive: true, owned: false) is BoneAttachment3D;
+        bool hasMace = NativeCharacterLodContract.HasAttachment(
+            character.Model,
+            "Attach_Mace_1H_Club_A_01",
+            "Slot_Hand_R");
+        bool hasShield = NativeCharacterLodContract.HasAttachment(
+            character.Model,
+            "Attach_Shield_1H_Simple_A_01",
+            "Slot_Shield_Hand");
         bool passed = loaded && hasMace && hasShield && front == Error.Ok && back == Error.Ok;
         GD.Print(
             $"PLAYER_APPEARANCE_PIXEL loaded={loaded} scene=\"{character.ScenePath}\" "
@@ -111,7 +117,7 @@ public partial class PlayerAppearancePixelProbe : Node3D
         "faction.league",
         "M2.Chargen.LeagueWarrior.Name",
         "M2.Chargen.LeagueWarrior.Description",
-        "res://characters/kania/female-warrior.tscn",
+        "unused-by-native-runtime",
         "zone.inst-league1",
         1,
         113.0f,

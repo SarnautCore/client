@@ -11,6 +11,16 @@ public static class NativeCharacterLodContract
 {
     private const float RangeTolerance = 0.0001f;
 
+    public static bool HasAttachment(Node? model, string nodeName, string boneName)
+    {
+        if (model?.FindChild(nodeName, recursive: true, owned: false) is not BoneAttachment3D attachment)
+        {
+            return false;
+        }
+
+        return attachment.BoneName.ToString().Equals(boneName, StringComparison.Ordinal);
+    }
+
     public static IReadOnlyList<MeshInstance3D> Inspect(Node3D model, NativeCharacterLod lod)
     {
         ArgumentNullException.ThrowIfNull(model);

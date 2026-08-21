@@ -199,7 +199,7 @@ public partial class GameplayHudControl : Control
 public partial class TargetFrameControl : Control
 {
     private static readonly Color HealthFill = new(0.36f, 0.68f, 0.22f);
-    private const string PortraitClipMask = ConvertedCharacter.DefaultConvertedRoot
+    private const string PortraitClipMask = ConvertedSceneLoader.DefaultConvertedRoot
         + "/assets/Interface/Ingame/ContextPlates/Common/GenericPortrait/PortraitClipMask.(UITexture).png";
 
     private TargetViewModel _model = null!;

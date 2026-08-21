@@ -10,6 +10,8 @@ namespace SarnautCore;
 
 internal static class ConvertedSceneLoader
 {
+    public const string DefaultConvertedRoot = "res://converted/assets/classic-1.1";
+
     private static readonly Regex ConvertedSceneDependency = new(
         "ext_resource type=\"PackedScene\" path=\"res://assets/(?<path>[^\"]+)\"",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);

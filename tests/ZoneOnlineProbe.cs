@@ -101,6 +101,12 @@ public partial class ZoneOnlineProbe : Node
         Expect(
             loader.VisualObjectCount == expectedVisuals,
             $"all non-NPC map visuals loaded: {loader.VisualObjectCount} of {expectedVisuals}");
+        Expect(
+            loader.NativeCharacterPlacementCount == 24 && loader.NpcPlacementCount == 24,
+            $"native offline inventory remains authoritative online: {loader.NpcPlacementCount} placements");
+        Expect(
+            loader.NativeCharacterVisualCount == 0 && loader.NpcVisualCount == 0,
+            "online mode does not draw offline NPC placements beside replicated entities");
         Expect(!loader.UsedFlatTerrainFallback, "native terrain loaded without a flat fallback");
         int layeredTerrain = CountLayeredTerrainTiles(loader);
         Expect(

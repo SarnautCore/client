@@ -28,7 +28,7 @@ public static class ConvertedUiTranslations
 
         _mounted = true;
         int loaded = 0;
-        string root = ConvertedCharacter.DefaultConvertedRoot.TrimEnd('/');
+        string root = ConvertedSceneLoader.DefaultConvertedRoot.TrimEnd('/');
         foreach (string relativePath in Catalogs)
         {
             string path = $"{root}/assets/{relativePath}";

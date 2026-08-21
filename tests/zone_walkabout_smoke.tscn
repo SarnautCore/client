@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" path="res://tests/ZoneWalkaboutSmoke.cs" id="1_smoke"]
 [ext_resource type="Script" path="res://src/zone/ZoneLoader.cs" id="2_loader"]
-[ext_resource type="Script" path="res://src/characters/ConvertedCharacter.cs" id="3_character"]
+[ext_resource type="Script" path="res://src/characters/CharacterRig.cs" id="3_character"]
 
 [node name="ZoneWalkaboutSmoke" type="Node"]
 script = ExtResource("1_smoke")
@@ -14,3 +14,4 @@ SpawnNpcVisuals = true
 
 [node name="PlayerCharacter" type="Node3D" parent="."]
 script = ExtResource("3_character")
+AutoLoad = false

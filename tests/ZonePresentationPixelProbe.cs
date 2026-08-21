@@ -42,8 +42,14 @@ public partial class ZonePresentationPixelProbe : Node
         float darkFraction = DarkFraction(image);
         bool atAuthoredFloor = walker.Position.DistanceTo(ExpectedFloor6PlayerPosition) <= 1.0f;
         bool selectedAppearance = character.ScenePath.Contains(option.Id, StringComparison.OrdinalIgnoreCase)
-            && character.Model?.FindChild("Mainhand", recursive: true, owned: false) is BoneAttachment3D
-            && character.Model.FindChild("Offhand", recursive: true, owned: false) is BoneAttachment3D;
+            && NativeCharacterLodContract.HasAttachment(
+                character.Model,
+                "Attach_Mace_1H_Club_A_01",
+                "Slot_Hand_R")
+            && NativeCharacterLodContract.HasAttachment(
+                character.Model,
+                "Attach_Shield_1H_Simple_A_01",
+                "Slot_Shield_Hand");
         bool passed = loader.TerrainTileCount == 4
             && loader.VisualObjectCount == 36
             && loader.UnresolvedObjectCount == 0
@@ -68,7 +74,7 @@ public partial class ZonePresentationPixelProbe : Node
         "faction.league",
         "M2.Chargen.LeagueWarrior.Name",
         "M2.Chargen.LeagueWarrior.Description",
-        "res://characters/kania/female-warrior.tscn",
+        "unused-by-native-runtime",
         "zone.inst-league1",
         1,
         110.0f,

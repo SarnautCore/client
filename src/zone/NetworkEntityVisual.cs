@@ -13,14 +13,14 @@ namespace SarnautCore;
 /// <remarks>
 /// <para>
 /// This is the only thing that draws a replicated entity. The zone loader used
-/// to spawn a second, offline copy of every NPC from the converted map
+/// to spawn a second, offline copy of every NPC from source map
 /// placements, so a mob the shard was simulating stood next to a mob that was
 /// only a decoration and neither one could be told from the other. The loader
 /// no longer does that; what a snapshot describes is what is on screen.
 /// </para>
 /// <para>
-/// A capsule is not a failure state. Without the converted assets — CI, a fresh
-/// checkout — every entity is a labelled capsule at the right place with the
+/// A capsule is not a failure state. Without a matching native scene, every
+/// entity is a labelled capsule at the right place with the
 /// right name and health, which is a usable client.
 /// </para>
 /// </remarks>

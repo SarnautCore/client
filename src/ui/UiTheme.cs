@@ -155,7 +155,7 @@ public static class UiTheme
     private static string ConvertedRootOf(string resourcePath)
     {
         int marker = resourcePath.LastIndexOf("/assets/", StringComparison.Ordinal);
-        return marker < 0 ? ConvertedCharacter.DefaultConvertedRoot : resourcePath[..marker];
+        return marker < 0 ? ConvertedSceneLoader.DefaultConvertedRoot : resourcePath[..marker];
     }
 
     private static StyleBoxFlat Box(Color fill, Color border, int radius = 6)

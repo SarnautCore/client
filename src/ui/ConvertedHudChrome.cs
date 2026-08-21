@@ -27,7 +27,7 @@ public static class ConvertedHudChrome
     {
         ArgumentNullException.ThrowIfNull(host);
         PackedScene? scene = ConvertedSceneLoader.Load(
-            ConvertedCharacter.DefaultConvertedRoot,
+            ConvertedSceneLoader.DefaultConvertedRoot,
             scenePath,
             out _);
         if (scene?.Instantiate() is not Control chrome)

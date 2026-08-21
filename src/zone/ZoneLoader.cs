@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Xml.Linq;
 using Godot;
+using SarnautCore.Content;
 
 namespace SarnautCore;
 
@@ -15,7 +15,6 @@ public partial class ZoneLoader : Node3D
 
     private const string DefaultConvertedRoot = "res://converted/assets/classic-1.1";
     private const string MapRegionSuffix = "_MapRegion.xdb.placements.json";
-    private const string ServerObjectsSuffix = "_ServerObjects.xdb.placements.json";
     private const string TileCoordinateFrameId = "allods-tile-local-v1";
     private const string TileCoordinateScope = "tile-local";
     private const float TerrainTilePitch = 256.0f;
@@ -44,6 +43,7 @@ public partial class ZoneLoader : Node3D
     private Node3D? _objectsRoot;
     private Node3D? _charactersRoot;
     private bool _terrainFatal;
+    private bool _characterFatal;
     private bool _authoredLightsPlaced;
     private int _nativeTerrainTileCount;
     private int _nativeStaticPlacementCount;
@@ -92,6 +92,8 @@ public partial class ZoneLoader : Node3D
     public int NativeStaticVisualCount => _nativeStaticVisualCount;
     public int NativeStaticNonVisualCount => _nativeStaticNonVisualCount;
     public int NativeStaticReceiverMeshCount => _nativeStaticReceiverMeshCount;
+    public int NativeCharacterPlacementCount { get; private set; }
+    public int NativeCharacterVisualCount { get; private set; }
     public bool UsedFlatTerrainFallback { get; private set; }
     public string LastError { get; private set; } = string.Empty;
 
@@ -108,6 +110,7 @@ public partial class ZoneLoader : Node3D
 
     public Vector3 SuggestedSpawnPosition => _presentationSpawnHints.FirstOrDefault(
         ZoneSpawnFrame.Suggest(_terrainSpawnBounds, _spawnHints));
+    public Quaternion SuggestedSpawnRotation { get; private set; } = Quaternion.Identity;
 
     public override void _Ready()
     {
@@ -137,10 +140,8 @@ public partial class ZoneLoader : Node3D
 
         var files = DirAccess.Open(mapRoot) == null ? [] : EnumerateFiles(mapRoot);
         var placementFiles = files.Where(path => path.EndsWith(MapRegionSuffix, StringComparison.OrdinalIgnoreCase)).ToArray();
-        var serverFiles = files.Where(path => path.EndsWith(ServerObjectsSuffix, StringComparison.OrdinalIgnoreCase)).ToArray();
 
         PlacementFileCount = placementFiles.Length;
-        ServerPlacementFileCount = serverFiles.Length;
         if (!TryLoadNativeTerrain(out string terrainError))
         {
             _terrainFatal = true;
@@ -182,9 +183,10 @@ public partial class ZoneLoader : Node3D
                 + $"root={NativeContentSettings.NativeRoot}");
         }
 
-        foreach (string serverPath in serverFiles)
+        if (!TryLoadNativeCharacterPlacements(out string characterError))
         {
-            LoadServerPlacements(serverPath);
+            _characterFatal = true;
+            Fail(characterError);
         }
 
         GD.Print(
@@ -207,7 +209,8 @@ public partial class ZoneLoader : Node3D
         // UnresolvedObjectCount/IsFullyResolved; terrain failure stays fatal.
         return TerrainTileCount > 0
             && PlacedObjectCount > 0
-            && !_terrainFatal;
+            && !_terrainFatal
+            && !_characterFatal;
     }
 
     private void ResetZone()
@@ -224,6 +227,7 @@ public partial class ZoneLoader : Node3D
         _objectsRoot = null;
         _charactersRoot = null;
         _terrainFatal = false;
+        _characterFatal = false;
         _authoredLightsPlaced = false;
         _npcModelFailures.Clear();
         _staticModelFailures.Clear();
@@ -250,6 +254,8 @@ public partial class ZoneLoader : Node3D
         _nativeStaticVisualCount = 0;
         _nativeStaticNonVisualCount = 0;
         _nativeStaticReceiverMeshCount = 0;
+        NativeCharacterPlacementCount = 0;
+        NativeCharacterVisualCount = 0;
         TerrainVertexCount = 0;
         PlacedObjectCount = 0;
         VisualObjectCount = 0;
@@ -264,6 +270,7 @@ public partial class ZoneLoader : Node3D
         UsedFlatTerrainFallback = false;
         HasTerrainBounds = false;
         TerrainBounds = default;
+        SuggestedSpawnRotation = Quaternion.Identity;
         LastError = string.Empty;
     }
 
@@ -1096,146 +1103,115 @@ public partial class ZoneLoader : Node3D
         }
     }
 
-    private void LoadServerPlacements(string placementPath)
+    private bool TryLoadNativeCharacterPlacements(out string error)
     {
-        MapPlacementDocument? document = ReadPlacementDocument(placementPath);
-        if (document?.Objects == null)
+        string mapId = MapNameTransform.ToKebabCase(MapName);
+        string placementPath = $"{NativeContentSettings.NativeRoot}/maps/{mapId}/character-placements.json";
+        if (!FileAccess.FileExists(placementPath))
         {
-            return;
+            error = $"Native character placement manifest is missing: {placementPath}";
+            return false;
         }
 
-        if (!TryReadTileOrigin(document.CoordinateManifest, placementPath, out Vector3 tileOrigin, out string manifestError))
+        NativeCharacterPlacements placements;
+        try
         {
-            Fail(manifestError);
-            return;
+            placements = NativeCharacterPlacements.Parse(
+                FileAccess.GetFileAsString(placementPath),
+                mapId);
+        }
+        catch (Exception exception)
+        {
+            error = $"Native character placement manifest is invalid: {placementPath}. {exception.Message}";
+            return false;
         }
 
-        ServerObjectCount += document.Objects.Length;
-        foreach (MapObjectPlacement placement in document.Objects)
+        NativeCharacterWorldTransform presentation = placements.PresentationSpawn;
+        _presentationSpawnHints.Add(new Vector3(
+            presentation.PositionX,
+            presentation.PositionY,
+            presentation.PositionZ));
+        SuggestedSpawnRotation = new Quaternion(
+            presentation.RotationX,
+            presentation.RotationY,
+            presentation.RotationZ,
+            presentation.RotationW);
+
+        var catalog = new EntityModelCatalog();
+        var resolved = new List<(NativeCharacterPlacement Placement, EntityModel Model)>(
+            placements.Placements.Count);
+        foreach (NativeCharacterPlacement placement in placements.Placements)
         {
-            if (IsPresentationSpawnLocator(placement))
+            if (!catalog.TryResolve(placement.CharacterKey, out EntityModel model))
             {
-                _presentationSpawnHints.Add(tileOrigin + ConvertPosition(placement.Position));
+                error = $"Native character placement '{placement.SpawnId}' has no loadable scene for key "
+                    + $"'{placement.CharacterKey}'. {catalog.LastError}".Trim();
+                return false;
             }
 
-            IReadOnlyList<string> mobSources = FindMobSources(placement);
-            bool explicitMob = placement.ObjectType.Contains("MobSingleSpawn", StringComparison.OrdinalIgnoreCase);
-            if (mobSources.Count == 0 && !explicitMob)
-            {
-                continue;
-            }
+            resolved.Add((placement, model));
+        }
 
-            NpcPlacementCount++;
-            if (!SpawnNpcVisuals)
-            {
-                // Counted, not drawn: the placement count still says what the map
-                // authored, and what stands there is the shard's business.
-                continue;
-            }
+        ServerObjectCount = resolved.Count;
+        NpcPlacementCount = resolved.Count;
+        NativeCharacterPlacementCount = resolved.Count;
+        if (!SpawnNpcVisuals)
+        {
+            error = string.Empty;
+            return true;
+        }
 
-            string modelSource = mobSources.FirstOrDefault() ?? placement.Hrefs.FirstOrDefault() ?? placement.ObjectType;
-            NpcDefinition? definition = mobSources
-                .Select(ResolveNpcDefinition)
-                .FirstOrDefault(candidate => candidate != null);
-
-            if (definition == null)
+        foreach ((NativeCharacterPlacement placement, EntityModel model) in resolved)
+        {
+            var character = new CharacterRig
             {
-                AddNpcPlaceholder(placement, modelSource, tileOrigin);
-                _npcModelFailures.Add(modelSource);
-                continue;
-            }
-
-            var character = new ConvertedCharacter
-            {
-                Name = $"Npc_{NpcPlacementCount}",
+                Name = SafeNodeName(placement.SpawnId),
                 AutoLoad = false,
-                LocomotionOnly = true,
-                ConvertedRoot = ConvertedRoot,
-                CharacterScene = definition.ScenePath,
-                Position = tileOrigin + ConvertPosition(placement.Position),
-                Quaternion = ConvertServerRotation(placement),
-                Scale = Vector3.One * definition.Scale,
+                ShowPlaceholderOnFailure = false,
+                ScenePath = model.ScenePath,
+                Position = new Vector3(
+                    placement.PositionX,
+                    placement.PositionY,
+                    placement.PositionZ),
+                Quaternion = new Quaternion(
+                    placement.RotationX,
+                    placement.RotationY,
+                    placement.RotationZ,
+                    placement.RotationW),
             };
-            character.SetMeta("allods_mob", definition.MobSource);
-            character.SetMeta("allods_visual_mob", definition.VisualMobSource);
+            character.SetMeta("native_spawn_id", placement.SpawnId);
+            character.SetMeta("native_character_key", placement.CharacterKey);
+            character.SetMeta("native_scene", model.ScenePath);
             _charactersRoot!.AddChild(character);
-
-            if (character.LoadCharacter())
+            if (!character.Load())
             {
-                NpcVisualCount++;
-            }
-            else
-            {
-                NpcPlaceholderCount++;
-                _npcModelFailures.Add($"{definition.MobSource}: {character.LastError}");
-            }
-        }
-    }
-
-    private IReadOnlyList<string> FindMobSources(MapObjectPlacement placement)
-    {
-        var mobSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (string href in placement.Hrefs)
-        {
-            string source = NormalizeHref(string.Empty, href);
-            if (source.Contains("(MobWorld).xdb", StringComparison.OrdinalIgnoreCase))
-            {
-                mobSources.Add(source);
-                continue;
+                ClearNativeCharactersAfterFailure();
+                error = $"Native character placement '{placement.SpawnId}' failed to load: {character.LastError}";
+                return false;
             }
 
-            if (!source.Contains("(MobSpawnTable).xdb", StringComparison.OrdinalIgnoreCase)
-                && !source.Contains("(SpawnTable).xdb", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            AllodsResource? spawnTable = LoadAllodsResource(source);
-            if (spawnTable == null)
-            {
-                continue;
-            }
-
-            foreach (string mobHref in ReadHrefs(spawnTable.raw_xml)
-                         .Where(candidate => candidate.Contains("(MobWorld).xdb", StringComparison.OrdinalIgnoreCase)))
-            {
-                mobSources.Add(NormalizeHref(source, mobHref));
-            }
+            NpcVisualCount++;
+            NativeCharacterVisualCount++;
         }
 
-        return mobSources.OrderBy(source => source, StringComparer.OrdinalIgnoreCase).ToArray();
+        GD.Print(
+            $"ZoneLoader: native characters | map={MapName} placements={NativeCharacterPlacementCount} "
+            + $"visuals={NativeCharacterVisualCount} placeholders={NpcPlaceholderCount} "
+            + $"root={NativeContentSettings.NativeRoot}");
+        error = string.Empty;
+        return true;
     }
 
-    private NpcDefinition? ResolveNpcDefinition(string mobSource)
+    private void ClearNativeCharactersAfterFailure()
     {
-        AllodsResource? mob = LoadAllodsResource(mobSource);
-        string visualMobSource = NormalizeHref(mobSource, ReadHref(mob?.raw_xml ?? string.Empty, "visMob"));
-        if (!_tree.TryResolveVisualMob(visualMobSource, out string scenePath, out float visualScale))
+        foreach (Node child in _charactersRoot!.GetChildren())
         {
-            return null;
+            _charactersRoot.RemoveChild(child);
+            child.Free();
         }
 
-        return new NpcDefinition(mobSource, visualMobSource, scenePath, visualScale);
-    }
-
-    private void AddNpcPlaceholder(MapObjectPlacement placement, string modelSource, Vector3 tileOrigin)
-    {
-        var placeholder = new MeshInstance3D
-        {
-            Name = $"NpcPlaceholder_{NpcPlacementCount}",
-            Position = tileOrigin + ConvertPosition(placement.Position) + Vector3.Up * 0.9f,
-            Quaternion = ConvertServerRotation(placement),
-            Mesh = new CapsuleMesh { Radius = 0.42f, Height = 1.8f },
-            MaterialOverride = new StandardMaterial3D
-            {
-                AlbedoColor = new Color("d06a55"),
-                Roughness = 0.85f,
-            },
-        };
-        placeholder.SetMeta("allods_mob", modelSource);
-        DynamicEntityLighting.MarkReceiver(placeholder);
-        _charactersRoot!.AddChild(placeholder);
-        NpcPlaceholderCount++;
+        NpcVisualCount = 0;
+        NativeCharacterVisualCount = 0;
     }
 
     private StaticObjectResolution ResolveStaticObject(string templateHref)
@@ -1385,8 +1361,6 @@ public partial class ZoneLoader : Node3D
     private static string ReadHref(string xml, string elementName) =>
         AllodsResourceTree.ReadHref(xml, elementName);
 
-    private static IReadOnlyList<string> ReadHrefs(string xml) => AllodsResourceTree.ReadHrefs(xml);
-
     private static MapPlacementDocument? ReadPlacementDocument(string path)
     {
         try
@@ -1531,22 +1505,6 @@ public partial class ZoneLoader : Node3D
         return yaw * pitch * roll;
     }
 
-    private static Quaternion ConvertServerRotation(MapObjectPlacement placement)
-    {
-        if (placement.RotationYawPitchRoll is { Length: >= 3 }
-            && placement.RotationYawPitchRoll.Any(value => MathF.Abs(value) > 0.0001f))
-        {
-            return ConvertRotation(placement.RotationYawPitchRoll);
-        }
-
-        string? yawText = placement.Properties
-            .FirstOrDefault(property => property.Key.EndsWith(".yaw", StringComparison.OrdinalIgnoreCase))
-            .Value;
-        return float.TryParse(yawText, NumberStyles.Float, CultureInfo.InvariantCulture, out float yaw)
-            ? new Quaternion(Vector3.Up, yaw)
-            : Quaternion.Identity;
-    }
-
     private static string NormalizeHref(string ownerSource, string href) =>
         AllodsResourceTree.NormalizeHref(ownerSource, href);
 
@@ -1563,14 +1521,6 @@ public partial class ZoneLoader : Node3D
     private static string SafeNodeName(string name)
     {
         return name.Replace('.', '_').Replace(' ', '_');
-    }
-
-    private static bool IsPresentationSpawnLocator(MapObjectPlacement placement)
-    {
-        return placement.ObjectType.EndsWith(".Locator", StringComparison.OrdinalIgnoreCase)
-            && placement.Properties.Any(property =>
-                property.Key.EndsWith(".scriptID", StringComparison.OrdinalIgnoreCase)
-                && property.Value.EndsWith("_PlayerPos", StringComparison.OrdinalIgnoreCase));
     }
 
     private bool Fail(string message)
@@ -1770,8 +1720,6 @@ public partial class ZoneLoader : Node3D
         [JsonPropertyName("hrefs")] public string[] Hrefs { get; set; } = [];
         [JsonPropertyName("properties")] public Dictionary<string, string> Properties { get; set; } = new();
     }
-
-    private sealed record NpcDefinition(string MobSource, string VisualMobSource, string ScenePath, float Scale);
 
     private sealed record PendingBakedLight(BakedStaticLighting Baked, Node3D Instance, int ObjectIndex);
 

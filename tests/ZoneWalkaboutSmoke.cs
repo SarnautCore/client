@@ -7,7 +7,17 @@ public partial class ZoneWalkaboutSmoke : Node
     public override void _Ready()
     {
         ZoneLoader loader = GetNode<ZoneLoader>("ZoneLoader");
-        ConvertedCharacter player = GetNode<ConvertedCharacter>("PlayerCharacter");
+        CharacterRig player = GetNode<CharacterRig>("PlayerCharacter");
+        var catalog = new EntityModelCatalog();
+        bool playerResolved = catalog.TryResolvePlayer(
+            PlayerCharacterModel.DefaultCharacterKey,
+            out EntityModel playerModel);
+        if (playerResolved)
+        {
+            player.ScenePath = playerModel.ScenePath;
+        }
+
+        bool playerLoaded = playerResolved && player.Load();
         player.SetMoving(true);
         bool runSelected = player.ActiveClip.Equals("run", System.StringComparison.OrdinalIgnoreCase);
         player.SetMoving(false);
@@ -15,7 +25,8 @@ public partial class ZoneWalkaboutSmoke : Node
         bool passed = loader.TerrainTileCount > 0
             && loader.PlacedObjectCount > 0
             && loader.NpcVisualCount > 0
-            && player.HasConvertedModel
+            && playerLoaded
+            && player.HasModel
             && player.SkeletonBoneCount > 0
             && player.ClipCount > 0
             && runSelected
