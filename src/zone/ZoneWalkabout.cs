@@ -1,4 +1,8 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Godot;
+using SarnautCore.Content;
 using SarnautCore.Gameplay;
 using SarnautCore.Shell;
 
@@ -17,6 +21,8 @@ namespace SarnautCore;
 /// </remarks>
 public partial class ZoneWalkabout : Node3D
 {
+    private const string PresentationFileName = "zone-presentation.json";
+
     /// <summary>The named input actions this scene reads, declared in <c>project.godot</c>.</summary>
     public const string TargetClick = "target_click";
     public const string TargetNearest = "target_nearest";
@@ -51,6 +57,9 @@ public partial class ZoneWalkabout : Node3D
     private GameplayHudControl? _hudControl;
     private Label _status = null!;
     private string _zoneStatus = "";
+
+    public string NativePresentationManifestPath { get; private set; } = string.Empty;
+    public string NativePresentationScenePath { get; private set; } = string.Empty;
 
     public override void _EnterTree()
     {
@@ -89,9 +98,14 @@ public partial class ZoneWalkabout : Node3D
             return;
         }
 
-        ApplyAuthoredEnvironment(
-            mapName,
-            string.IsNullOrWhiteSpace(request.ZoneId) ? DefaultZoneId : request.ZoneId);
+        string zoneId = string.IsNullOrWhiteSpace(request.ZoneId) ? DefaultZoneId : request.ZoneId;
+        if (!TryLoadNativePresentation(mapName, zoneId, out string presentationError))
+        {
+            _status.Text = presentationError;
+            _focus.Cancel();
+            return;
+        }
+
         ApplyPresentationSpawn(
             _walker,
             _loader.SuggestedSpawnPosition,
@@ -133,7 +147,7 @@ public partial class ZoneWalkabout : Node3D
             entityRoot,
             _characterCatalog,
             request.ServerAddress,
-            string.IsNullOrWhiteSpace(request.ZoneId) ? DefaultZoneId : request.ZoneId,
+            zoneId,
             _session.ContentPackId,
             request.Ticket,
             _hudModel,
@@ -151,62 +165,212 @@ public partial class ZoneWalkabout : Node3D
         walker.Quaternion = rotation;
     }
 
-    /// <summary>
-    /// Replaces the scene's hand-authored lighting with the zone's authored 1.1
-    /// environment (ZoneLights: ambient, sun, fog, post exposure). The scene
-    /// defaults only survive when the converted data does not carry the zone.
-    /// </summary>
-    private void ApplyAuthoredEnvironment(string mapName, string zoneId)
+    private bool TryLoadNativePresentation(string mapName, string requestedZoneId, out string error)
     {
-        WorldEnvironment? worldEnvironment = GetNodeOrNull<WorldEnvironment>("WorldEnvironment");
-        DirectionalLight3D? sun = GetNodeOrNull<DirectionalLight3D>("Sun");
-        if (worldEnvironment?.Environment == null || sun == null)
+        if (!TryNormalizeContentId(mapName, out string mapId))
         {
-            return;
+            error = $"Native zone presentation has an invalid map id: '{mapName}'.";
+            return false;
         }
 
-        var tree = new AllodsResourceTree(_loader.ConvertedRoot);
-        if (!ZoneEnvironmentSettings.TryLoad(tree, mapName, zoneId, out ZoneEnvironmentSettings authored, out string error))
+        if (!TryNormalizeZoneId(requestedZoneId, out string zoneId))
         {
-            GD.PushWarning($"ZoneWalkabout keeps placeholder lighting: {error}");
-            return;
+            error = $"Native zone presentation has an invalid zone id: '{requestedZoneId}'.";
+            return false;
         }
 
-        authored.Apply(worldEnvironment.Environment, sun);
-        _loader.ApplyZoneLighting(authored);
-        AddAuthoredSkydome(authored);
+        string presentationDirectory = $"{NativeContentSettings.NativeRoot}/maps/{mapId}/zones/{zoneId}";
+        string manifestPath = $"{presentationDirectory}/{PresentationFileName}";
+        if (!FileAccess.FileExists(manifestPath))
+        {
+            error = $"Native zone presentation manifest is missing: {manifestPath}";
+            return false;
+        }
+
+        NativeZonePresentation presentation;
+        try
+        {
+            presentation = NativeZonePresentation.Parse(
+                FileAccess.GetFileAsString(manifestPath),
+                mapId,
+                zoneId);
+        }
+        catch (Exception exception)
+        {
+            error = $"Native zone presentation manifest is invalid: {manifestPath}. {exception.Message}";
+            return false;
+        }
+
+        string scenePath = $"{presentationDirectory}/{presentation.Scene}";
+        if (!FileAccess.FileExists(scenePath))
+        {
+            error = $"Native zone presentation scene is missing: {scenePath}";
+            return false;
+        }
+
+        PackedScene? packed = ResourceLoader.Load<PackedScene>(scenePath);
+        if (packed == null)
+        {
+            error = $"Native zone presentation scene is not loadable: {scenePath}";
+            return false;
+        }
+
+        Node instance;
+        try
+        {
+            instance = packed.Instantiate();
+        }
+        finally
+        {
+            packed.Dispose();
+        }
+
+        if (instance is not Node3D root)
+        {
+            instance.Free();
+            error = $"Native zone presentation scene root is not Node3D: {scenePath}";
+            return false;
+        }
+
+        if (!TryValidatePresentationTopology(root, presentation, out error))
+        {
+            root.Free();
+            error = $"Native zone presentation scene is incompatible: {scenePath}. {error}";
+            return false;
+        }
+
+        root.Name = "ZonePresentation";
+        Node3D sky = root.GetNode<Node3D>(presentation.Topology.SkyRootNode);
+        root.RemoveChild(sky);
+        var cameraCenteredSky = new CameraCenteredSky { Name = "CameraCenteredSky" };
+        cameraCenteredSky.AddChild(sky);
+        root.AddChild(cameraCenteredSky);
+        root.SetMeta("native_manifest", manifestPath);
+        root.SetMeta("native_scene", scenePath);
+        AddChild(root);
+
+        _loader.ApplyZoneLighting(
+            ToGodotColor(presentation.ProbeColors.Ambient),
+            ToGodotColor(presentation.ProbeColors.Direct));
+        NativePresentationManifestPath = manifestPath;
+        NativePresentationScenePath = scenePath;
         GD.Print(
-            $"ZoneWalkabout: authored environment {authored.SourcePath} | ambient={authored.AmbientColor} "
-            + $"sun={authored.SunColor} fog={authored.FogColor} {authored.FogStart}..{authored.FogEnd} "
-            + $"exposure={authored.ExposureMultiplier} sky={authored.SkyMeshSource}");
+            $"ZoneWalkabout: native presentation map={mapId} zone={zoneId} "
+            + $"scene={scenePath} sky={presentation.Sky.PartCount}/{presentation.Sky.AnimatedPartCount}");
+        error = string.Empty;
+        return true;
     }
 
-    /// <summary>
-    /// Instances the zone's authored skydome behind the world. The fog-colored
-    /// background stays beneath it for zones whose sky meshes are unavailable.
-    /// </summary>
-    private void AddAuthoredSkydome(ZoneEnvironmentSettings authored)
+    private static bool TryValidatePresentationTopology(
+        Node3D root,
+        NativeZonePresentation presentation,
+        out string error)
     {
-        if (GetNodeOrNull<ZoneSkydome>("Skydome") != null)
+        WorldEnvironment? worldEnvironment = root.GetNodeOrNull<WorldEnvironment>(
+            presentation.Topology.EnvironmentNode);
+        DirectionalLight3D? sun = root.GetNodeOrNull<DirectionalLight3D>(
+            presentation.Topology.SunNode);
+        Node3D? sky = root.GetNodeOrNull<Node3D>(presentation.Topology.SkyRootNode);
+        if (worldEnvironment?.Environment == null
+            || worldEnvironment.GetParent() != root
+            || sun == null
+            || sun.GetParent() != root
+            || sky == null
+            || sky.GetParent() != root)
         {
-            return;
+            error = "required Environment, Sun, and Sky nodes are missing or misplaced";
+            return false;
         }
 
-        var tree = new AllodsResourceTree(_loader.ConvertedRoot);
-        ZoneSkydome? skydome = ZoneSkydome.TryCreate(tree, _loader.ConvertedRoot, authored.SkyMeshSource);
-        if (skydome == null)
+        if (Descendants<WorldEnvironment>(root).Count() != 1
+            || Descendants<DirectionalLight3D>(root).Count() != 1)
         {
-            if (!string.IsNullOrEmpty(authored.SkyMeshSource))
+            error = "the scene must contain exactly one WorldEnvironment and one DirectionalLight3D";
+            return false;
+        }
+
+        if (sky.GetChildCount() != presentation.Sky.PartCount)
+        {
+            error = $"sky part count is {sky.GetChildCount()}, expected {presentation.Sky.PartCount}";
+            return false;
+        }
+
+        int animatedParts = 0;
+        foreach (NativeZoneSkyPart part in presentation.Sky.Parts)
+        {
+            Node3D? partNode = sky.GetNodeOrNull<Node3D>(part.Node);
+            if (partNode == null || partNode.GetParent() != sky)
             {
-                GD.PushWarning($"ZoneWalkabout: authored skydome unavailable: {authored.SkyMeshSource}");
+                error = $"sky part '{part.Node}' is missing or is not a direct child of Sky";
+                return false;
             }
 
-            return;
+            bool animated = Descendants<AnimationPlayer>(partNode)
+                .Any(player => player.GetAnimationList().Length > 0);
+            if (animated != part.Animated)
+            {
+                error = $"sky part '{part.Node}' animated state is {animated}, expected {part.Animated}";
+                return false;
+            }
+
+            if (animated)
+            {
+                animatedParts++;
+            }
         }
 
-        AddChild(skydome);
-        GD.Print($"ZoneWalkabout: skydome {authored.SkyMeshSource} parts={skydome.PartCount}");
+        if (animatedParts != presentation.Sky.AnimatedPartCount)
+        {
+            error = $"animated sky part count is {animatedParts}, expected {presentation.Sky.AnimatedPartCount}";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
     }
+
+    private static IEnumerable<T> Descendants<T>(Node root) where T : Node
+    {
+        foreach (Node child in root.GetChildren())
+        {
+            if (child is T match)
+            {
+                yield return match;
+            }
+
+            foreach (T descendant in Descendants<T>(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
+
+    private static bool TryNormalizeZoneId(string source, out string zoneId)
+    {
+        string candidate = source.Trim();
+        if (candidate.StartsWith("zone.", StringComparison.OrdinalIgnoreCase))
+        {
+            candidate = candidate["zone.".Length..];
+        }
+
+        return TryNormalizeContentId(candidate, out zoneId);
+    }
+
+    private static bool TryNormalizeContentId(string source, out string contentId)
+    {
+        contentId = MapNameTransform.ToKebabCase(source);
+        return contentId.Length > 0
+            && contentId.All(character =>
+                character is >= 'a' and <= 'z'
+                    or >= '0' and <= '9'
+                    or '-')
+            && !contentId.StartsWith('-')
+            && !contentId.EndsWith('-')
+            && !contentId.Contains("--", StringComparison.Ordinal);
+    }
+
+    private static Color ToGodotColor(NativeZoneColor color) =>
+        new(color.Red, color.Green, color.Blue, 1.0f);
 
     private void SetNetworkStatus(string networkStatus)
     {

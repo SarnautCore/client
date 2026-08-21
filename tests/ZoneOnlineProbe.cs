@@ -113,8 +113,8 @@ public partial class ZoneOnlineProbe : Node
             layeredTerrain == expectedTerrain,
             $"every terrain tile uses separate layered up/down materials: {layeredTerrain} of {expectedTerrain}");
 
-        var worldEnvironment = zone.GetNodeOrNull<WorldEnvironment>("WorldEnvironment");
-        var sun = zone.GetNodeOrNull<DirectionalLight3D>("Sun");
+        var worldEnvironment = zone.GetNodeOrNull<WorldEnvironment>("ZonePresentation/Environment");
+        var sun = zone.GetNodeOrNull<DirectionalLight3D>("ZonePresentation/Sun");
         Expect(worldEnvironment?.Environment != null, "the zone has an active world environment");
         Expect(
             worldEnvironment?.Environment?.AmbientLightSource == Godot.Environment.AmbientSource.Color,

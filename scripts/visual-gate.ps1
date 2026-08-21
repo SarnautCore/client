@@ -88,7 +88,10 @@ $probes = @(
     @{ Scene = "terrain_structure_diagnostic_probe"; Timeout = 240 },
     @{ Scene = "unrecoverable_terrain_failure_probe"; Timeout = 240 },
     @{ Scene = "zone_camera_spawn_smoke"; Timeout = 240 },
-    @{ Scene = "zone_presentation_pixel_probe"; Timeout = 400 }
+    @{ Scene = "zone_presentation_pixel_probe"; Timeout = 400; RequiredStdoutPatterns = @(
+            '(?m)^ZONE_PRESENTATION_PIXEL_PROBE .*native_scene="res://content/league-slice/maps/inst-league-start/zones/inst-league1/.+\.scn" native_route=True manifest_exact=True topology_exact=True probe_colors_exact=True '
+        )
+    }
 )
 
 $managedEnvironmentNames = @(

@@ -32,7 +32,7 @@ public partial class DirectionalLightingProbe : Node
         walker.NetworkControlled = true;
         walker.InputEnabled = false;
         walker.LookInputEnabled = false;
-        var sun = zone.GetNode<DirectionalLight3D>("Sun");
+        var sun = zone.GetNode<DirectionalLight3D>("ZonePresentation/Sun");
         var loader = zone.GetNode<ZoneLoader>("ZoneLoader");
         CharacterRig character = zone.GetNode<CharacterRig>("Walker/Character");
 

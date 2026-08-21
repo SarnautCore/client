@@ -13,7 +13,6 @@ public partial class ZoneLoader : Node3D
 {
     public const string DefaultMapName = "Inst_LeagueStart";
 
-    private const string DefaultConvertedRoot = "res://converted/assets/classic-1.1";
     private const string TileCoordinateFrameId = "allods-tile-local-v1";
     private const string TileCoordinateScope = "tile-local";
     private const float TerrainTilePitch = 256.0f;
@@ -40,7 +39,6 @@ public partial class ZoneLoader : Node3D
     private int _nativeStaticReceiverMeshCount;
 
     [Export] public string MapName { get; set; } = DefaultMapName;
-    [Export(PropertyHint.Dir)] public string ConvertedRoot { get; set; } = DefaultConvertedRoot;
     [Export] public bool AutoLoad { get; set; } = true;
     [Export] public bool CreateTerrainCollision { get; set; } = true;
 
@@ -684,11 +682,9 @@ public partial class ZoneLoader : Node3D
         return false;
     }
 
-    /// <summary>Activates terrain lightmap sampling for dynamic entities.</summary>
-    public void ApplyZoneLighting(ZoneEnvironmentSettings settings)
+    /// <summary>Activates native terrain lightmap sampling for dynamic entities.</summary>
+    public void ApplyZoneLighting(Color ambient, Color direct)
     {
-        Color ambient = settings.BakedAmbientLight;
-        Color direct = settings.DirectLightColor;
         _lightProbe.SetZoneColors(ambient, direct);
         BakedLightProbe.Activate(_lightProbe);
         GD.Print(

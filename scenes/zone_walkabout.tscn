@@ -1,17 +1,9 @@
-[gd_scene load_steps=8 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://src/zone/ZoneWalkabout.cs" id="1_walkabout"]
 [ext_resource type="Script" path="res://src/zone/ZoneLoader.cs" id="2_loader"]
 [ext_resource type="Script" path="res://src/zone/WalkaboutController.cs" id="3_controller"]
 [ext_resource type="Script" path="res://src/characters/CharacterRig.cs" id="4_character"]
-
-[sub_resource type="Environment" id="Environment_walkabout"]
-background_mode = 1
-background_color = Color(0.115, 0.145, 0.19, 1)
-ambient_light_source = 2
-ambient_light_color = Color(0.68, 0.74, 0.82, 1)
-ambient_light_energy = 0.55
-tonemap_mode = 2
 
 [sub_resource type="CapsuleShape3D" id="Capsule_walker"]
 radius = 0.42
@@ -41,17 +33,6 @@ content_margin_bottom = 8.0
 
 [node name="ZoneWalkabout" type="Node3D"]
 script = ExtResource("1_walkabout")
-
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
-environment = SubResource("Environment_walkabout")
-
-[node name="Sun" type="DirectionalLight3D" parent="."]
-rotation_degrees = Vector3(-52, -28, 0)
-light_energy = 1.15
-shadow_enabled = true
-shadow_opacity = 0.55
-directional_shadow_blend_splits = true
-directional_shadow_max_distance = 600.0
 
 [node name="ZoneLoader" type="Node3D" parent="."]
 script = ExtResource("2_loader")

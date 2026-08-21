@@ -184,6 +184,9 @@ foreach ($requiredContract in @(
     'SARNAUT_NATIVE_CHARACTER_LOD_ROOT = "res://content/league-slice"',
     'SARNAUT_NATIVE_CHARACTER_LOD_KEY = "*"',
     'NATIVE_CHARACTER_LOD identities=40/40',
+    'Scene = "zone_presentation_pixel_probe"',
+    'native_scene="res://content/league-slice/maps/inst-league-start/zones/inst-league1/.+\.scn"',
+    'native_route=True manifest_exact=True topology_exact=True probe_colors_exact=True',
     'MaxSeconds = 45; MaxPeakBytes = 2469606195',
     '$process.PeakWorkingSet64',
     'visual-gate-metrics.json',
@@ -195,6 +198,28 @@ foreach ($requiredContract in @(
 )) {
     if (-not $visualGate.Contains($requiredContract, [StringComparison]::Ordinal)) {
         throw "visual gate is missing standing coverage contract: $requiredContract"
+    }
+}
+
+$zonePresentationProbe = Get-Content -LiteralPath (
+    Join-Path $PSScriptRoot "..\tests\ZonePresentationPixelProbe.cs") -Raw
+foreach ($requiredPresentationValue in @(
+    'maps/inst-league-start/zones/inst-league1/zone-presentation.json',
+    'NativePresentationScenePath.EndsWith(".scn"',
+    '["Backdrop", "Stars", "Clouds"]',
+    '[0.8f, 0.4f, 1.0f]',
+    'clip.xy *= fov_factor',
+    'new Color(45.0f / 510.0f, 58.0f / 510.0f, 179.0f / 510.0f)',
+    'new Color(70.0f / 255.0f, 30.0f / 255.0f, 0.0f)',
+    'new Color(18.0f / 255.0f, 6.0f / 255.0f, 38.0f / 255.0f)',
+    'new Vector3(0.0f, -45.0f, 0.0f)',
+    '"blend_add"',
+    '"blend_mix"',
+    'new Color(6.0f / 255.0f, 57.0f / 255.0f, 119.0f / 255.0f)',
+    'DirectionalLight3D.ShadowMode.Parallel4Splits'
+)) {
+    if (-not $zonePresentationProbe.Contains($requiredPresentationValue, [StringComparison]::Ordinal)) {
+        throw "zone presentation probe is missing exact native contract: $requiredPresentationValue"
     }
 }
 
