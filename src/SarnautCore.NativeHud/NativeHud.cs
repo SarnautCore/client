@@ -13,6 +13,7 @@ public sealed class NativeHud : IDisposable
     private readonly FeedbackState[] _feedback;
     private readonly EntityState[] _entities;
     private readonly QuestState[] _quests;
+    private readonly QuestTombstone[] _questTombstones;
     private readonly ChatState[] _chat;
     private readonly TransientState[] _transients;
     private readonly HudEvent[] _eventBuffer;
@@ -26,9 +27,11 @@ public sealed class NativeHud : IDisposable
     private int _inputCount;
     private int _transientCursor;
     private int _chatCursor;
+    private int _questTombstoneCursor;
     private int _pendingInputOverflows;
     private long _lastNow;
     private HudFocus _focus;
+    private HudFocus _focusBeforeDrag;
     private HudId _hoverElement;
     private HudCursor _cursor;
     private HudPointerSource _pointerSource;
@@ -46,6 +49,7 @@ public sealed class NativeHud : IDisposable
         _feedback = new FeedbackState[3 * HudProduct.FeedbackPoolCount];
         _entities = new EntityState[product.MaxEntities];
         _quests = new QuestState[HudProduct.QuestTrackerRowCount];
+        _questTombstones = new QuestTombstone[64];
         _chat = new ChatState[product.MaxChatEntries];
         _transients = new TransientState[Math.Max(64, product.MaxSessionEventsPerFrame * 2)];
         _eventBuffer = new HudEvent[product.MaxSessionEventsPerFrame];
@@ -481,30 +485,69 @@ public sealed class NativeHud : IDisposable
         }
 
         int index = FindQuest(questId);
-        if (index < 0)
+        if (index >= 0)
         {
-            index = FindFreeQuest();
-            if (index < 0)
+            ref QuestState current = ref _quests[index];
+            if (!AcceptAuthority(current.HasAuthority, current.Stamp, current.LastEvent, item, questId, 0, index))
             {
-                AddError(HudErrorCode.QuestCapacityExceeded, item.Stamp, questId, 0, -1);
                 return;
             }
+        }
+        else
+        {
+            int tombstoneIndex = FindQuestTombstone(questId);
+            if (tombstoneIndex >= 0)
+            {
+                ref QuestTombstone tombstone = ref _questTombstones[tombstoneIndex];
+                if (!AcceptAuthority(true, tombstone.Stamp, tombstone.LastEvent, item, questId, 0, -1))
+                {
+                    return;
+                }
+            }
 
-            _quests[index].Occupied = true;
-            _quests[index].QuestId = questId;
+            if (item.Kind == HudEventKind.QuestTracked)
+            {
+                index = FindFreeQuest();
+                if (index < 0)
+                {
+                    AddError(HudErrorCode.QuestCapacityExceeded, item.Stamp, questId, 0, -1);
+                    return;
+                }
+            }
         }
 
-        ref QuestState state = ref _quests[index];
-        if (!AcceptAuthority(state.HasAuthority, state.Stamp, state.LastEvent, item, questId, 0, index))
+        if (item.Kind == HudEventKind.QuestUntracked)
         {
+            RememberQuestTombstone(item);
+            if (index >= 0)
+            {
+                ref QuestState removed = ref _quests[index];
+                removed.HasAuthority = false;
+                removed.Tracked = false;
+                removed.QuestId = HudId.Empty;
+                removed.Snapshot = null;
+                UpdateQuestView(index);
+                _diff.AddChange(new HudChange(
+                    HudChangeKind.QuestTracker,
+                    removed.Element,
+                    0,
+                    false,
+                    0,
+                    false,
+                    questId,
+                    default));
+            }
+
             return;
         }
 
+        ref QuestState state = ref _quests[index];
         state.HasAuthority = true;
+        state.QuestId = questId;
         state.Stamp = item.Stamp;
         state.LastEvent = item;
-        state.Tracked = item.Kind == HudEventKind.QuestTracked;
-        state.Snapshot = state.Tracked ? item.Quest : null;
+        state.Tracked = true;
+        state.Snapshot = item.Quest;
         UpdateQuestView(index);
         _diff.AddChange(new HudChange(
             HudChangeKind.QuestTracker,
@@ -571,7 +614,9 @@ public sealed class NativeHud : IDisposable
         int index = _transientCursor;
         _transientCursor = (_transientCursor + 1) % _transients.Length;
         ref TransientState record = ref _transients[index];
-        if (record.Occupied && record.FeedbackIndex >= 0)
+        if (record.Occupied && record.FeedbackIndex >= 0 &&
+            _feedback[record.FeedbackIndex].Active &&
+            _feedback[record.FeedbackIndex].EventId == record.EventId)
         {
             CancelFeedback(record.FeedbackIndex);
         }
@@ -801,7 +846,7 @@ public sealed class NativeHud : IDisposable
                 SetVirtualPointer(input.PointerSource, input.Pointer);
                 if (_focus == HudFocus.Drag)
                 {
-                    SetFocus(HudFocus.World);
+                    SetFocus(_focusBeforeDrag);
                 }
 
                 break;
@@ -866,6 +911,11 @@ public sealed class NativeHud : IDisposable
     {
         if (focus >= _focus)
         {
+            if (focus == HudFocus.Drag && _focus != HudFocus.Drag)
+            {
+                _focusBeforeDrag = _focus;
+            }
+
             SetFocus(focus);
         }
     }
@@ -1033,7 +1083,7 @@ public sealed class NativeHud : IDisposable
     {
         for (int index = 0; index < _quests.Length; index++)
         {
-            if (_quests[index].Occupied && _quests[index].QuestId == questId)
+            if (_quests[index].Tracked && _quests[index].QuestId == questId)
             {
                 return index;
             }
@@ -1046,13 +1096,44 @@ public sealed class NativeHud : IDisposable
     {
         for (int index = 0; index < _quests.Length; index++)
         {
-            if (!_quests[index].Occupied)
+            if (!_quests[index].Tracked)
             {
                 return index;
             }
         }
 
         return -1;
+    }
+
+    private int FindQuestTombstone(HudId questId)
+    {
+        for (int index = 0; index < _questTombstones.Length; index++)
+        {
+            if (_questTombstones[index].Occupied && _questTombstones[index].QuestId == questId)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private void RememberQuestTombstone(in HudEvent item)
+    {
+        int index = FindQuestTombstone(item.ContentId);
+        if (index < 0)
+        {
+            index = _questTombstoneCursor;
+            _questTombstoneCursor = (_questTombstoneCursor + 1) % _questTombstones.Length;
+        }
+
+        _questTombstones[index] = new QuestTombstone
+        {
+            Occupied = true,
+            QuestId = item.ContentId,
+            Stamp = item.Stamp,
+            LastEvent = item,
+        };
     }
 
     private void UpdateQuestView(int index)
@@ -1183,13 +1264,20 @@ public sealed class NativeHud : IDisposable
     private struct QuestState
     {
         public HudId Element;
-        public bool Occupied;
         public HudId QuestId;
         public bool HasAuthority;
         public HudStamp Stamp;
         public HudEvent LastEvent;
         public bool Tracked;
         public HudQuestSnapshot? Snapshot;
+    }
+
+    private struct QuestTombstone
+    {
+        public bool Occupied;
+        public HudId QuestId;
+        public HudStamp Stamp;
+        public HudEvent LastEvent;
     }
 
     private struct ChatState
