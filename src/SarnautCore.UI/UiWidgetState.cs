@@ -16,12 +16,15 @@ public readonly record struct UiCollectionActionDispatch(
     bool Activated,
     string? PreviousProductItemId,
     string? SelectedProductItemId,
+    string VisualState,
+    string? Cue,
     IReadOnlyList<UiActionInvocation> Invocations);
 
 public sealed class UiCollectionState
 {
     private readonly UiScreenDefinition _screen;
     private readonly UiButtonDefinition? _itemButton;
+    private readonly UiRoleDefinition _itemRole;
     private readonly Func<bool> _canReceiveInput;
 
     internal UiCollectionState(
@@ -32,6 +35,7 @@ public sealed class UiCollectionState
         _screen = screen;
         Definition = definition;
         _itemButton = screen.FindButton(definition.ItemRole);
+        _itemRole = screen.GetRole(definition.ItemRole);
         _canReceiveInput = canReceiveInput;
     }
 
@@ -58,23 +62,31 @@ public sealed class UiCollectionState
                 false,
                 SelectedProductItemId,
                 SelectedProductItemId,
+                VisualStateFor(itemId),
+                null,
                 []);
         }
 
-        UiActionEvent? actionEvent = VariantFor(itemId)?.EventFor(input);
+        UiButtonVariant? variant = VariantFor(itemId);
+        UiActionEvent? actionEvent = variant?.EventFor(input);
+        string? cue = CueFor(variant, input);
         return actionEvent switch
         {
             null => new UiCollectionActionDispatch(
                 false,
                 SelectedProductItemId,
                 SelectedProductItemId,
+                VisualStateFor(itemId),
+                null,
                 []),
-            UiActionEvent.Toggled => ToggleItem(itemId),
-            UiActionEvent.DoublePressed => DoublePressItem(itemId),
+            UiActionEvent.Toggled => ToggleItem(itemId, cue),
+            UiActionEvent.DoublePressed => DoublePressItem(itemId, cue),
             { } mapped => new UiCollectionActionDispatch(
                 true,
                 SelectedProductItemId,
                 SelectedProductItemId,
+                VisualStateFor(itemId),
+                cue,
                 _screen.ActionsFor(
                     Definition.ItemRole,
                     mapped,
@@ -82,14 +94,20 @@ public sealed class UiCollectionState
         };
     }
 
-    private UiCollectionActionDispatch ToggleItem(string productItemId)
+    private UiCollectionActionDispatch ToggleItem(string productItemId, string? cue)
     {
         EnsureSingleSelection();
         string itemId = ValidateProductItemId(productItemId);
         string? previous = SelectedProductItemId;
         if (previous == itemId)
         {
-            return new UiCollectionActionDispatch(false, previous, previous, []);
+            return new UiCollectionActionDispatch(
+                false,
+                previous,
+                previous,
+                VisualStateFor(itemId),
+                null,
+                []);
         }
 
         SelectedProductItemId = itemId;
@@ -97,19 +115,23 @@ public sealed class UiCollectionState
             true,
             previous,
             itemId,
+            VisualStateFor(itemId),
+            cue,
             _screen.ActionsFor(
                 Definition.ItemRole,
                 UiActionEvent.Toggled,
                 new UiCollectionItemContext(Definition.Id, itemId)));
     }
 
-    private UiCollectionActionDispatch DoublePressItem(string productItemId)
+    private UiCollectionActionDispatch DoublePressItem(string productItemId, string? cue)
     {
         string itemId = ValidateProductItemId(productItemId);
         return new UiCollectionActionDispatch(
             true,
             SelectedProductItemId,
             SelectedProductItemId,
+            VisualStateFor(itemId),
+            cue,
             _screen.ActionsFor(
                 Definition.ItemRole,
                 UiActionEvent.DoublePressed,
@@ -146,6 +168,13 @@ public sealed class UiCollectionState
 
         return _itemButton.Variants[variantIndex];
     }
+
+    private string? CueFor(UiButtonVariant? variant, UiPhysicalInput input) => input switch
+    {
+        UiPhysicalInput.HoverEntered => variant?.Cues.Hover ?? _itemRole.Cues.Hover,
+        UiPhysicalInput.PrimaryReleased => variant?.Cues.Press ?? _itemRole.Cues.Press,
+        _ => null,
+    };
 }
 
 public sealed class UiRoleState

@@ -119,13 +119,14 @@ internal static class UiProductFixture
                 { "id": "preview", "node": "Preview", "initially_visible": true, "cues": { "hover": "preview_hover" } },
                 { "id": "choice-a", "node": "Choices/A", "initially_visible": true },
                 { "id": "choice-b", "node": "Choices/B", "initially_visible": true },
-                { "id": "open", "node": "Open", "initially_visible": true }
+                { "id": "open", "node": "Open", "initially_visible": true, "cues": { "hover": "row_hover", "press": "row_press" } }
               ],
               "actions": [
                 { "id": "preview", "arguments": [{ "name": "identity", "kind": "product-id", "value": "league-warrior" }], "triggers": [{ "role": "preview", "event": "hover-entered" }] },
                 { "id": "preview-end", "arguments": [], "triggers": [{ "role": "preview", "event": "hover-exited" }] },
                 { "id": "begin-preview-drag", "arguments": [], "triggers": [{ "role": "preview", "event": "primary-pressed" }] },
                 { "id": "open", "arguments": [{ "name": "character", "kind": "collection-item-id", "collection": "characters" }], "triggers": [{ "role": "open", "event": "double-pressed" }] },
+                { "id": "preview-row", "arguments": [{ "name": "character", "kind": "collection-item-id", "collection": "characters" }], "triggers": [{ "role": "open", "event": "hover-entered" }] },
                 { "id": "select", "arguments": [{ "name": "character", "kind": "collection-item-id", "collection": "characters" }], "triggers": [{ "role": "open", "event": "toggled" }] },
                 { "id": "select", "arguments": [{ "name": "identity", "kind": "product-id", "value": "choice-a" }], "triggers": [{ "role": "choice-a", "event": "toggled" }] },
                 { "id": "select", "arguments": [{ "name": "identity", "kind": "product-id", "value": "choice-b" }], "triggers": [{ "role": "choice-b", "event": "toggled" }] },
@@ -138,7 +139,7 @@ internal static class UiProductFixture
               "buttons": [
                 { "role": "choice-a", "toggle": true, "initial_variant": "clear", "variants": [{ "id": "clear", "visual_state": "clear", "inputs": [{ "input": "primary-released", "event": "toggled" }] }, { "id": "selected", "visual_state": "selected", "inputs": [{ "input": "primary-released", "event": "toggled" }] }] },
                 { "role": "choice-b", "toggle": true, "initial_variant": "clear", "variants": [{ "id": "clear", "visual_state": "clear", "inputs": [{ "input": "primary-released", "event": "toggled" }] }, { "id": "selected", "visual_state": "selected", "inputs": [{ "input": "primary-released", "event": "toggled" }] }] },
-                { "role": "open", "toggle": true, "initial_variant": "clear", "variants": [{ "id": "clear", "visual_state": "clear", "inputs": [{ "input": "primary-released", "event": "toggled" }, { "input": "double-pressed", "event": "double-pressed" }] }, { "id": "selected", "visual_state": "selected", "inputs": [{ "input": "double-pressed", "event": "double-pressed" }] }] }
+                { "role": "open", "toggle": true, "initial_variant": "clear", "variants": [{ "id": "clear", "visual_state": "clear", "inputs": [{ "input": "primary-released", "event": "toggled" }, { "input": "double-pressed", "event": "double-pressed" }, { "input": "hover-entered", "event": "hover-entered" }] }, { "id": "selected", "visual_state": "selected", "inputs": [{ "input": "double-pressed", "event": "double-pressed" }, { "input": "hover-entered", "event": "hover-entered" }] }] }
               ],
               "selection_groups": [
                 { "id": "choice", "roles": ["choice-a", "choice-b"], "allow_empty": true, "initial_role": "choice-a" }

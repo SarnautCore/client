@@ -221,12 +221,16 @@ public sealed class UiWidgetStateTests
         Assert.Null(first.PreviousProductItemId);
         Assert.Equal("character-one", first.SelectedProductItemId);
         Assert.Equal("character-one", Assert.Single(first.Invocations).Arguments[0].Value);
+        Assert.Equal("selected", first.VisualState);
+        Assert.Equal("row_press", first.Cue);
         Assert.Equal("selected", collection.VisualStateFor("character-one"));
 
         UiCollectionActionDispatch repeated = collection.RouteInput(
             "character-one",
             UiPhysicalInput.PrimaryReleased);
         Assert.False(repeated.Activated);
+        Assert.Equal("selected", repeated.VisualState);
+        Assert.Null(repeated.Cue);
         Assert.Empty(repeated.Invocations);
         Assert.True(collection.IsSelected("character-one"));
 
@@ -236,6 +240,8 @@ public sealed class UiWidgetStateTests
         Assert.True(moved.Activated);
         Assert.Equal("character-one", moved.PreviousProductItemId);
         Assert.Equal("character-two", moved.SelectedProductItemId);
+        Assert.Equal("selected", moved.VisualState);
+        Assert.Equal("row_press", moved.Cue);
         Assert.False(collection.IsSelected("character-one"));
         Assert.True(collection.IsSelected("character-two"));
         Assert.Equal("clear", collection.VisualStateFor("character-one"));
@@ -257,6 +263,26 @@ public sealed class UiWidgetStateTests
         UiActionInvocation invocation = Assert.Single(dispatch.Invocations);
         Assert.Equal("open", invocation.Id);
         Assert.Equal("character-two", Assert.Single(invocation.Arguments).Value);
+        Assert.Equal("clear", dispatch.VisualState);
+        Assert.Null(dispatch.Cue);
+    }
+
+    [Fact]
+    public void CollectionHoverReturnsRoleCueWithoutChangingSelection()
+    {
+        UiCollectionState collection = InteractionScreen().Collections["characters"];
+
+        UiCollectionActionDispatch dispatch = collection.RouteInput(
+            "character-one",
+            UiPhysicalInput.HoverEntered);
+
+        Assert.True(dispatch.Activated);
+        Assert.Equal("clear", dispatch.VisualState);
+        Assert.Equal("row_hover", dispatch.Cue);
+        Assert.Null(dispatch.SelectedProductItemId);
+        UiActionInvocation invocation = Assert.Single(dispatch.Invocations);
+        Assert.Equal("preview-row", invocation.Id);
+        Assert.Equal("character-one", Assert.Single(invocation.Arguments).Value);
     }
 
     [Fact]
