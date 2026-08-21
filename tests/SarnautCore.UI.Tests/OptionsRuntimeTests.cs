@@ -216,19 +216,18 @@ public sealed class OptionsRuntimeTests
     public void PresetKeepsRawGlobalsWhileTheViewProjectsNearestChoice()
     {
         OptionsRuntime runtime = Open(out OptionsProduct product, out RecordingOptionsAdapters adapters, out _);
-        string[] rawTargets = product.GraphicsPresets[0].Values
+        KeyValuePair<string, double>[] rawTargets = product.GraphicsPresets[0].Values
             .Where(pair => pair.Value is 2 or 3)
-            .Select(pair => pair.Key)
-            .Order(StringComparer.Ordinal)
+            .OrderBy(pair => pair.Value)
             .ToArray();
 
         runtime.Dispatch(new OptionsCommand.SetOption("gfxSystemSpec", OptionScalar.FromNumber(0)));
         runtime.Dispatch(new OptionsCommand.Apply());
 
         Assert.Equal(2, rawTargets.Length);
-        Assert.Equal(2, adapters.Persistence.State.Global[rawTargets[0]].Number);
-        Assert.Equal(3, adapters.Persistence.State.Global[rawTargets[1]].Number);
-        Assert.All(rawTargets, id => Assert.Equal(1, Row(runtime, id).Draft.Number));
+        Assert.Equal(2, adapters.Persistence.State.Global[rawTargets[0].Key].Number);
+        Assert.Equal(3, adapters.Persistence.State.Global[rawTargets[1].Key].Number);
+        Assert.All(rawTargets, pair => Assert.Equal(1, Row(runtime, pair.Key).Draft.Number));
     }
 
     [Fact]
@@ -322,13 +321,15 @@ public sealed class OptionsRuntimeTests
     {
         OptionsProduct product = OptionsProductFixture.Parse();
         RecordingOptionsAdapters adapters = OptionsProductFixture.Adapters(product);
+        KeyValuePair<string, double> rawPresetValue = product.GraphicsPresets[0].Values
+            .Single(pair => pair.Value == 2);
         adapters.Settings.Current["gfx_gamma"] = OptionScalar.FromNumber(0);
         adapters.Settings.Defaults["gfxResolution"] = OptionScalar.FromText("1920x1080");
         adapters.Persistence.State = adapters.Persistence.State with
         {
             Global = adapters.Persistence.State.Global
                 .SetItem("gfx_gamma", OptionScalar.FromBoolean(true))
-                .SetItem("gfx_fog_factor", OptionScalar.FromNumber(2))
+                .SetItem(rawPresetValue.Key, OptionScalar.FromNumber(rawPresetValue.Value))
                 .SetItem("gfxResolution", OptionScalar.FromBoolean(true)),
             User = adapters.Persistence.State.User
                 .SetItem("chat_bubbles_opacity", OptionScalar.FromNumber(99)),
@@ -341,14 +342,14 @@ public sealed class OptionsRuntimeTests
         Assert.Equal(Row(runtime, "gfx_gamma").Default, Row(runtime, "gfx_gamma").Draft);
         Assert.Equal("1920x1080", Row(runtime, "gfxResolution").Draft.Text);
         Assert.Equal(7, Row(runtime, "chat_bubbles_opacity").Draft.Number);
-        Assert.Equal(1, Row(runtime, "gfx_fog_factor").Draft.Number);
+        Assert.Equal(1, Row(runtime, rawPresetValue.Key).Draft.Number);
         Assert.Contains(runtime.View.Warnings, warning =>
             warning is { Code: OptionsIssueCode.InvalidStoredOption, RelatedId: "gfx_gamma" });
         Assert.Contains(runtime.View.Warnings, warning =>
             warning is { Code: OptionsIssueCode.InvalidStoredOption, RelatedId: "chat_bubbles_opacity" });
         Assert.Contains(runtime.View.Warnings, warning =>
             warning is { Code: OptionsIssueCode.InvalidStoredOption, RelatedId: "gfxResolution" });
-        Assert.DoesNotContain(runtime.View.Warnings, warning => warning.RelatedId == "gfx_fog_factor");
+        Assert.DoesNotContain(runtime.View.Warnings, warning => warning.RelatedId == rawPresetValue.Key);
     }
 
     [Fact]
@@ -428,37 +429,43 @@ public sealed class OptionsRuntimeTests
     }
 
     [Fact]
-    public void UnauthoredRawPresetValueFallsBackButRetailRawValueSurvives()
+    public void UnauthoredRawPresetValueFallsBackButAuthoredRawValuesSurvive()
     {
         OptionsProduct product = OptionsProductFixture.Parse();
+        KeyValuePair<string, double>[] rawPresetValues = product.GraphicsPresets[0].Values
+            .Where(pair => pair.Value is 2 or 3)
+            .OrderBy(pair => pair.Value)
+            .ToArray();
+        Assert.Equal(2, rawPresetValues.Length);
         RecordingOptionsAdapters rejectedAdapters = OptionsProductFixture.Adapters(product);
         rejectedAdapters.Persistence.State = rejectedAdapters.Persistence.State with
         {
             Global = rejectedAdapters.Persistence.State.Global.SetItem(
-                "gfx_fog_factor",
+                rawPresetValues[0].Key,
                 OptionScalar.FromNumber(999)),
         };
         OptionsRuntime rejected = rejectedAdapters.Create(product);
 
         Assert.True(rejected.Open().Succeeded);
-        Assert.Equal(Row(rejected, "gfx_fog_factor").Default, Row(rejected, "gfx_fog_factor").Draft);
-        Assert.Contains(rejected.View.Warnings, warning => warning.RelatedId == "gfx_fog_factor");
+        Assert.Equal(
+            Row(rejected, rawPresetValues[0].Key).Default,
+            Row(rejected, rawPresetValues[0].Key).Draft);
+        Assert.Contains(rejected.View.Warnings, warning => warning.RelatedId == rawPresetValues[0].Key);
         Assert.Throws<ArgumentOutOfRangeException>(() => OptionScalar.FromNumber(double.NaN));
 
         RecordingOptionsAdapters acceptedAdapters = OptionsProductFixture.Adapters(product);
         acceptedAdapters.Persistence.State = acceptedAdapters.Persistence.State with
         {
             Global = acceptedAdapters.Persistence.State.Global
-                .SetItem("gfx_fog_factor", OptionScalar.FromNumber(2))
-                .SetItem("gfx_lod_factor", OptionScalar.FromNumber(3)),
+                .SetItem(rawPresetValues[0].Key, OptionScalar.FromNumber(rawPresetValues[0].Value))
+                .SetItem(rawPresetValues[1].Key, OptionScalar.FromNumber(rawPresetValues[1].Value)),
         };
         OptionsRuntime accepted = acceptedAdapters.Create(product);
 
         Assert.True(accepted.Open().Succeeded);
         Assert.DoesNotContain(accepted.View.Warnings, warning =>
-            warning.RelatedId is "gfx_fog_factor" or "gfx_lod_factor");
-        Assert.Equal(1, Row(accepted, "gfx_fog_factor").Draft.Number);
-        Assert.Equal(1, Row(accepted, "gfx_lod_factor").Draft.Number);
+            rawPresetValues.Any(pair => pair.Key == warning.RelatedId));
+        Assert.All(rawPresetValues, pair => Assert.Equal(1, Row(accepted, pair.Key).Draft.Number));
     }
 
     [Fact]

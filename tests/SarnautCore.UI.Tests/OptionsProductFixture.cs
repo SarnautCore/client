@@ -62,21 +62,24 @@ internal static class OptionsProductFixture
 
     private static JsonArray BuildGraphicsPresets()
     {
-        double[][] rows =
-        [
-            [0, 0, 0.2, 2, 3, 0, 0, 1, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0.6, 1.4, 1.4, 0, 2, 0, 0, 1, 0, 1, 1, 0],
-            [0, 1, 1, 1, 1, 1.7, 3, 0, 0, 1, 1, 1, 1, 1],
-            [2, 2, 1.5, 1, 0.5, 1.7, 4, 0, 0, 2, 1, 1, 1, 1],
-            [4, 3, 2, 1, 0.5, 1.7, 4, 0, 0, 2, 1, 1, 1, 1],
-        ];
         var presets = new JsonArray();
-        for (int index = 0; index < rows.Length; index++)
+        for (int index = 0; index < OptionsProduct.RequiredPresetOrder.Length; index++)
         {
             var values = new JsonObject();
             for (int valueIndex = 0; valueIndex < OptionsProduct.RequiredPresetOptionIds.Length; valueIndex++)
             {
-                values[OptionsProduct.RequiredPresetOptionIds[valueIndex]] = rows[index][valueIndex];
+                string optionId = OptionsProduct.RequiredPresetOptionIds[valueIndex];
+                double syntheticValue = (index + valueIndex) % 2;
+                if (index == 0 && valueIndex == 0)
+                {
+                    syntheticValue = 2;
+                }
+                else if (index == 0 && valueIndex == 1)
+                {
+                    syntheticValue = 3;
+                }
+
+                values[optionId] = syntheticValue;
             }
 
             presets.Add(new JsonObject
