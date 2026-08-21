@@ -19,8 +19,11 @@ internal static class ConvertedSceneLoader
     private static readonly Regex SkinnedMeshObjFallback = new(
         "^\\[ext_resource type=\"Mesh\" path=\"res://assets/[^\"]+\" id=\"mesh\"\\]\\r?\\n",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Multiline);
+    // VRAM-compressed imports write format-suffixed remap keys ("path.s3tc=",
+    // "path.etc2=", ...) instead of a plain "path=" line, so the suffix is part
+    // of the pattern.
     private static readonly Regex ImportedResourcePath = new(
-        "^path=\"(?<path>res://\\.godot/imported/[^\"]+)\"",
+        "^path(?:\\.[a-z0-9_]+)?=\"(?<path>res://\\.godot/imported/[^\"]+)\"",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Multiline);
     private static readonly Regex AnimationResourceLine = new(
         "^\\[ext_resource type=\"Animation\" path=\"(?<path>[^\"]+)\" id=\"(?<id>[^\"]+)\"\\]\\r?\\n",
@@ -34,6 +37,12 @@ internal static class ConvertedSceneLoader
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Multiline);
     private static readonly Regex AnimationLibraryEntry = new(
         "&\"(?<name>[^\"]+)\"\\s*:\\s*ExtResource\\(\"(?<id>[^\"]+)\"\\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex SceneNodeHeader = new(
+        "^\\[node name=\"(?<name>[^\"]+)\"(?<rest>[^\\]]*)\\]",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Multiline);
+    private static readonly Regex SceneNodeParent = new(
+        " parent=\"(?<parent>[^\"]*)\"",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Dictionary<string, PackedScene?> SceneCache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, Resource?> ResourceCache = new(StringComparer.OrdinalIgnoreCase);
@@ -78,6 +87,14 @@ internal static class ConvertedSceneLoader
             source = SkinnedMeshObjFallback.Replace(source, string.Empty);
             source = source.Replace("mesh = ExtResource(\"mesh\")\r\n", string.Empty, StringComparison.Ordinal)
                 .Replace("mesh = ExtResource(\"mesh\")\n", string.Empty, StringComparison.Ordinal);
+            // Regenerated scenes hardwire the ImporterMesh LOD script on the
+            // root, which cannot re-dress a character at runtime. This flag's
+            // contract is the runtime ArrayMesh route, whose class exposes
+            // ApplyAppearance for per-slot geosets and body atlases.
+            source = source.Replace(
+                "res://src/GodotNative/ConvertedImporterMesh.cs",
+                "res://src/GodotNative/ConvertedSkinnedMesh.cs",
+                StringComparison.Ordinal);
         }
 
         if (locomotionOnly)
@@ -115,7 +132,8 @@ internal static class ConvertedSceneLoader
             child.TakeOverPath(childPath);
         }
 
-        string relocated = source.Replace("res://assets/", assetsRoot, StringComparison.Ordinal);
+        string relocated = DeduplicateSiblingNames(
+            source.Replace("res://assets/", assetsRoot, StringComparison.Ordinal));
         if (!TryWritePatchedCopy(cacheKey, relocated, ".tscn", out string cachePath, out string writeError))
         {
             return Fail(cacheKey, writeError, out error);
@@ -195,6 +213,12 @@ internal static class ConvertedSceneLoader
                 out error);
         }
 
+        // Texture references inside a converted .tres (ImporterMesh surface
+        // materials, theme icons) are ext_resource paths Godot has already
+        // resolved by now, so the upscaled variant is substituted on the loaded
+        // object rather than in the patched text. Done once per cache entry.
+        UpscaledTextures.Retexture(typed);
+
         typed.TakeOverPath(normalizedPath);
         ResourceCache[cacheKey] = typed;
         ErrorCache[cacheKey] = string.Empty;
@@ -212,8 +236,17 @@ internal static class ConvertedSceneLoader
         string importPath = resourcePath + ".import";
         if (FileAccess.FileExists(importPath))
         {
-            Match imported = ImportedResourcePath.Match(FileAccess.GetFileAsString(importPath));
-            return imported.Success && FileAccess.FileExists(imported.Groups["path"].Value);
+            // Any one existing compiled artifact makes the resource loadable:
+            // the editor only compiles the formats this machine renders with.
+            foreach (Match imported in ImportedResourcePath.Matches(FileAccess.GetFileAsString(importPath)))
+            {
+                if (FileAccess.FileExists(imported.Groups["path"].Value))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         return ResourceLoader.Exists(resourcePath, typeHint);
@@ -244,6 +277,43 @@ internal static class ConvertedSceneLoader
                 .Where(entry => keptIds.Contains(entry.Groups["id"].Value))
                 .Select(entry => entry.Value);
             return $"_data = {{{string.Join(", ", entries)}}}";
+        });
+    }
+
+    /// <summary>
+    /// Renames colliding sibling nodes ("Widget", "Widget2", ...). The converter
+    /// names every widget-layer scene root "Widget", so a panel composing two
+    /// layers declares two same-named siblings; Godot then silently drops the
+    /// later one at instantiation — created and leaked at exit, never rendered.
+    /// Only later duplicates are renamed, so paths to the first sibling keep
+    /// resolving exactly as before.
+    /// </summary>
+    private static string DeduplicateSiblingNames(string source)
+    {
+        var taken = new HashSet<string>(StringComparer.Ordinal);
+        return SceneNodeHeader.Replace(source, match =>
+        {
+            string rest = match.Groups["rest"].Value;
+            Match parentMatch = SceneNodeParent.Match(rest);
+            if (!parentMatch.Success)
+            {
+                return match.Value;
+            }
+
+            string name = match.Groups["name"].Value;
+            string parent = parentMatch.Groups["parent"].Value;
+            if (taken.Add($"{parent}\n{name}"))
+            {
+                return match.Value;
+            }
+
+            int suffix = 2;
+            while (!taken.Add($"{parent}\n{name}{suffix}"))
+            {
+                suffix++;
+            }
+
+            return $"[node name=\"{name}{suffix}\"{rest}]";
         });
     }
 

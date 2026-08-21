@@ -20,6 +20,7 @@ public partial class ConvertedCharacter : Node3D
     public int SkeletonBoneCount { get; private set; }
     public int ClipCount { get; private set; }
     public string ActiveClip { get; private set; } = string.Empty;
+    public bool IsAnimationPlaying => _animationPlayer?.IsPlaying() == true;
     public string LastError { get; private set; } = string.Empty;
     public Node3D? Model { get; private set; }
 
@@ -80,8 +81,23 @@ public partial class ConvertedCharacter : Node3D
         _animationPlayer!.AnimationFinished += OnAnimationFinished;
         HasConvertedModel = true;
         LastError = string.Empty;
+        EnsureSampledLight();
         Play(_idleClip, 0);
         return true;
+    }
+
+    /// <summary>
+    /// Attaches the per-character baked-light fill. Inside a loaded zone it
+    /// samples the bake under the character (BakedLightProbe.Active); outside a
+    /// zone it stays dark and invisible, so chargen and viewer rigs keep their
+    /// own neutral lighting.
+    /// </summary>
+    private void EnsureSampledLight()
+    {
+        if (GetNodeOrNull<SampledEntityLight>("SampledBakedLight") == null)
+        {
+            AddChild(new SampledEntityLight());
+        }
     }
 
     public void SetMoving(bool moving)
@@ -147,6 +163,10 @@ public partial class ConvertedCharacter : Node3D
 
     private bool Fail(string message)
     {
+        // The incomplete-rig path frees the model this player lives in;
+        // keeping the reference would let IsAnimationPlaying touch a freed
+        // object.
+        _animationPlayer = null;
         HasConvertedModel = false;
         SkeletonBoneCount = 0;
         ClipCount = 0;
@@ -157,6 +177,8 @@ public partial class ConvertedCharacter : Node3D
         {
             Model = CreatePlaceholder();
             AddChild(Model);
+            DynamicEntityLighting.MarkReceivers(Model);
+            EnsureSampledLight();
         }
 
         return false;
