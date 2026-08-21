@@ -8,7 +8,7 @@
 [sub_resource type="Environment" id="Environment_walkabout"]
 background_mode = 1
 background_color = Color(0.115, 0.145, 0.19, 1)
-ambient_light_source = 3
+ambient_light_source = 2
 ambient_light_color = Color(0.68, 0.74, 0.82, 1)
 ambient_light_energy = 0.55
 tonemap_mode = 2
@@ -49,6 +49,8 @@ environment = SubResource("Environment_walkabout")
 rotation_degrees = Vector3(-52, -28, 0)
 light_energy = 1.15
 shadow_enabled = true
+shadow_opacity = 0.55
+directional_shadow_blend_splits = true
 directional_shadow_max_distance = 600.0
 
 [node name="ZoneLoader" type="Node3D" parent="."]
@@ -110,6 +112,7 @@ layout_mode = 2
 size_flags_vertical = 3
 
 [node name="HelpPanel" type="PanelContainer" parent="Interface/Margin/Column"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_styles/panel = SubResource("Panel_help")
 
@@ -117,4 +120,5 @@ theme_override_styles/panel = SubResource("Panel_help")
 layout_mode = 2
 text = "WASD move  |  1 cast  |  E interact  |  I bags  |  J quests  |  Tab/left-click target  |  Esc close/release/back"
 horizontal_alignment = 1
+autowrap_mode = 2
 theme_override_colors/font_color = Color(0.76, 0.81, 0.88, 1)

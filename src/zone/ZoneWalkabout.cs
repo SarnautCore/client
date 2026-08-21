@@ -35,6 +35,12 @@ public partial class ZoneWalkabout : Node3D
     /// </summary>
     [Export] public NodePath StatusLabelPath { get; set; } = new("%Status");
 
+    /// <summary>
+    /// The scene-owned bottom overlay that the ability bar must stay above.
+    /// Its measured rectangle includes wrapping at the active viewport width.
+    /// </summary>
+    [Export] public NodePath HelpPanelPath { get; set; } = new("%HelpPanel");
+
     private SessionHost _session = null!;
     private readonly GameplayFocusOwner _focus = new();
     private ZoneLoader _loader = null!;
@@ -44,6 +50,18 @@ public partial class ZoneWalkabout : Node3D
     private GameplayHudControl? _hudControl;
     private Label _status = null!;
     private string _zoneStatus = "";
+
+    public override void _EnterTree()
+    {
+        // Parent _EnterTree runs before the child character's _Ready, so the
+        // selected rig is in place before ConvertedCharacter auto-loads it.
+        SessionHost session = SessionHost.Of(this);
+        ConvertedCharacter? character = GetNodeOrNull<ConvertedCharacter>("Walker/Character");
+        if (character != null)
+        {
+            PlayerCharacterModel.Apply(character, session.Player.Option);
+        }
+    }
 
     public override void _Ready()
     {
@@ -69,6 +87,9 @@ public partial class ZoneWalkabout : Node3D
             return;
         }
 
+        ApplyAuthoredEnvironment(
+            mapName,
+            string.IsNullOrWhiteSpace(request.ZoneId) ? DefaultZoneId : request.ZoneId);
         _walker.Position = _loader.SuggestedSpawnPosition;
         _zoneStatus =
             $"{mapName}  |  {_loader.TerrainTileCount} terrain tiles  |  {_loader.VisualObjectCount} visual objects";
@@ -93,15 +114,15 @@ public partial class ZoneWalkabout : Node3D
             abilities:
             [
                 new AbilityDefinition(
-                    "ability.melee.harbor-cleave",
-                    "ability.melee.harbor-cleave.name",
+                    "ability.melee.novice-cleave",
+                    "M2.Ability.NoviceCleave.Name",
                     string.Empty),
             ],
             inventoryCapacity: 16,
             stackLimit: _ => 20,
             focus: _focus);
         _hudControl = new GameplayHudControl();
-        _hudControl.Initialize(_hudModel, _networkLoop);
+        _hudControl.Initialize(_hudModel, _networkLoop, GetNode<Control>(HelpPanelPath));
         GetNode<CanvasLayer>("Interface").AddChild(_hudControl);
         _networkLoop.Start(
             _walker,
@@ -116,6 +137,63 @@ public partial class ZoneWalkabout : Node3D
             SetNetworkStatus,
             OnAdmitted,
             OnRefused);
+    }
+
+    /// <summary>
+    /// Replaces the scene's hand-authored lighting with the zone's authored 1.1
+    /// environment (ZoneLights: ambient, sun, fog, post exposure). The scene
+    /// defaults only survive when the converted data does not carry the zone.
+    /// </summary>
+    private void ApplyAuthoredEnvironment(string mapName, string zoneId)
+    {
+        WorldEnvironment? worldEnvironment = GetNodeOrNull<WorldEnvironment>("WorldEnvironment");
+        DirectionalLight3D? sun = GetNodeOrNull<DirectionalLight3D>("Sun");
+        if (worldEnvironment?.Environment == null || sun == null)
+        {
+            return;
+        }
+
+        var tree = new AllodsResourceTree(_loader.ConvertedRoot);
+        if (!ZoneEnvironmentSettings.TryLoad(tree, mapName, zoneId, out ZoneEnvironmentSettings authored, out string error))
+        {
+            GD.PushWarning($"ZoneWalkabout keeps placeholder lighting: {error}");
+            return;
+        }
+
+        authored.Apply(worldEnvironment.Environment, sun);
+        _loader.ApplyZoneLighting(authored);
+        AddAuthoredSkydome(authored);
+        GD.Print(
+            $"ZoneWalkabout: authored environment {authored.SourcePath} | ambient={authored.AmbientColor} "
+            + $"sun={authored.SunColor} fog={authored.FogColor} {authored.FogStart}..{authored.FogEnd} "
+            + $"exposure={authored.ExposureMultiplier} sky={authored.SkyMeshSource}");
+    }
+
+    /// <summary>
+    /// Instances the zone's authored skydome behind the world. The fog-colored
+    /// background stays beneath it for zones whose sky meshes are unavailable.
+    /// </summary>
+    private void AddAuthoredSkydome(ZoneEnvironmentSettings authored)
+    {
+        if (GetNodeOrNull<ZoneSkydome>("Skydome") != null)
+        {
+            return;
+        }
+
+        var tree = new AllodsResourceTree(_loader.ConvertedRoot);
+        ZoneSkydome? skydome = ZoneSkydome.TryCreate(tree, _loader.ConvertedRoot, authored.SkyMeshSource);
+        if (skydome == null)
+        {
+            if (!string.IsNullOrEmpty(authored.SkyMeshSource))
+            {
+                GD.PushWarning($"ZoneWalkabout: authored skydome unavailable: {authored.SkyMeshSource}");
+            }
+
+            return;
+        }
+
+        AddChild(skydome);
+        GD.Print($"ZoneWalkabout: skydome {authored.SkyMeshSource} parts={skydome.PartCount}");
     }
 
     private void SetNetworkStatus(string networkStatus)
