@@ -1,12 +1,14 @@
 using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.IO;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Godot;
 using Sarnaut.Protocol.V1;
 using SarnautCore.Gameplay;
+using SarnautCore.NativeHud;
 using SarnautCore.Networking;
 using SarnautCore.Shell;
 
@@ -41,6 +43,7 @@ public partial class ZoneNetworkLoop : Node
     private Action<string> _setStatus = null!;
     private Action? _onAdmitted;
     private Action<string>? _onRefused;
+    private SessionHudAdapter? _hudSession;
     private Task? _networkTask;
     private ulong _ownEntityId;
     private double _statusAccumulator;
@@ -70,6 +73,33 @@ public partial class ZoneNetworkLoop : Node
 
     /// <summary>Raised when the selection changes, with 0 for a cleared target.</summary>
     public event Action<ulong>? TargetChanged;
+
+    /// <summary>The attached native HUD session port.</summary>
+    public IHudSession HudSession => _hudSession ??
+        throw new InvalidOperationException("No native HUD session adapter is attached.");
+
+    /// <summary>
+    /// Attaches the one adapter that observes this loop's session. Call this before Start so
+    /// no authoritative message can arrive before the subscription exists.
+    /// </summary>
+    public void AttachHudSession(SessionHudAdapter adapter)
+    {
+        ArgumentNullException.ThrowIfNull(adapter);
+        if (_networkTask is not null)
+        {
+            throw new InvalidOperationException("The HUD session adapter must be attached before the network loop starts.");
+        }
+
+        if (_hudSession is not null)
+        {
+            throw new InvalidOperationException("A HUD session adapter is already attached.");
+        }
+
+        _hudSession = adapter;
+    }
+
+    /// <summary>Queues one protocol-neutral HUD command for this session loop.</summary>
+    public bool TryEnqueueHudCommand(in HudCommand command) => _hudSession?.TryWrite(command) == true;
 
     /// <param name="ticket">
     /// The opaque single-use shard ticket the account service minted for this
@@ -121,6 +151,7 @@ public partial class ZoneNetworkLoop : Node
     public override void _Process(double delta)
     {
         DrainConnectionUpdates();
+        DrainHudCommands();
         while (_receivedMessages.TryDequeue(out ServerMessage? message))
         {
             ApplyServerMessage(message);
@@ -157,6 +188,7 @@ public partial class ZoneNetworkLoop : Node
         _shutdown.Cancel();
         _moveIntents.Writer.TryComplete();
         _commands.Writer.TryComplete();
+        _hudSession?.Close();
         _shutdown.Dispose();
     }
 
@@ -329,6 +361,8 @@ public partial class ZoneNetworkLoop : Node
                 ticket: ticket.Reveal(),
                 cancellationToken: cancellationToken);
 
+            _hudSession?.BindOwnEntity(session.EnteredZone.OwnEntityId);
+
             _connectionUpdates.Enqueue(ConnectionUpdate.Ready(
                 session.EnteredZone.OwnEntityId,
                 session.EnteredZone.SpawnPosition ?? new Sarnaut.Protocol.V1.Vec3(),
@@ -352,6 +386,7 @@ public partial class ZoneNetworkLoop : Node
         }
         catch (Exception exception)
         {
+            _hudSession?.ReportTransportFault(exception.Message);
             _connectionUpdates.Enqueue(ConnectionUpdate.Failed(exception.Message));
         }
     }
@@ -376,6 +411,13 @@ public partial class ZoneNetworkLoop : Node
         while (!cancellationToken.IsCancellationRequested)
         {
             ServerMessage message = await session.ReadAsync(cancellationToken);
+            SessionHudObservation observation = _hudSession?.Observe(message) ?? SessionHudObservation.NotSubscribed;
+            if (observation == SessionHudObservation.Terminal && _hudSession?.State == HudSessionState.Faulted)
+            {
+                throw new InvalidDataException(
+                    $"Native HUD session adapter faulted: {_hudSession.Fault?.Code} {_hudSession.Fault?.Detail}".TrimEnd());
+            }
+
             if (message.PayloadCase == ServerMessage.PayloadOneofCase.SnapshotBatch)
             {
                 _receivedSnapshots.Enqueue(message.SnapshotBatch);
@@ -532,6 +574,36 @@ public partial class ZoneNetworkLoop : Node
         if (_connected)
         {
             _commands.Writer.TryWrite(message);
+        }
+    }
+
+    private void DrainHudCommands()
+    {
+        if (!_connected || _hudSession is null)
+        {
+            return;
+        }
+
+        while (_hudSession.TryTakeCommand(out HudCommand command))
+        {
+            switch (command.Kind)
+            {
+                case HudCommandKind.SelectWorldEntity:
+                    SetTarget(command.EntityId);
+                    break;
+                case HudCommandKind.InteractWorldEntity:
+                    RequestInteract(command.EntityId);
+                    break;
+                case HudCommandKind.ActivateAction:
+                    RequestAbilityUse(new AbilityUseRequest(
+                        command.Value.Value,
+                        TargetEntityId,
+                        _timeline.LatestServerTick));
+                    break;
+                default:
+                    _hudSession.ReportTransportFault($"Unsupported queued HUD command {command.Kind}.");
+                    return;
+            }
         }
     }
 

@@ -13,4 +13,8 @@
     <PackageReference Include="Grpc.Tools" Version="2.83.0" PrivateAssets="All" />
     <Protobuf Include="Proto\sarnaut\v1\*.proto" ProtoRoot="Proto" GrpcServices="None" />
   </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../SarnautCore.NativeHud/SarnautCore.NativeHud.csproj" />
+  </ItemGroup>
 </Project>
