@@ -15,7 +15,6 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" PrivateAssets="All" />
     <ProjectReference Include="../../src/SarnautCore.UI/SarnautCore.UI.csproj" />
   </ItemGroup>
-
   <ItemGroup>
     <None Include="../fixtures/native-ui-product/ui-product.json"
           Link="fixtures/native-ui-product/ui-product.json"

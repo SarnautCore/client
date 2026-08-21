@@ -134,6 +134,7 @@ internal static class UiManifestJson
             throw new InvalidDataException(
                 $"{context}.{property} must be a confined product-relative {extension} path");
         }
+        UiRuntimeKey.RejectNonProductVocabulary(value, $"{context}.{property}");
         return new NativeContentPath(value);
     }
 
@@ -147,6 +148,7 @@ internal static class UiManifestJson
         {
             throw new InvalidDataException($"{context}.{property} must be a confined scene node address");
         }
+        UiRuntimeKey.RejectNonProductVocabulary(value, $"{context}.{property}");
         return value;
     }
 
