@@ -4,6 +4,7 @@ public enum HudEventKind
 {
     ActionSlotChanged,
     ActionSlotCleared,
+    TargetSelectionChanged,
     UnitChanged,
     UnitRemoved,
     FeedbackRaised,
@@ -12,11 +13,25 @@ public enum HudEventKind
     QuestUntracked,
     ChatReceived,
     ChatRemoved,
+    InventoryReplaced,
+    LootReplaced,
+    QuestLogReplaced,
+    QuestInfoReplaced,
+    CharacterReplaced,
 }
 
 public readonly record struct HudUnitPresentation(HudPlateAssignment Plate, bool OvertipCandidate)
 {
     public static HudUnitPresentation OvertipOnly => new(HudPlateAssignment.None, true);
+}
+
+public enum HudTargetSelectionRefusal
+{
+    Unspecified = 0,
+    None = 1,
+    NoTarget = 2,
+    InvalidTarget = 3,
+    TargetDead = 4,
 }
 
 public readonly record struct HudQuestObjective(uint Index, HudId TextId, int Current, int Required, bool ShowCount);
@@ -101,18 +116,34 @@ public readonly record struct HudEvent(
     HudFeedbackKind FeedbackKind,
     HudQuestSnapshot? Quest,
     HudChatMessage? Chat,
-    HudUnitPresentation UnitPresentation)
+    HudUnitPresentation UnitPresentation,
+    HudInventorySnapshot? Inventory,
+    HudLootSnapshot? Loot,
+    HudQuestLogSnapshot? QuestLog,
+    HudQuestInfoSnapshot? QuestInfo,
+    HudCharacterSnapshot? Character)
 {
     public static HudEvent ActionSlotChanged(
         HudStamp stamp,
         int slot,
         HudId abilityId,
         int cooldownMilliseconds,
-        bool enabled = true) =>
-        new(HudEventKind.ActionSlotChanged, stamp, HudId.Empty, 0, slot, cooldownMilliseconds, 0, enabled, abilityId, default, null, null, default);
+        bool enabled = true,
+        int cooldownDurationMilliseconds = -1) =>
+        new(HudEventKind.ActionSlotChanged, stamp, HudId.Empty, 0, slot, cooldownMilliseconds,
+            cooldownDurationMilliseconds < 0 ? cooldownMilliseconds : cooldownDurationMilliseconds,
+            enabled, abilityId, default, null, null, default, null, null, null, null, null);
 
     public static HudEvent ActionSlotCleared(HudStamp stamp, int slot) =>
-        new(HudEventKind.ActionSlotCleared, stamp, HudId.Empty, 0, slot, 0, 0, false, HudId.Empty, default, null, null, default);
+        new(HudEventKind.ActionSlotCleared, stamp, HudId.Empty, 0, slot, 0, 0, false, HudId.Empty, default, null, null, default, null, null, null, null, null);
+
+    /// <summary>Authoritative selected target; entity zero explicitly clears selection.</summary>
+    public static HudEvent TargetSelectionChanged(
+        HudStamp stamp,
+        ulong entityId,
+        HudTargetSelectionRefusal refusal = HudTargetSelectionRefusal.None) =>
+        new(HudEventKind.TargetSelectionChanged, stamp, HudId.Empty, entityId, -1, 0, (int)refusal, true,
+            HudId.Empty, default, null, null, default, null, null, null, null, null);
 
     public static HudEvent UnitChanged(
         HudStamp stamp,
@@ -122,10 +153,10 @@ public readonly record struct HudEvent(
         int maximumHealth,
         HudUnitPresentation? presentation = null) =>
         new(HudEventKind.UnitChanged, stamp, HudId.Empty, entityId, -1, health, maximumHealth, true, name, default, null, null,
-            presentation ?? HudUnitPresentation.OvertipOnly);
+            presentation ?? HudUnitPresentation.OvertipOnly, null, null, null, null, null);
 
     public static HudEvent UnitRemoved(HudStamp stamp, ulong entityId) =>
-        new(HudEventKind.UnitRemoved, stamp, HudId.Empty, entityId, -1, 0, 0, false, HudId.Empty, default, null, null, default);
+        new(HudEventKind.UnitRemoved, stamp, HudId.Empty, entityId, -1, 0, 0, false, HudId.Empty, default, null, null, default, null, null, null, null, null);
 
     public static HudEvent FeedbackRaised(
         HudStamp stamp,
@@ -134,33 +165,59 @@ public readonly record struct HudEvent(
         ulong entityId,
         int amount,
         bool critical = false) =>
-        new(HudEventKind.FeedbackRaised, stamp, eventId, entityId, -1, amount, 0, critical, HudId.Empty, kind, null, null, default);
+        new(HudEventKind.FeedbackRaised, stamp, eventId, entityId, -1, amount, 0, critical, HudId.Empty, kind, null, null, default, null, null, null, null, null);
 
     public static HudEvent FeedbackCancelled(HudStamp stamp, HudId eventId) =>
-        new(HudEventKind.FeedbackCancelled, stamp, eventId, 0, -1, 0, 0, false, HudId.Empty, default, null, null, default);
+        new(HudEventKind.FeedbackCancelled, stamp, eventId, 0, -1, 0, 0, false, HudId.Empty, default, null, null, default, null, null, null, null, null);
 
     public static HudEvent QuestTracked(HudStamp stamp, HudQuestSnapshot snapshot) =>
-        new(HudEventKind.QuestTracked, stamp, HudId.Empty, 0, -1, 0, 0, false, snapshot.QuestId, default, snapshot, null, default);
+        new(HudEventKind.QuestTracked, stamp, HudId.Empty, 0, -1, 0, 0, false, snapshot.QuestId, default, snapshot, null, default, null, null, null, null, null);
 
     public static HudEvent QuestUntracked(HudStamp stamp, HudId questId) =>
-        new(HudEventKind.QuestUntracked, stamp, HudId.Empty, 0, -1, 0, 0, false, questId, default, null, null, default);
+        new(HudEventKind.QuestUntracked, stamp, HudId.Empty, 0, -1, 0, 0, false, questId, default, null, null, default, null, null, null, null, null);
 
     public static HudEvent ChatReceived(HudStamp stamp, HudChatMessage message)
     {
         message.Validate();
         return new HudEvent(HudEventKind.ChatReceived, stamp, message.EventId, message.SenderEntityId, -1, 0, 0,
-            message.WorldBubble, message.ChannelId, default, null, message, default);
+            message.WorldBubble, message.ChannelId, default, null, message, default, null, null, null, null, null);
     }
 
     public static HudEvent ChatRemoved(HudStamp stamp, HudId eventId) =>
-        new(HudEventKind.ChatRemoved, stamp, eventId, 0, -1, 0, 0, false, HudId.Empty, default, null, null, default);
+        new(HudEventKind.ChatRemoved, stamp, eventId, 0, -1, 0, 0, false, HudId.Empty, default, null, null, default, null, null, null, null, null);
+
+    public static HudEvent InventoryReplaced(HudStamp stamp, HudInventorySnapshot snapshot) =>
+        new(HudEventKind.InventoryReplaced, stamp, HudId.Empty, 0, -1, 0, 0, false, HudId.Empty, default,
+            null, null, default, snapshot, null, null, null, null);
+
+    public static HudEvent LootReplaced(HudStamp stamp, HudLootSnapshot snapshot) =>
+        new(HudEventKind.LootReplaced, stamp, HudId.Empty, snapshot.CorpseEntityId, -1, 0, 0, snapshot.Open,
+            HudId.Empty, default, null, null, default, null, snapshot, null, null, null);
+
+    public static HudEvent QuestLogReplaced(HudStamp stamp, HudQuestLogSnapshot snapshot) =>
+        new(HudEventKind.QuestLogReplaced, stamp, HudId.Empty, 0, -1, 0, 0, false, HudId.Empty, default,
+            null, null, default, null, null, snapshot, null, null);
+
+    public static HudEvent QuestInfoReplaced(HudStamp stamp, HudQuestInfoSnapshot snapshot) =>
+        new(HudEventKind.QuestInfoReplaced, stamp, HudId.Empty, snapshot.NpcEntityId, -1, 0, 0,
+            snapshot.Mode != HudQuestInfoMode.None, snapshot.Quest?.QuestId ?? HudId.Empty, default,
+            null, null, default, null, null, null, snapshot, null);
+
+    public static HudEvent CharacterReplaced(HudStamp stamp, HudCharacterSnapshot snapshot) =>
+        new(HudEventKind.CharacterReplaced, stamp, HudId.Empty, 0, -1, snapshot.Level, 0, false,
+            snapshot.NameId, default, null, null, default, null, null, null, null, snapshot);
 
     internal bool PayloadEquals(in HudEvent other) =>
         Kind == other.Kind && EventId == other.EventId && EntityId == other.EntityId && Slot == other.Slot &&
         Value == other.Value && Auxiliary == other.Auxiliary && Flag == other.Flag &&
         ContentId == other.ContentId && FeedbackKind == other.FeedbackKind &&
         (ReferenceEquals(Quest, other.Quest) || (Quest is not null && other.Quest is not null && Quest.ContentEquals(other.Quest))) &&
-        Equals(Chat, other.Chat) && UnitPresentation == other.UnitPresentation;
+        Equals(Chat, other.Chat) && UnitPresentation == other.UnitPresentation &&
+        (ReferenceEquals(Inventory, other.Inventory) || (Inventory is not null && other.Inventory is not null && Inventory.ContentEquals(other.Inventory))) &&
+        (ReferenceEquals(Loot, other.Loot) || (Loot is not null && other.Loot is not null && Loot.ContentEquals(other.Loot))) &&
+        (ReferenceEquals(QuestLog, other.QuestLog) || (QuestLog is not null && other.QuestLog is not null && QuestLog.ContentEquals(other.QuestLog))) &&
+        (ReferenceEquals(QuestInfo, other.QuestInfo) || (QuestInfo is not null && other.QuestInfo is not null && QuestInfo.ContentEquals(other.QuestInfo))) &&
+        (ReferenceEquals(Character, other.Character) || (Character is not null && other.Character is not null && Character.ContentEquals(other.Character)));
 }
 
 public enum HudInputKind
@@ -183,6 +240,35 @@ public enum HudInputKind
     DragStarted,
     DragEnded,
     SubmitChat,
+    ToggleInventory,
+    CloseInventory,
+    MoveInventoryItem,
+    DropInventoryItem,
+    UseInventoryItem,
+    DressInventoryItem,
+    UndressInventoryItem,
+    TakeLootItem,
+    TakeLootMoney,
+    TakeAllLoot,
+    LootPreviousPage,
+    LootNextPage,
+    CloseLoot,
+    ToggleQuestLog,
+    CloseQuestLog,
+    SelectQuest,
+    AbandonQuest,
+    ConfirmAbandonQuest,
+    DeclineAbandonQuest,
+    ShareQuest,
+    AcceptSharedQuest,
+    DeclineSharedQuest,
+    SelectTalkOption,
+    SelectQuestReward,
+    AcceptQuest,
+    TurnInQuest,
+    CloseQuestInfo,
+    ToggleCharacter,
+    CloseCharacter,
 }
 
 public enum HudPointerSource
@@ -197,28 +283,33 @@ public readonly record struct HudInput(
     HudId Target,
     ulong EntityId,
     int Slot,
+    int Auxiliary,
     HudFocus Focus,
     HudPoint Pointer,
     HudPoint MaskPoint,
     float MaskAlpha,
     bool HasMaskSample,
     HudId Text,
-    HudPointerSource PointerSource)
+    HudPointerSource PointerSource,
+    int Value = 0,
+    bool Flag = false,
+    HudId SecondaryTarget = default,
+    long Amount = 0)
 {
-    public static HudInput ActivateAction(int slot) => new(HudInputKind.ActivateAction, HudId.Empty, 0, slot, default, default, default, 0, false, HudId.Empty, default);
+    public static HudInput ActivateAction(int slot) => new(HudInputKind.ActivateAction, HudId.Empty, 0, slot, -1, default, default, default, 0, false, HudId.Empty, default);
 
-    public static HudInput SelectWorldEntity(ulong entityId) => new(HudInputKind.SelectWorldEntity, HudId.Empty, entityId, -1, default, default, default, 0, false, HudId.Empty, default);
+    public static HudInput SelectWorldEntity(ulong entityId) => new(HudInputKind.SelectWorldEntity, HudId.Empty, entityId, -1, -1, default, default, default, 0, false, HudId.Empty, default);
 
-    public static HudInput InteractWorldEntity(ulong entityId) => new(HudInputKind.InteractWorldEntity, HudId.Empty, entityId, -1, default, default, default, 0, false, HudId.Empty, default);
+    public static HudInput InteractWorldEntity(ulong entityId) => new(HudInputKind.InteractWorldEntity, HudId.Empty, entityId, -1, -1, default, default, default, 0, false, HudId.Empty, default);
 
-    public static HudInput RequestFocus(HudFocus focus) => new(HudInputKind.RequestFocus, HudId.Empty, 0, -1, focus, default, default, 0, false, HudId.Empty, default);
+    public static HudInput RequestFocus(HudFocus focus) => new(HudInputKind.RequestFocus, HudId.Empty, 0, -1, -1, focus, default, default, 0, false, HudId.Empty, default);
 
-    public static HudInput ReleaseFocus(HudFocus focus) => new(HudInputKind.ReleaseFocus, HudId.Empty, 0, -1, focus, default, default, 0, false, HudId.Empty, default);
+    public static HudInput ReleaseFocus(HudFocus focus) => new(HudInputKind.ReleaseFocus, HudId.Empty, 0, -1, -1, focus, default, default, 0, false, HudId.Empty, default);
 
-    public static HudInput Cancel() => new(HudInputKind.Cancel, HudId.Empty, 0, -1, default, default, default, 0, false, HudId.Empty, default);
+    public static HudInput Cancel() => new(HudInputKind.Cancel, HudId.Empty, 0, -1, -1, default, default, default, 0, false, HudId.Empty, default);
 
     public static HudInput PointerMoved(HudId target, HudPoint pointer, HudPointerSource source, float maskAlpha = 0, bool hasMaskSample = false, HudPoint maskPoint = default) =>
-        new(HudInputKind.PointerMoved, target, 0, -1, default, pointer, maskPoint, maskAlpha, hasMaskSample, HudId.Empty, source);
+        new(HudInputKind.PointerMoved, target, 0, -1, -1, default, pointer, maskPoint, maskAlpha, hasMaskSample, HudId.Empty, source);
 
     public static HudInput PointerEvent(HudInputKind kind, HudId target, HudPoint pointer, HudPointerSource source, float maskAlpha = 0, bool hasMaskSample = false, HudPoint maskPoint = default)
     {
@@ -227,10 +318,57 @@ public readonly record struct HudInput(
             throw new ArgumentOutOfRangeException(nameof(kind));
         }
 
-        return new HudInput(kind, target, 0, -1, default, pointer, maskPoint, maskAlpha, hasMaskSample, HudId.Empty, source);
+        return new HudInput(kind, target, 0, -1, -1, default, pointer, maskPoint, maskAlpha, hasMaskSample, HudId.Empty, source);
     }
 
-    public static HudInput SubmitChat(HudId text) => new(HudInputKind.SubmitChat, HudId.Empty, 0, -1, default, default, default, 0, false, text, default);
+    public static HudInput SubmitChat(HudId text) => new(HudInputKind.SubmitChat, HudId.Empty, 0, -1, -1, default, default, default, 0, false, text, default);
+
+    public static HudInput ToggleInventory() => Context(HudInputKind.ToggleInventory);
+    public static HudInput CloseInventory() => Context(HudInputKind.CloseInventory);
+    public static HudInput MoveInventoryItem(int fromSlot, int toSlot, bool moveNoMore = false) =>
+        Context(HudInputKind.MoveInventoryItem, slot: fromSlot, auxiliary: toSlot, flag: moveNoMore);
+    public static HudInput DropInventoryItem(int slot, int count) =>
+        Context(HudInputKind.DropInventoryItem, slot: slot, value: count);
+    public static HudInput UseInventoryItem(int slot) => Context(HudInputKind.UseInventoryItem, slot: slot);
+    public static HudInput DressInventoryItem(int slot) => Context(HudInputKind.DressInventoryItem, slot: slot);
+    public static HudInput UndressInventoryItem(int equipmentSlot) => Context(HudInputKind.UndressInventoryItem, slot: equipmentSlot);
+    public static HudInput TakeLootItem(int entry) => Context(HudInputKind.TakeLootItem, slot: entry);
+    public static HudInput TakeLootMoney(long amount = -1) => Context(HudInputKind.TakeLootMoney, amount: amount);
+    public static HudInput TakeAllLoot() => Context(HudInputKind.TakeAllLoot);
+    public static HudInput TakeLoot() => TakeAllLoot();
+    public static HudInput LootPreviousPage() => Context(HudInputKind.LootPreviousPage);
+    public static HudInput LootNextPage() => Context(HudInputKind.LootNextPage);
+    public static HudInput CloseLoot() => Context(HudInputKind.CloseLoot);
+    public static HudInput ToggleQuestLog() => Context(HudInputKind.ToggleQuestLog);
+    public static HudInput CloseQuestLog() => Context(HudInputKind.CloseQuestLog);
+    public static HudInput SelectQuest(HudId questId) => Context(HudInputKind.SelectQuest, target: questId);
+    public static HudInput AbandonQuest(HudId questId) => Context(HudInputKind.AbandonQuest, target: questId);
+    public static HudInput ConfirmAbandonQuest(HudId questId) => Context(HudInputKind.ConfirmAbandonQuest, target: questId);
+    public static HudInput DeclineAbandonQuest() => Context(HudInputKind.DeclineAbandonQuest);
+    public static HudInput ShareQuest(HudId questId) => Context(HudInputKind.ShareQuest, target: questId);
+    public static HudInput AcceptSharedQuest(HudId shareId, HudId questId) =>
+        Context(HudInputKind.AcceptSharedQuest, target: shareId, secondaryTarget: questId);
+    public static HudInput DeclineSharedQuest(HudId shareId, HudId questId) =>
+        Context(HudInputKind.DeclineSharedQuest, target: shareId, secondaryTarget: questId);
+    public static HudInput SelectTalkOption(int option) => Context(HudInputKind.SelectTalkOption, slot: option);
+    public static HudInput SelectQuestReward(int rewardIndex) => Context(HudInputKind.SelectQuestReward, slot: rewardIndex);
+    public static HudInput AcceptQuest() => Context(HudInputKind.AcceptQuest);
+    public static HudInput TurnInQuest() => Context(HudInputKind.TurnInQuest);
+    public static HudInput CloseQuestInfo() => Context(HudInputKind.CloseQuestInfo);
+    public static HudInput ToggleCharacter() => Context(HudInputKind.ToggleCharacter);
+    public static HudInput CloseCharacter() => Context(HudInputKind.CloseCharacter);
+
+    private static HudInput Context(
+        HudInputKind kind,
+        HudId target = default,
+        int slot = -1,
+        int auxiliary = -1,
+        int value = 0,
+        bool flag = false,
+        HudId secondaryTarget = default,
+        long amount = 0) =>
+        new(kind, target, 0, slot, auxiliary, default, default, default, 0, false, HudId.Empty, default,
+            value, flag, secondaryTarget, amount);
 }
 
 public enum HudCommandKind
@@ -239,17 +377,94 @@ public enum HudCommandKind
     SelectWorldEntity,
     SubmitChat,
     InteractWorldEntity,
+    MoveInventoryItem,
+    DropInventoryItem,
+    UseInventoryItem,
+    DressInventoryItem,
+    UndressInventoryItem,
+    TakeLootItem,
+    TakeLootMoney,
+    TakeAllLoot,
+    CloseLoot,
+    AbandonQuest,
+    ShareQuest,
+    AcceptSharedQuest,
+    DeclineSharedQuest,
+    AcceptQuest,
+    TurnInQuest,
 }
 
-public readonly record struct HudCommand(HudCommandKind Kind, int Slot, ulong EntityId, HudId Value)
+public readonly record struct HudCommand(
+    HudCommandKind Kind,
+    int Slot,
+    int Auxiliary,
+    ulong EntityId,
+    HudId Value,
+    int Count = 0,
+    bool Flag = false,
+    HudId SecondaryValue = default,
+    HudStamp ExpectedRevision = default,
+    long Amount = 0)
 {
-    public static HudCommand ActivateAction(int slot, HudId abilityId) => new(HudCommandKind.ActivateAction, slot, 0, abilityId);
+    public static HudCommand ActivateAction(int slot, HudStamp expectedRevision) =>
+        new(HudCommandKind.ActivateAction, slot, -1, 0, HudId.Empty, ExpectedRevision: expectedRevision);
 
-    public static HudCommand SelectWorldEntity(ulong entityId) => new(HudCommandKind.SelectWorldEntity, -1, entityId, HudId.Empty);
+    public static HudCommand SelectWorldEntity(ulong entityId) => new(HudCommandKind.SelectWorldEntity, -1, -1, entityId, HudId.Empty);
 
-    public static HudCommand SubmitChat(HudId text) => new(HudCommandKind.SubmitChat, -1, 0, text);
+    public static HudCommand SubmitChat(HudId text) => new(HudCommandKind.SubmitChat, -1, -1, 0, text);
 
-    public static HudCommand InteractWorldEntity(ulong entityId) => new(HudCommandKind.InteractWorldEntity, -1, entityId, HudId.Empty);
+    public static HudCommand InteractWorldEntity(ulong entityId) => new(HudCommandKind.InteractWorldEntity, -1, -1, entityId, HudId.Empty);
+
+    public static HudCommand MoveInventoryItem(int fromSlot, int toSlot, bool moveNoMore, HudStamp expectedRevision) =>
+        new(HudCommandKind.MoveInventoryItem, fromSlot, toSlot, 0, HudId.Empty, 0, moveNoMore,
+            ExpectedRevision: expectedRevision);
+
+    public static HudCommand DropInventoryItem(int slot, int count, HudStamp expectedRevision) =>
+        new(HudCommandKind.DropInventoryItem, slot, -1, 0, HudId.Empty, count, ExpectedRevision: expectedRevision);
+
+    public static HudCommand UseInventoryItem(int slot, HudStamp expectedRevision) =>
+        new(HudCommandKind.UseInventoryItem, slot, -1, 0, HudId.Empty, ExpectedRevision: expectedRevision);
+
+    public static HudCommand DressInventoryItem(int slot, HudStamp expectedRevision) =>
+        new(HudCommandKind.DressInventoryItem, slot, -1, 0, HudId.Empty, ExpectedRevision: expectedRevision);
+
+    public static HudCommand UndressInventoryItem(int slot, HudStamp expectedRevision) =>
+        new(HudCommandKind.UndressInventoryItem, slot, -1, 0, HudId.Empty, ExpectedRevision: expectedRevision);
+
+    public static HudCommand TakeLootItem(ulong corpseEntityId, int entry, HudStamp expectedRevision) =>
+        new(HudCommandKind.TakeLootItem, entry, -1, corpseEntityId, HudId.Empty,
+            ExpectedRevision: expectedRevision);
+
+    public static HudCommand TakeLootMoney(ulong corpseEntityId, long amount, HudStamp expectedRevision) =>
+        new(HudCommandKind.TakeLootMoney, -1, -1, corpseEntityId, HudId.Empty,
+            ExpectedRevision: expectedRevision, Amount: amount);
+
+    public static HudCommand TakeAllLoot(ulong corpseEntityId, HudStamp expectedRevision) =>
+        new(HudCommandKind.TakeAllLoot, -1, -1, corpseEntityId, HudId.Empty,
+            ExpectedRevision: expectedRevision);
+
+    public static HudCommand CloseLoot() => new(HudCommandKind.CloseLoot, -1, -1, 0, HudId.Empty);
+
+    public static HudCommand AbandonQuest(HudId questId, HudStamp expectedRevision) =>
+        new(HudCommandKind.AbandonQuest, -1, -1, 0, questId, ExpectedRevision: expectedRevision);
+
+    public static HudCommand ShareQuest(HudId questId, HudStamp expectedRevision) =>
+        new(HudCommandKind.ShareQuest, -1, -1, 0, questId, ExpectedRevision: expectedRevision);
+
+    public static HudCommand AcceptSharedQuest(HudId shareId, HudId questId, HudStamp expectedRevision) =>
+        new(HudCommandKind.AcceptSharedQuest, -1, -1, 0, shareId,
+            SecondaryValue: questId, ExpectedRevision: expectedRevision);
+
+    public static HudCommand DeclineSharedQuest(HudId shareId, HudId questId, HudStamp expectedRevision) =>
+        new(HudCommandKind.DeclineSharedQuest, -1, -1, 0, shareId,
+            SecondaryValue: questId, ExpectedRevision: expectedRevision);
+
+    public static HudCommand AcceptQuest(HudId questId, ulong npcEntityId, HudStamp expectedRevision) =>
+        new(HudCommandKind.AcceptQuest, -1, -1, npcEntityId, questId, ExpectedRevision: expectedRevision);
+
+    public static HudCommand TurnInQuest(HudId questId, ulong npcEntityId, int rewardIndex, HudStamp expectedRevision) =>
+        new(HudCommandKind.TurnInQuest, rewardIndex, -1, npcEntityId, questId,
+            ExpectedRevision: expectedRevision);
 }
 
 public enum HudDispatchStatus

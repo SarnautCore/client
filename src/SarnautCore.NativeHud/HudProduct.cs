@@ -98,6 +98,24 @@ public sealed class HudProduct
     public const int FeedbackPoolCount = 5;
     public const int QuestTrackerRowCount = 20;
     public const int UnitPlateCount = 10;
+    public const int InventoryLayoutCount = 10;
+    public const int InventorySlotCount = 60;
+    public const int InventoryPartitionCount = 5;
+    public const int LootPageSize = 4;
+    public const int LootEntryCount = 20;
+    public const int CharacterEquipmentSlotCount = 21;
+    public const int CharacterBagSlot = 19;
+    public const int CharacterDeathInsuranceSlot = 20;
+    public const int CharacterStatCount = 14;
+    public const int QuestLogEntryCount = 20;
+    public const int QuestLogBookmarkCount = 3;
+    public const int QuestLogObjectiveCount = 5;
+    public const int QuestInfoObjectiveCount = 6;
+    public const int QuestInfoRewardItemCount = 5;
+    public const int QuestInfoReputationCount = 5;
+    public const int QuestInfoCurrencyCount = 5;
+    public const int QuestLogSecretComponentCount = 15;
+    public const int QuestTalkOptionCount = 20;
 
     public HudProduct(
         HudId[] actionSlots,
@@ -107,6 +125,7 @@ public sealed class HudProduct
         HudId overtipPrototype,
         HudCursorCatalog cursors,
         HudTimelineCatalog timelines,
+        HudContextProduct contexts,
         HudId[]? pixelMaskedElements = null,
         float pixelMaskThreshold = 0.5f,
         int maxEntities = 128,
@@ -128,6 +147,8 @@ public sealed class HudProduct
         OvertipPrototype = overtipPrototype;
         Cursors = cursors;
         Timelines = timelines;
+        ArgumentNullException.ThrowIfNull(contexts);
+        Contexts = contexts;
         PixelMaskedElements = pixelMaskedElements is null ? [] : (HudId[])pixelMaskedElements.Clone();
         PixelMaskThreshold = pixelMaskThreshold;
         MaxEntities = maxEntities;
@@ -154,6 +175,8 @@ public sealed class HudProduct
     public HudCursorCatalog Cursors { get; }
 
     public HudTimelineCatalog Timelines { get; }
+
+    public HudContextProduct Contexts { get; }
 
     public HudId[] PixelMaskedElements { get; }
 

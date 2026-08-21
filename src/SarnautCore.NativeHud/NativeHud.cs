@@ -27,6 +27,16 @@ public sealed class NativeHud : IDisposable
     private readonly HudUnitView[] _unitViews;
     private readonly HudUnitPlateView[] _unitPlateViews;
     private readonly HudOvertipView[] _overtipViews;
+    private readonly HudInventorySlotView[] _inventorySlotViews;
+    private readonly HudInventoryPartitionView[] _inventoryPartitionViews;
+    private readonly HudLootSlotView[] _lootSlotViews;
+    private readonly HudQuestLogEntryView[] _questLogViews;
+    private readonly HudCharacterEquipmentView[] _characterEquipmentViews;
+    private readonly HudCharacterStatView[] _characterStatViews;
+    private readonly HudInventoryReadModel _inventoryRead;
+    private readonly HudLootReadModel _lootRead;
+    private readonly HudQuestLogReadModel _questLogRead;
+    private readonly HudCharacterReadModel _characterRead;
     private readonly HudDiff _diff;
     private int _inputHead;
     private int _inputCount;
@@ -43,6 +53,28 @@ public sealed class NativeHud : IDisposable
     private HudPointerSource _pointerSource;
     private HudPoint _pointer;
     private HudSessionState _lastSessionState;
+    private bool _selectedTargetHasAuthority;
+    private ulong _selectedTargetEntityId;
+    private HudTargetSelectionRefusal _selectedTargetRefusal;
+    private HudStamp _selectedTargetStamp;
+    private HudEvent _selectedTargetEvent;
+    private ContextState<HudInventorySnapshot> _inventory;
+    private ContextState<HudLootSnapshot> _loot;
+    private ContextState<HudQuestLogSnapshot> _questLog;
+    private ContextState<HudQuestInfoSnapshot> _questInfo;
+    private ContextState<HudCharacterSnapshot> _character;
+    private HudId _selectedQuestId;
+    private HudId _pendingAbandonQuestId;
+    private long _abandonConfirmationExpiresAt;
+    private long _shareInvitationExpiresAt;
+    private int _selectedRewardIndex = -1;
+    private int _lootPage;
+    private readonly HudContextWindow[] _openContextOrder = new HudContextWindow[5];
+    private int _openContextCount;
+    private bool _inventoryOpen;
+    private bool _questLogOpen;
+    private bool _questInfoOpen;
+    private bool _characterOpen;
     private bool _firstFrame = true;
     private bool _disposed;
 
@@ -69,6 +101,21 @@ public sealed class NativeHud : IDisposable
         _unitViews = new HudUnitView[_entities.Length];
         _unitPlateViews = new HudUnitPlateView[_unitPlates.Length];
         _overtipViews = new HudOvertipView[_overtips.Length];
+        _inventorySlotViews = new HudInventorySlotView[HudProduct.InventorySlotCount];
+        _inventoryPartitionViews = new HudInventoryPartitionView[HudProduct.InventoryPartitionCount];
+        _lootSlotViews = new HudLootSlotView[HudProduct.LootPageSize];
+        _questLogViews = new HudQuestLogEntryView[product.Contexts.QuestLog.MaxEntries];
+        _characterEquipmentViews = new HudCharacterEquipmentView[HudProduct.CharacterEquipmentSlotCount];
+        _characterStatViews = new HudCharacterStatView[HudProduct.CharacterStatCount];
+        _inventoryRead = new HudInventoryReadModel(_inventorySlotViews, _inventoryPartitionViews);
+        _lootRead = new HudLootReadModel(_lootSlotViews);
+        _questLogRead = new HudQuestLogReadModel(_questLogViews);
+        _characterRead = new HudCharacterReadModel(_characterEquipmentViews, _characterStatViews);
+
+        UpdateInventoryViews();
+        UpdateLootViews();
+        UpdateQuestLogViews();
+        UpdateCharacterViews();
 
         for (int index = 0; index < _entities.Length; index++)
         {
@@ -123,7 +170,14 @@ public sealed class NativeHud : IDisposable
             _chatViews,
             _unitViews,
             _unitPlateViews,
-            _overtipViews)
+            _overtipViews,
+            _inventoryRead,
+            _lootRead,
+            _questLogRead,
+            new HudQuestInfoView(product.Contexts.QuestInfo.InteractionRoot, product.Contexts.QuestInfo.DetailRoot,
+                false, false, HudQuestInfoMode.None, HudId.Empty, 0,
+                HudQuestRefusal.None, null, null, -1, -1, default),
+            _characterRead)
         {
             Focus = HudFocus.World,
             CursorId = product.Cursors.Resolve(HudCursor.Default),
@@ -197,8 +251,21 @@ public sealed class NativeHud : IDisposable
         }
 
         ReadSessionEvents();
+        if (!_pendingAbandonQuestId.IsEmpty && now > _abandonConfirmationExpiresAt)
+        {
+            ClearAbandonConfirmation();
+        }
+
+        if (_shareInvitationExpiresAt > 0 && now > _shareInvitationExpiresAt)
+        {
+            _shareInvitationExpiresAt = 0;
+            UpdateQuestLogViews();
+            EmitContext(HudChangeKind.QuestLog, _product.Contexts.QuestLog.Root, _questLogRead.Count, _questLogOpen, _questLog.Stamp);
+        }
+
         DrainInput();
         AdvanceFeedback(now, frame.Viewport);
+        AdvanceActionCooldowns(now);
         AdvanceWorldChat(frame.Viewport);
         AdvanceOvertips(frame.Viewport);
         UpdateCursor();
@@ -233,6 +300,7 @@ public sealed class NativeHud : IDisposable
         if (read.DroppedCount > 0)
         {
             AddError(HudErrorCode.SessionEventOverflow, default, HudId.Empty, 0, read.DroppedCount);
+            _diff.RequireFullRefresh(HudRefreshAreas.All);
         }
 
         if (read.State != HudSessionState.Open && read.State != _lastSessionState)
@@ -277,6 +345,9 @@ public sealed class NativeHud : IDisposable
             case HudEventKind.ActionSlotCleared:
                 ApplyAction(item);
                 break;
+            case HudEventKind.TargetSelectionChanged:
+                ApplyTargetSelection(item);
+                break;
             case HudEventKind.UnitChanged:
             case HudEventKind.UnitRemoved:
                 ApplyUnit(item);
@@ -295,6 +366,21 @@ public sealed class NativeHud : IDisposable
             case HudEventKind.ChatRemoved:
                 ApplyChat(item);
                 break;
+            case HudEventKind.InventoryReplaced:
+                ApplyInventory(item);
+                break;
+            case HudEventKind.LootReplaced:
+                ApplyLoot(item);
+                break;
+            case HudEventKind.QuestLogReplaced:
+                ApplyQuestLog(item);
+                break;
+            case HudEventKind.QuestInfoReplaced:
+                ApplyQuestInfo(item);
+                break;
+            case HudEventKind.CharacterReplaced:
+                ApplyCharacter(item);
+                break;
             default:
                 AddError(HudErrorCode.InvalidEvent, item.Stamp, item.EventId, item.EntityId, item.Slot);
                 break;
@@ -304,7 +390,8 @@ public sealed class NativeHud : IDisposable
     private void ApplyAction(in HudEvent item)
     {
         if ((uint)item.Slot >= (uint)_actions.Length ||
-            (item.Kind == HudEventKind.ActionSlotChanged && (item.ContentId.IsEmpty || item.Value < 0)))
+            (item.Kind == HudEventKind.ActionSlotChanged &&
+                (item.ContentId.IsEmpty || item.Value < 0 || item.Auxiliary < item.Value)))
         {
             AddError(HudErrorCode.InvalidEvent, item.Stamp, item.ContentId, 0, item.Slot);
             return;
@@ -321,9 +408,51 @@ public sealed class NativeHud : IDisposable
         state.LastEvent = item;
         state.AbilityId = item.Kind == HudEventKind.ActionSlotCleared ? HudId.Empty : item.ContentId;
         state.CooldownMilliseconds = item.Kind == HudEventKind.ActionSlotCleared ? 0 : item.Value;
+        state.CooldownDurationMilliseconds = item.Kind == HudEventKind.ActionSlotCleared ? 0 : item.Auxiliary;
+        state.CooldownReceivedAt = _lastNow;
         state.Enabled = item.Kind == HudEventKind.ActionSlotChanged && item.Flag;
         UpdateActionView(item.Slot);
         EmitAction(item.Slot);
+    }
+
+    private void ApplyTargetSelection(in HudEvent item)
+    {
+        if ((uint)item.Auxiliary > (uint)HudTargetSelectionRefusal.TargetDead ||
+            item.Auxiliary == (int)HudTargetSelectionRefusal.Unspecified)
+        {
+            AddError(HudErrorCode.InvalidEvent, item.Stamp, HudId.Empty, item.EntityId, -1);
+            return;
+        }
+
+        if (!AcceptAuthority(
+            _selectedTargetHasAuthority,
+            _selectedTargetStamp,
+            _selectedTargetEvent,
+            item,
+            HudId.Empty,
+            item.EntityId,
+            -1))
+        {
+            return;
+        }
+
+        _selectedTargetHasAuthority = true;
+        _selectedTargetEntityId = item.EntityId;
+        _selectedTargetRefusal = (HudTargetSelectionRefusal)item.Auxiliary;
+        _selectedTargetStamp = item.Stamp;
+        _selectedTargetEvent = item;
+        _diff.ReadModel.SelectedTarget = new HudSelectedTargetView(
+            item.EntityId, true, _selectedTargetRefusal, item.Stamp);
+        _diff.AddChange(new HudChange(
+            HudChangeKind.TargetSelection,
+            HudId.Empty,
+            0,
+            item.EntityId != 0,
+            0,
+            true,
+            HudId.Empty,
+            default,
+            Revision: item.Stamp));
     }
 
     private void ApplyUnit(in HudEvent item)
@@ -836,6 +965,147 @@ public sealed class NativeHud : IDisposable
             default));
     }
 
+    private void ApplyInventory(in HudEvent item)
+    {
+        HudInventorySnapshot? snapshot = item.Inventory;
+        if (snapshot is null || !_product.Contexts.Inventory.TryFindLayout(snapshot.Capacity, out HudInventoryLayoutProduct? layout) ||
+            layout is null)
+        {
+            AddError(HudErrorCode.InventoryCapacityExceeded, item.Stamp, _product.Contexts.Inventory.Root, 0, snapshot?.Capacity ?? -1);
+            return;
+        }
+
+        if (!AcceptContextAuthority(ref _inventory, item, _product.Contexts.Inventory.Root))
+        {
+            return;
+        }
+
+        _inventory.Set(item.Stamp, item, snapshot);
+        UpdateInventoryViews();
+        EmitContext(HudChangeKind.Inventory, _product.Contexts.Inventory.Root, snapshot.Capacity, _inventoryOpen, item.Stamp);
+    }
+
+    private void ApplyLoot(in HudEvent item)
+    {
+        HudLootSnapshot? snapshot = item.Loot;
+        if (snapshot is null || snapshot.Items.Length > _product.Contexts.Loot.MaxEntries)
+        {
+            AddError(HudErrorCode.LootCapacityExceeded, item.Stamp, _product.Contexts.Loot.Root,
+                snapshot?.CorpseEntityId ?? 0, snapshot?.Items.Length ?? -1);
+            return;
+        }
+
+        if (!AcceptContextAuthority(ref _loot, item, _product.Contexts.Loot.Root))
+        {
+            return;
+        }
+
+        if (_loot.Value?.CorpseEntityId != snapshot.CorpseEntityId || !snapshot.Open)
+        {
+            _lootPage = 0;
+        }
+
+        _loot.Set(item.Stamp, item, snapshot);
+        SetContextOrder(HudContextWindow.Loot, snapshot.Open);
+        ClampLootPage();
+        UpdateLootViews();
+        ReconcileContextFocus();
+        EmitContext(HudChangeKind.Loot, _product.Contexts.Loot.Root, _lootPage, snapshot.Open, item.Stamp);
+    }
+
+    private void ApplyQuestLog(in HudEvent item)
+    {
+        HudQuestLogSnapshot? snapshot = item.QuestLog;
+        if (snapshot is null || snapshot.Quests.Length > _product.Contexts.QuestLog.MaxEntries ||
+            snapshot.SecretComponents.Length > HudProduct.QuestLogSecretComponentCount ||
+            snapshot.Quests.ToArray().Any(quest =>
+                quest.Objectives.Length > HudProduct.QuestLogObjectiveCount ||
+                quest.Reward.MandatoryItems.Length > HudProduct.QuestInfoRewardItemCount ||
+                quest.Reward.AlternativeItems.Length > HudProduct.QuestInfoRewardItemCount ||
+                quest.Reward.Reputations.Length > HudProduct.QuestInfoReputationCount ||
+                quest.Reward.Currencies.Length > HudProduct.QuestInfoCurrencyCount))
+        {
+            AddError(HudErrorCode.QuestLogCapacityExceeded, item.Stamp, _product.Contexts.QuestLog.Root, 0,
+                snapshot?.Quests.Length ?? -1);
+            return;
+        }
+
+        if (!AcceptContextAuthority(ref _questLog, item, _product.Contexts.QuestLog.Root))
+        {
+            return;
+        }
+
+        _questLog.Set(item.Stamp, item, snapshot);
+        _shareInvitationExpiresAt = snapshot.ShareInvitation is null ? 0 : checked(_lastNow + 30_000);
+        if (!_selectedQuestId.IsEmpty && !ContainsQuest(snapshot, _selectedQuestId))
+        {
+            _selectedQuestId = HudId.Empty;
+        }
+
+        UpdateQuestLogViews();
+        EmitContext(HudChangeKind.QuestLog, _product.Contexts.QuestLog.Root, snapshot.Quests.Length, _questLogOpen, item.Stamp);
+    }
+
+    private void ApplyQuestInfo(in HudEvent item)
+    {
+        HudQuestInfoSnapshot? snapshot = item.QuestInfo;
+        int dynamicEntries = snapshot is null ? -1 :
+            snapshot.Reward.DynamicEntryCount + (snapshot.Quest?.Objectives.Length ?? 0);
+        if (snapshot is null || dynamicEntries > _product.Contexts.QuestInfo.MaxDynamicEntries ||
+            (snapshot.Quest?.Objectives.Length ?? 0) > HudProduct.QuestInfoObjectiveCount ||
+            snapshot.Reward.MandatoryItems.Length > HudProduct.QuestInfoRewardItemCount ||
+            snapshot.Reward.AlternativeItems.Length > HudProduct.QuestInfoRewardItemCount ||
+            snapshot.Reward.Reputations.Length > HudProduct.QuestInfoReputationCount ||
+            snapshot.Reward.Currencies.Length > HudProduct.QuestInfoCurrencyCount)
+        {
+            AddError(HudErrorCode.QuestInfoCapacityExceeded, item.Stamp, _product.Contexts.QuestInfo.InteractionRoot,
+                snapshot?.NpcEntityId ?? 0, dynamicEntries);
+            return;
+        }
+
+        if (!AcceptContextAuthority(ref _questInfo, item, _product.Contexts.QuestInfo.InteractionRoot))
+        {
+            return;
+        }
+
+        _questInfo.Set(item.Stamp, item, snapshot);
+        _selectedRewardIndex = -1;
+        _questInfoOpen = snapshot.Mode != HudQuestInfoMode.None;
+        SetContextOrder(HudContextWindow.QuestInfo, _questInfoOpen);
+        UpdateQuestInfoView();
+        ReconcileContextFocus();
+        EmitContext(HudChangeKind.QuestInfo, _product.Contexts.QuestInfo.InteractionRoot, (int)snapshot.Mode,
+            snapshot.Mode != HudQuestInfoMode.None, item.Stamp);
+    }
+
+    private void ApplyCharacter(in HudEvent item)
+    {
+        HudCharacterSnapshot? snapshot = item.Character;
+        if (snapshot is null)
+        {
+            AddError(HudErrorCode.InvalidEvent, item.Stamp, _product.Contexts.Character.Root, 0, -1);
+            return;
+        }
+
+        if (!AcceptContextAuthority(ref _character, item, _product.Contexts.Character.Root))
+        {
+            return;
+        }
+
+        _character.Set(item.Stamp, item, snapshot);
+        UpdateCharacterViews();
+        EmitContext(HudChangeKind.Character, _product.Contexts.Character.Root, snapshot.Level, _characterOpen, item.Stamp);
+    }
+
+    private bool AcceptContextAuthority<T>(ref ContextState<T> state, in HudEvent item, HudId related)
+        where T : class
+    {
+        return AcceptAuthority(state.HasAuthority, state.Stamp, state.LastEvent, item, related, item.EntityId, -1);
+    }
+
+    private void EmitContext(HudChangeKind kind, HudId root, int value, bool visible, HudStamp revision) =>
+        _diff.AddChange(new HudChange(kind, root, 0, visible, value, false, HudId.Empty, default, 0, revision));
+
     private int RememberTransient(in HudEvent item)
     {
         int index = _transientCursor;
@@ -1106,7 +1376,7 @@ public sealed class NativeHud : IDisposable
 
                 break;
             case HudInputKind.Cancel:
-                SetFocus(HudFocus.World);
+                CancelTopContext();
                 _hoverElement = HudId.Empty;
                 break;
             case HudInputKind.PointerMoved:
@@ -1167,6 +1437,430 @@ public sealed class NativeHud : IDisposable
             case HudInputKind.SubmitChat:
                 SendCommand(HudCommand.SubmitChat(input.Text), HudCommandFamilies.SubmitChat);
                 break;
+            case HudInputKind.ToggleInventory:
+                SetInventoryOpen(!_inventoryOpen);
+                break;
+            case HudInputKind.CloseInventory:
+                SetInventoryOpen(false);
+                break;
+            case HudInputKind.MoveInventoryItem:
+                MoveInventoryItem(input.Slot, input.Auxiliary, input.Flag);
+                break;
+            case HudInputKind.DropInventoryItem:
+                InventorySlotCommand(HudCommand.DropInventoryItem(input.Slot, input.Value, _inventory.Stamp), HudCommandFamilies.DropInventoryItem, input.Slot);
+                break;
+            case HudInputKind.UseInventoryItem:
+                InventorySlotCommand(HudCommand.UseInventoryItem(input.Slot, _inventory.Stamp), HudCommandFamilies.UseInventoryItem, input.Slot);
+                break;
+            case HudInputKind.DressInventoryItem:
+                InventorySlotCommand(HudCommand.DressInventoryItem(input.Slot, _inventory.Stamp), HudCommandFamilies.DressInventoryItem, input.Slot);
+                break;
+            case HudInputKind.UndressInventoryItem:
+                if ((uint)input.Slot < HudProduct.CharacterEquipmentSlotCount)
+                {
+                    SendCommand(HudCommand.UndressInventoryItem(input.Slot, _character.Stamp), HudCommandFamilies.UndressInventoryItem);
+                }
+
+                break;
+            case HudInputKind.TakeLootItem:
+                TakeLootItem(input.Slot);
+                break;
+            case HudInputKind.TakeLootMoney:
+                TakeLootMoney(input.Amount);
+                break;
+            case HudInputKind.TakeAllLoot:
+                TakeAllLoot();
+                break;
+            case HudInputKind.LootPreviousPage:
+                SetLootPage(_lootPage - 1);
+                break;
+            case HudInputKind.LootNextPage:
+                SetLootPage(_lootPage + 1);
+                break;
+            case HudInputKind.CloseLoot:
+                CloseLoot();
+                break;
+            case HudInputKind.ToggleQuestLog:
+                SetQuestLogOpen(!_questLogOpen);
+                break;
+            case HudInputKind.CloseQuestLog:
+                SetQuestLogOpen(false);
+                break;
+            case HudInputKind.SelectQuest:
+                SelectQuest(input.Target);
+                break;
+            case HudInputKind.AbandonQuest:
+                AbandonQuest(input.Target);
+                break;
+            case HudInputKind.ConfirmAbandonQuest:
+                ConfirmAbandonQuest(input.Target);
+                break;
+            case HudInputKind.DeclineAbandonQuest:
+                ClearAbandonConfirmation();
+                break;
+            case HudInputKind.ShareQuest:
+                ShareQuest(input.Target);
+                break;
+            case HudInputKind.AcceptSharedQuest:
+                ResolveSharedQuest(input.Target, input.SecondaryTarget, accept: true);
+                break;
+            case HudInputKind.DeclineSharedQuest:
+                ResolveSharedQuest(input.Target, input.SecondaryTarget, accept: false);
+                break;
+            case HudInputKind.SelectTalkOption:
+                SelectTalkOption(input.Slot);
+                break;
+            case HudInputKind.SelectQuestReward:
+                SelectQuestReward(input.Slot);
+                break;
+            case HudInputKind.AcceptQuest:
+                AcceptQuest();
+                break;
+            case HudInputKind.TurnInQuest:
+                TurnInQuest();
+                break;
+            case HudInputKind.CloseQuestInfo:
+                CloseQuestInfo();
+                break;
+            case HudInputKind.ToggleCharacter:
+                SetCharacterOpen(!_characterOpen);
+                break;
+            case HudInputKind.CloseCharacter:
+                SetCharacterOpen(false);
+                break;
+        }
+    }
+
+    private void SetInventoryOpen(bool open)
+    {
+        if (_inventoryOpen == open)
+        {
+            return;
+        }
+
+        _inventoryOpen = open;
+        SetContextOrder(HudContextWindow.Inventory, open);
+        _inventoryRead.Open = open;
+        ReconcileContextFocus();
+        EmitContext(HudChangeKind.Inventory, _product.Contexts.Inventory.Root, _inventoryRead.Capacity, open, _inventory.Stamp);
+    }
+
+    private void MoveInventoryItem(int fromSlot, int toSlot, bool moveNoMore)
+    {
+        int capacity = _inventory.Value?.Capacity ?? 0;
+        if ((uint)fromSlot >= (uint)capacity || (uint)toSlot >= (uint)capacity || fromSlot == toSlot)
+        {
+            return;
+        }
+
+        SendCommand(HudCommand.MoveInventoryItem(fromSlot, toSlot, moveNoMore, _inventory.Stamp), HudCommandFamilies.MoveInventoryItem);
+    }
+
+    private void InventorySlotCommand(in HudCommand command, HudCommandFamilies family, int slot)
+    {
+        int capacity = _inventory.Value?.Capacity ?? 0;
+        if ((uint)slot < (uint)capacity)
+        {
+            SendCommand(command, family);
+        }
+    }
+
+    private void TakeLootItem(int entry)
+    {
+        HudLootSnapshot? snapshot = _loot.Value;
+        if (snapshot is null || !snapshot.Open || (uint)entry >= (uint)snapshot.Items.Length)
+        {
+            return;
+        }
+
+        SendCommand(HudCommand.TakeLootItem(snapshot.CorpseEntityId, entry, _loot.Stamp), HudCommandFamilies.TakeLoot);
+    }
+
+    private void TakeLootMoney(long amount)
+    {
+        HudLootSnapshot? snapshot = _loot.Value;
+        if (snapshot is { Open: true, Money: > 0 } && (amount == -1 || amount <= snapshot.Money))
+        {
+            SendCommand(HudCommand.TakeLootMoney(snapshot.CorpseEntityId, amount, _loot.Stamp), HudCommandFamilies.TakeLoot);
+        }
+    }
+
+    private void TakeAllLoot()
+    {
+        HudLootSnapshot? snapshot = _loot.Value;
+        if (snapshot is { Open: true } && (snapshot.Money > 0 || snapshot.Items.Length > 0))
+        {
+            SendCommand(HudCommand.TakeAllLoot(snapshot.CorpseEntityId, _loot.Stamp), HudCommandFamilies.TakeLoot);
+        }
+    }
+
+    private void CloseLoot()
+    {
+        HudLootSnapshot? snapshot = _loot.Value;
+        if (snapshot is null || !snapshot.Open)
+        {
+            return;
+        }
+
+        SendCommand(HudCommand.CloseLoot(), HudCommandFamilies.CloseLoot);
+    }
+
+    private void SetLootPage(int page)
+    {
+        int pageCount = LootPageCount();
+        int next = Math.Clamp(page, 0, Math.Max(0, pageCount - 1));
+        if (next == _lootPage)
+        {
+            return;
+        }
+
+        _lootPage = next;
+        UpdateLootViews();
+        EmitContext(HudChangeKind.Loot, _product.Contexts.Loot.Root, _lootPage, _loot.Value?.Open ?? false, _loot.Stamp);
+    }
+
+    private void SetQuestLogOpen(bool open)
+    {
+        if (_questLogOpen == open)
+        {
+            return;
+        }
+
+        _questLogOpen = open;
+        SetContextOrder(HudContextWindow.QuestLog, open);
+        _questLogRead.Open = open;
+        ReconcileContextFocus();
+        EmitContext(HudChangeKind.QuestLog, _product.Contexts.QuestLog.Root, _questLogRead.Count, open, _questLog.Stamp);
+    }
+
+    private void SelectQuest(HudId questId)
+    {
+        if (questId.IsEmpty || _questLog.Value is not { } snapshot || !ContainsQuest(snapshot, questId) ||
+            _selectedQuestId == questId)
+        {
+            return;
+        }
+
+        _selectedQuestId = questId;
+        UpdateQuestLogViews();
+        EmitContext(HudChangeKind.QuestLog, _product.Contexts.QuestLog.Root, _questLogRead.Count, _questLogOpen, _questLog.Stamp);
+    }
+
+    private void AbandonQuest(HudId questId)
+    {
+        HudId target = questId.IsEmpty ? _selectedQuestId : questId;
+        if (target.IsEmpty || _questLog.Value is not { } snapshot)
+        {
+            return;
+        }
+
+        for (int index = 0; index < snapshot.Quests.Length; index++)
+        {
+            HudQuestDocument quest = snapshot.Quests[index];
+            if (quest.QuestId == target && quest.CanAbandon)
+            {
+                _pendingAbandonQuestId = target;
+                _abandonConfirmationExpiresAt = checked(_lastNow + 30_000);
+                UpdateQuestLogViews();
+                EmitContext(HudChangeKind.QuestLog, _product.Contexts.QuestLog.Root, _questLogRead.Count, _questLogOpen, _questLog.Stamp);
+                return;
+            }
+        }
+    }
+
+    private void ConfirmAbandonQuest(HudId questId)
+    {
+        if (!_pendingAbandonQuestId.IsEmpty && questId == _pendingAbandonQuestId &&
+            _lastNow <= _abandonConfirmationExpiresAt)
+        {
+            SendCommand(HudCommand.AbandonQuest(questId, _questLog.Stamp), HudCommandFamilies.AbandonQuest);
+        }
+
+        ClearAbandonConfirmation();
+    }
+
+    private void ClearAbandonConfirmation()
+    {
+        if (_pendingAbandonQuestId.IsEmpty)
+        {
+            return;
+        }
+
+        _pendingAbandonQuestId = HudId.Empty;
+        _abandonConfirmationExpiresAt = 0;
+        UpdateQuestLogViews();
+        EmitContext(HudChangeKind.QuestLog, _product.Contexts.QuestLog.Root, _questLogRead.Count, _questLogOpen, _questLog.Stamp);
+    }
+
+    private void ShareQuest(HudId questId)
+    {
+        if (!questId.IsEmpty && _questLog.Value is { } snapshot && ContainsQuest(snapshot, questId))
+        {
+            SendCommand(HudCommand.ShareQuest(questId, _questLog.Stamp), HudCommandFamilies.ShareQuest);
+        }
+    }
+
+    private void ResolveSharedQuest(HudId shareId, HudId questId, bool accept)
+    {
+        if (_questLog.Value?.ShareInvitation is not { } invitation ||
+            invitation.ShareId != shareId || invitation.QuestId != questId || _lastNow > _shareInvitationExpiresAt)
+        {
+            return;
+        }
+
+        SendCommand(
+            accept ? HudCommand.AcceptSharedQuest(shareId, questId, _questLog.Stamp) :
+                HudCommand.DeclineSharedQuest(shareId, questId, _questLog.Stamp),
+            accept ? HudCommandFamilies.AcceptSharedQuest : HudCommandFamilies.DeclineSharedQuest);
+    }
+
+    private void SelectTalkOption(int option)
+    {
+        HudQuestInfoSnapshot? snapshot = _questInfo.Value;
+        if (_questInfoOpen && snapshot is not null && (uint)option < (uint)snapshot.TalkOptions.Length)
+        {
+            _selectedRewardIndex = -1;
+            snapshot = snapshot.WithSelectedTalkOption(option);
+            _questInfo.Value = snapshot;
+            UpdateQuestInfoView();
+            EmitContext(HudChangeKind.QuestInfo, _product.Contexts.QuestInfo.InteractionRoot, (int)snapshot.Mode, true, _questInfo.Stamp);
+        }
+    }
+
+    private void SelectQuestReward(int rewardIndex)
+    {
+        HudQuestInfoSnapshot? snapshot = _questInfo.Value;
+        if (_questInfoOpen && snapshot?.Mode == HudQuestInfoMode.TurnIn &&
+            (uint)rewardIndex < (uint)snapshot.Reward.AlternativeItems.Length)
+        {
+            _selectedRewardIndex = rewardIndex;
+            UpdateQuestInfoView();
+            EmitContext(HudChangeKind.QuestInfo, _product.Contexts.QuestInfo.InteractionRoot, (int)snapshot.Mode, true, _questInfo.Stamp);
+        }
+    }
+
+    private void AcceptQuest()
+    {
+        HudQuestInfoSnapshot? snapshot = _questInfo.Value;
+        if (_questInfoOpen && snapshot?.Mode == HudQuestInfoMode.Offer && snapshot.Quest is not null)
+        {
+            SendCommand(HudCommand.AcceptQuest(snapshot.Quest.QuestId, snapshot.NpcEntityId, _questInfo.Stamp), HudCommandFamilies.AcceptQuest);
+        }
+    }
+
+    private void TurnInQuest()
+    {
+        HudQuestInfoSnapshot? snapshot = _questInfo.Value;
+        if (_questInfoOpen && snapshot?.Mode == HudQuestInfoMode.TurnIn && snapshot.Quest is not null)
+        {
+            int rewardIndex = snapshot.Reward.AlternativeItems.Length == 0 ? -1 : _selectedRewardIndex;
+            if (snapshot.Reward.AlternativeItems.Length == 0 || rewardIndex >= 0)
+            {
+                SendCommand(HudCommand.TurnInQuest(
+                    snapshot.Quest.QuestId, snapshot.NpcEntityId, rewardIndex, _questInfo.Stamp),
+                    HudCommandFamilies.TurnInQuest);
+            }
+        }
+    }
+
+    private void CloseQuestInfo()
+    {
+        if (!_questInfoOpen)
+        {
+            return;
+        }
+
+        _questInfoOpen = false;
+        _selectedRewardIndex = -1;
+        SetContextOrder(HudContextWindow.QuestInfo, false);
+        UpdateQuestInfoView();
+        ReconcileContextFocus();
+        EmitContext(HudChangeKind.QuestInfo, _product.Contexts.QuestInfo.InteractionRoot, 0, false, _questInfo.Stamp);
+    }
+
+    private void SetCharacterOpen(bool open)
+    {
+        if (_characterOpen == open)
+        {
+            return;
+        }
+
+        _characterOpen = open;
+        SetContextOrder(HudContextWindow.Character, open);
+        _characterRead.Open = open;
+        ReconcileContextFocus();
+        EmitContext(HudChangeKind.Character, _product.Contexts.Character.Root, _characterRead.Level, open, _character.Stamp);
+    }
+
+    private void CancelTopContext()
+    {
+        if (_openContextCount == 0)
+        {
+            SetFocus(HudFocus.World);
+            return;
+        }
+
+        switch (_openContextOrder[_openContextCount - 1])
+        {
+            case HudContextWindow.Inventory:
+                SetInventoryOpen(false);
+                break;
+            case HudContextWindow.Loot:
+                CloseLoot();
+                break;
+            case HudContextWindow.QuestLog:
+                SetQuestLogOpen(false);
+                break;
+            case HudContextWindow.QuestInfo:
+                CloseQuestInfo();
+                break;
+            case HudContextWindow.Character:
+                SetCharacterOpen(false);
+                break;
+        }
+    }
+
+    private void ReconcileContextFocus()
+    {
+        if (_openContextCount > 0 && _openContextOrder[_openContextCount - 1] == HudContextWindow.QuestInfo)
+        {
+            SetFocus(HudFocus.Modal);
+        }
+        else if (_openContextCount > 0)
+        {
+            SetFocus(HudFocus.Hud);
+        }
+        else if (_focus is HudFocus.Hud or HudFocus.Modal)
+        {
+            SetFocus(HudFocus.World);
+        }
+    }
+
+    private void SetContextOrder(HudContextWindow context, bool open)
+    {
+        int found = -1;
+        for (int index = 0; index < _openContextCount; index++)
+        {
+            if (_openContextOrder[index] == context)
+            {
+                found = index;
+                break;
+            }
+        }
+
+        if (found >= 0)
+        {
+            for (int index = found; index < _openContextCount - 1; index++)
+            {
+                _openContextOrder[index] = _openContextOrder[index + 1];
+            }
+
+            _openContextCount--;
+        }
+
+        if (open)
+        {
+            _openContextOrder[_openContextCount++] = context;
         }
     }
 
@@ -1178,12 +1872,12 @@ public sealed class NativeHud : IDisposable
         }
 
         ref ActionState state = ref _actions[slot];
-        if (state.AbilityId.IsEmpty || !state.Enabled)
+        if (state.AbilityId.IsEmpty || !state.Enabled || RemainingActionCooldown(state, _lastNow) > 0)
         {
             return;
         }
 
-        SendCommand(HudCommand.ActivateAction(slot, state.AbilityId), HudCommandFamilies.ActivateAction);
+        SendCommand(HudCommand.ActivateAction(slot, state.Stamp), HudCommandFamilies.ActivateAction);
     }
 
     private void SendCommand(in HudCommand command, HudCommandFamilies family)
@@ -1287,6 +1981,17 @@ public sealed class NativeHud : IDisposable
             EmitAction(index);
         }
 
+        _diff.AddChange(new HudChange(
+            HudChangeKind.TargetSelection,
+            HudId.Empty,
+            0,
+            _selectedTargetEntityId != 0,
+            0,
+            _selectedTargetHasAuthority,
+            HudId.Empty,
+            default,
+            Revision: _selectedTargetStamp));
+
         for (int index = 0; index < _feedback.Length; index++)
         {
             EmitFeedback(index, false);
@@ -1338,10 +2043,12 @@ public sealed class NativeHud : IDisposable
             state.Element,
             0,
             !state.AbilityId.IsEmpty,
-            state.CooldownMilliseconds,
+            _actionViews[index].CooldownMilliseconds,
             state.Enabled,
             state.AbilityId,
-            default));
+            default,
+            state.CooldownDurationMilliseconds,
+            state.Stamp));
     }
 
     private void EmitFeedback(int index, bool visible)
@@ -1364,10 +2071,35 @@ public sealed class NativeHud : IDisposable
         _actionViews[index] = new HudActionSlotView(
             state.Element,
             state.AbilityId,
-            state.CooldownMilliseconds,
+            RemainingActionCooldown(state, _lastNow),
+            state.CooldownDurationMilliseconds,
             state.Enabled,
             state.Stamp,
             state.HasAuthority);
+    }
+
+    private void AdvanceActionCooldowns(long now)
+    {
+        for (int index = 0; index < _actions.Length; index++)
+        {
+            int remaining = RemainingActionCooldown(_actions[index], now);
+            if (_actionViews[index].CooldownMilliseconds != remaining)
+            {
+                UpdateActionView(index);
+                EmitAction(index);
+            }
+        }
+    }
+
+    private static int RemainingActionCooldown(in ActionState state, long now)
+    {
+        if (state.CooldownMilliseconds <= 0)
+        {
+            return 0;
+        }
+
+        long elapsed = Math.Max(0, now - state.CooldownReceivedAt);
+        return (int)Math.Max(0, state.CooldownMilliseconds - elapsed);
     }
 
     private void UpdateFeedbackView(int index)
@@ -1486,6 +2218,214 @@ public sealed class NativeHud : IDisposable
             true,
             !entity.Removed && overtip.Projected,
             !entity.Removed && overtip.Projected ? overtip.Position : default);
+    }
+
+    private void UpdateInventoryViews()
+    {
+        HudInventorySnapshot? snapshot = _inventory.Value;
+        HudInventoryLayoutProduct? layout = null;
+        if (snapshot is not null)
+        {
+            _product.Contexts.Inventory.TryFindLayout(snapshot.Capacity, out layout);
+        }
+
+        for (int index = 0; index < _inventorySlotViews.Length; index++)
+        {
+            if (snapshot is not null && layout is not null && index < snapshot.Capacity)
+            {
+                HudItemStack? stack = snapshot.Slots[index];
+                _inventorySlotViews[index] = new HudInventorySlotView(
+                    layout.Slots[index], index, stack?.ItemId ?? HudId.Empty, stack?.InstanceId ?? 0,
+                    stack?.Count ?? 0,
+                    stack?.CounterValue ?? 0, stack?.Bound ?? false, stack?.Cursed ?? false,
+                    stack?.IsQuestOperator ?? false, stack?.RemoveTime ?? 0,
+                    stack?.RuneId ?? HudId.Empty, stack?.RuneSlotId ?? HudId.Empty,
+                    stack is not null, true);
+            }
+            else
+            {
+                _inventorySlotViews[index] = new HudInventorySlotView(
+                    HudId.Empty, index, HudId.Empty, 0, 0, 0, false, false, false, 0,
+                    HudId.Empty, HudId.Empty, false, false);
+            }
+        }
+
+        for (int index = 0; index < _inventoryPartitionViews.Length; index++)
+        {
+            if (snapshot is not null && layout is not null && index < layout.Partitions.Length)
+            {
+                HudInventoryPartitionProduct bag = layout.Partitions[index];
+                _inventoryPartitionViews[index] = new HudInventoryPartitionView(
+                    bag.Element, index, bag.FirstSlot, bag.SlotCount, true);
+            }
+            else
+            {
+                _inventoryPartitionViews[index] = new HudInventoryPartitionView(HudId.Empty, index, 0, 0, false);
+            }
+        }
+
+        _inventoryRead.HasAuthority = _inventory.HasAuthority;
+        _inventoryRead.Open = _inventoryOpen;
+        _inventoryRead.Capacity = snapshot?.Capacity ?? 0;
+        _inventoryRead.Currency = snapshot?.Currency ?? 0;
+        _inventoryRead.EquippedBag = snapshot?.EquippedBag ?? default;
+        _inventoryRead.LayoutElement = layout?.Element ?? HudId.Empty;
+        _inventoryRead.Revision = _inventory.Stamp;
+    }
+
+    private void UpdateLootViews()
+    {
+        HudLootSnapshot? snapshot = _loot.Value;
+        ReadOnlySpan<HudId> elements = _product.Contexts.Loot.PageSlots;
+        int start = _lootPage * HudProduct.LootPageSize;
+        for (int index = 0; index < _lootSlotViews.Length; index++)
+        {
+            int entry = start + index;
+            if (snapshot is not null && entry < snapshot.Items.Length)
+            {
+                HudLootItem item = snapshot.Items[entry];
+                _lootSlotViews[index] = new HudLootSlotView(
+                    elements[index], index, entry, item.ItemId, item.Count, item.Cursed, true);
+            }
+            else
+            {
+                _lootSlotViews[index] = new HudLootSlotView(
+                    elements[index], index, entry, HudId.Empty, 0, false, false);
+            }
+        }
+
+        _lootRead.HasAuthority = _loot.HasAuthority;
+        _lootRead.Open = snapshot?.Open ?? false;
+        _lootRead.CorpseEntityId = snapshot?.CorpseEntityId ?? 0;
+        _lootRead.Money = snapshot?.Money ?? 0;
+        _lootRead.Refusal = snapshot?.Refusal ?? HudLootRefusal.None;
+        _lootRead.Page = _lootPage;
+        _lootRead.PageCount = LootPageCount();
+        _lootRead.EntryCount = snapshot?.Items.Length ?? 0;
+        _lootRead.Revision = _loot.Stamp;
+    }
+
+    private int LootPageCount()
+    {
+        int count = _loot.Value?.Items.Length ?? 0;
+        return Math.Max(1, (count + HudProduct.LootPageSize - 1) / HudProduct.LootPageSize);
+    }
+
+    private void ClampLootPage() =>
+        _lootPage = Math.Clamp(_lootPage, 0, Math.Max(0, LootPageCount() - 1));
+
+    private void UpdateQuestLogViews()
+    {
+        HudQuestLogSnapshot? snapshot = _questLog.Value;
+        int count = snapshot?.Quests.Length ?? 0;
+        for (int index = 0; index < _questLogViews.Length; index++)
+        {
+            if (snapshot is not null && index < snapshot.Quests.Length)
+            {
+                HudQuestDocument quest = snapshot.Quests[index];
+                _questLogViews[index] = new HudQuestLogEntryView(
+                    _product.Contexts.QuestLog.Entries[index],
+                    index,
+                    quest.QuestId,
+                    quest.TitleId,
+                    quest.DescriptionId,
+                    quest.State,
+                    quest.CanAbandon,
+                    true,
+                    quest.QuestId == _selectedQuestId,
+                    quest);
+            }
+            else
+            {
+                _questLogViews[index] = new HudQuestLogEntryView(
+                    _product.Contexts.QuestLog.Entries[index], index, HudId.Empty, HudId.Empty,
+                    HudId.Empty, default, false, false, false, null);
+            }
+        }
+
+        _questLogRead.HasAuthority = _questLog.HasAuthority;
+        _questLogRead.Open = _questLogOpen;
+        _questLogRead.Count = count;
+        _questLogRead.ActiveBookmark = snapshot?.ActiveBookmark ?? HudQuestLogBookmark.Zones;
+        _questLogRead.SecretComponentCount = snapshot?.SecretComponents.Length ?? 0;
+        _questLogRead.SelectedQuestId = _selectedQuestId;
+        _questLogRead.PendingAbandonQuestId = _pendingAbandonQuestId;
+        _questLogRead.AbandonConfirmationExpiresAtMilliseconds = _abandonConfirmationExpiresAt;
+        _questLogRead.ShareInvitation = _shareInvitationExpiresAt > 0 ? snapshot?.ShareInvitation : null;
+        _questLogRead.ShareInvitationExpiresAtMilliseconds = _shareInvitationExpiresAt;
+        _questLogRead.Revision = _questLog.Stamp;
+    }
+
+    private void UpdateQuestInfoView()
+    {
+        HudQuestInfoSnapshot? snapshot = _questInfo.Value;
+        _diff.ReadModel.QuestInfo = new HudQuestInfoView(
+            _product.Contexts.QuestInfo.InteractionRoot,
+            _product.Contexts.QuestInfo.DetailRoot,
+            _questInfo.HasAuthority,
+            _questInfoOpen,
+            snapshot?.Mode ?? HudQuestInfoMode.None,
+            snapshot?.Quest?.QuestId ?? HudId.Empty,
+            snapshot?.NpcEntityId ?? 0,
+            snapshot?.Refusal ?? HudQuestRefusal.None,
+            snapshot?.Quest,
+            snapshot?.Reward,
+            snapshot?.SelectedTalkOption ?? -1,
+            _selectedRewardIndex,
+            _questInfo.Stamp);
+    }
+
+    private void UpdateCharacterViews()
+    {
+        HudCharacterSnapshot? snapshot = _character.Value;
+        ReadOnlySpan<HudId> equipmentElements = _product.Contexts.Character.EquipmentSlots;
+        for (int index = 0; index < _characterEquipmentViews.Length; index++)
+        {
+            HudItemStack? item = snapshot?.Equipment[index];
+            _characterEquipmentViews[index] = new HudCharacterEquipmentView(
+                equipmentElements[index], index, (HudCharacterEquipmentRole)index,
+                item?.ItemId ?? HudId.Empty, item?.InstanceId ?? 0, item?.Count ?? 0,
+                item?.Bound ?? false, item?.Cursed ?? false, item is not null);
+        }
+
+        ReadOnlySpan<HudId> statElements = _product.Contexts.Character.StatRows;
+        for (int index = 0; index < _characterStatViews.Length; index++)
+        {
+            HudCharacterStat? stat = snapshot is null ? null : snapshot.Stats[index];
+            _characterStatViews[index] = new HudCharacterStatView(
+                statElements[index], index, stat?.StatId ?? HudId.Empty, stat?.BaseValue,
+                stat?.EffectiveValue, stat?.LongTermValue, snapshot is not null);
+        }
+
+        HudItemStack? bag = snapshot?.Bag;
+        _characterRead.HasAuthority = _character.HasAuthority;
+        _characterRead.Open = _characterOpen;
+        _characterRead.NameId = snapshot?.NameId ?? HudId.Empty;
+        _characterRead.Level = snapshot?.Level ?? 0;
+        _characterRead.Bag = new HudCharacterEquipmentView(
+            _product.Contexts.Character.BagSlot,
+            HudProduct.CharacterBagSlot,
+            HudCharacterEquipmentRole.Bag,
+            bag?.ItemId ?? HudId.Empty,
+            bag?.InstanceId ?? 0,
+            bag?.Count ?? 0,
+            bag?.Bound ?? false,
+            bag?.Cursed ?? false,
+            bag is not null);
+        _characterRead.Revision = _character.Stamp;
+    }
+
+    private static bool ContainsQuest(HudQuestLogSnapshot snapshot, HudId questId)
+    {
+        for (int index = 0; index < snapshot.Quests.Length; index++)
+        {
+            if (snapshot.Quests[index].QuestId == questId)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private int FindEntity(ulong entityId)
@@ -1648,7 +2588,22 @@ public sealed class NativeHud : IDisposable
         HudInputKind.SelectWorldEntity or HudInputKind.InteractWorldEntity => input.EntityId != 0,
         HudInputKind.RequestFocus or HudInputKind.ReleaseFocus => (uint)input.Focus <= (uint)HudFocus.Drag,
         HudInputKind.SubmitChat => !input.Text.IsEmpty,
-        HudInputKind.Cancel or >= HudInputKind.PointerMoved and <= HudInputKind.DragEnded => true,
+        HudInputKind.MoveInventoryItem => input.Slot >= 0 && input.Auxiliary >= 0 && input.Slot != input.Auxiliary,
+        HudInputKind.DropInventoryItem => input.Slot >= 0 && input.Value > 0,
+        HudInputKind.UseInventoryItem or HudInputKind.DressInventoryItem or HudInputKind.UndressInventoryItem or
+            HudInputKind.TakeLootItem or HudInputKind.SelectTalkOption or HudInputKind.SelectQuestReward => input.Slot >= 0,
+        HudInputKind.SelectQuest or HudInputKind.AbandonQuest or HudInputKind.ConfirmAbandonQuest or
+            HudInputKind.ShareQuest => !input.Target.IsEmpty,
+        HudInputKind.AcceptSharedQuest or HudInputKind.DeclineSharedQuest =>
+            !input.Target.IsEmpty && !input.SecondaryTarget.IsEmpty,
+        HudInputKind.Cancel or >= HudInputKind.PointerMoved and <= HudInputKind.DragEnded or
+            HudInputKind.ToggleInventory or HudInputKind.CloseInventory or
+            HudInputKind.TakeAllLoot or HudInputKind.DeclineAbandonQuest or
+            HudInputKind.LootPreviousPage or HudInputKind.LootNextPage or HudInputKind.CloseLoot or
+            HudInputKind.ToggleQuestLog or HudInputKind.CloseQuestLog or HudInputKind.AcceptQuest or
+            HudInputKind.TurnInQuest or HudInputKind.CloseQuestInfo or HudInputKind.ToggleCharacter or
+            HudInputKind.CloseCharacter => true,
+        HudInputKind.TakeLootMoney => input.Amount == -1 || input.Amount > 0,
         _ => false,
     };
 
@@ -1663,6 +2618,8 @@ public sealed class NativeHud : IDisposable
         public HudId Element;
         public HudId AbilityId;
         public int CooldownMilliseconds;
+        public int CooldownDurationMilliseconds;
+        public long CooldownReceivedAt;
         public bool Enabled;
         public bool HasAuthority;
         public HudStamp Stamp;
@@ -1763,5 +2720,31 @@ public sealed class NativeHud : IDisposable
         public bool Active;
         public bool Projected;
         public HudPoint Position;
+    }
+
+    private struct ContextState<T>
+        where T : class
+    {
+        public bool HasAuthority;
+        public HudStamp Stamp;
+        public HudEvent LastEvent;
+        public T? Value;
+
+        public void Set(HudStamp stamp, in HudEvent lastEvent, T value)
+        {
+            HasAuthority = true;
+            Stamp = stamp;
+            LastEvent = lastEvent;
+            Value = value;
+        }
+    }
+
+    private enum HudContextWindow
+    {
+        Inventory,
+        Loot,
+        QuestLog,
+        QuestInfo,
+        Character,
     }
 }
