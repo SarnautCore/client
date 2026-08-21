@@ -1,0 +1,14 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://tests/AuthoredPresentationSpawnProbe.cs" id="1_probe"]
+[ext_resource type="Script" path="res://src/zone/ZoneLoader.cs" id="2_loader"]
+
+[node name="AuthoredPresentationSpawnProbe" type="Node"]
+script = ExtResource("1_probe")
+
+[node name="ZoneLoader" type="Node3D" parent="."]
+script = ExtResource("2_loader")
+MapName = "Inst_LeagueStart"
+SpawnNpcVisuals = false
+CreateTerrainCollision = false
+

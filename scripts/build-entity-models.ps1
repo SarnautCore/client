@@ -25,7 +25,7 @@
     The converted asset tree to write the manifest into.
 
 .EXAMPLE
-    ./scripts/build-entity-models.ps1 -DataRepo E:\SarnautCore\data
+    ./scripts/build-entity-models.ps1 -DataRepo ..\data
 #>
 [CmdletBinding()]
 param(

@@ -52,9 +52,11 @@ Controls are named input actions in `project.godot`'s `[input]` section, so they
 | `inventory` | `I` | inventory |
 | `ui_cancel` | `Esc` | release the mouse; press it again to leave the zone |
 
-The loader currently applies the dominant converted terrain-layer texture to each terrain tile. Splat and light maps are present in the conversion, but full layered terrain materials are pending converter support.
+The native terrain path loads separate Up and Down meshes for each tile, decodes the converted splat parameters, applies layered textures and light maps, and keeps back-face culling enabled. A tile whose native scene cannot load may use its matching legacy OBJ; if both representations fail, zone loading fails instead of presenting a partial world.
 
-Walkabout loads the classic Elf male skinned scene for the local player and crossfades between its `idle` and `run` clips from controller movement state. The camera follows from a third-person spring arm. Server-object placements resolve `MobWorld` and spawn-table references into the zone's converted character or creature scene, then play `idle`; NPC scene loading keeps locomotion plus attack, hit and death families while stripping unrelated emotes. A missing or incomplete converted model becomes a colored capsule and is counted in `NpcPlaceholderCount` and `NpcModelFailures`.
+Zone lighting runs two retail-faithful models split by render layer (`DynamicEntityLighting`). Statics whose geometry authors `vertexBakedLight` carry their offline bake — lightvrt vertex colors on placed objects, the two-term lightmap combine on terrain — rendered unshaded, and are demoted off the runtime-lit receiver layer so no runtime light can double-light them. Dynamic entities and unbaked props stay on the receiver layer and get the dynamic model: the zone's authored ambient at its 1x base, the authored sun, the map's placed `client.Scene.LightComponent` point lights (converted to `X_Y_MapRegion.xdb.lights.json` companions, colored with the zone's `PointLightColor`, culled to the receiver layer), and a per-character `SampledEntityLight` that reads the terrain lightmap under the entity (`BakedLightProbe`) and carries the baked combine's surplus — so characters go warm amber inside torch-lit halls and cool blue in astral shade. The League tutorial ships zero placed lights (its Maya sources never shipped), which makes the sampled term the zone's only authored local-light record.
+
+Walkabout loads the selected character appearance, using its authored scene when available and the corresponding converted rig as a compatibility fallback, then crossfades between `idle` and `run` from controller movement state. The camera follows from a third-person spring arm. Server-object placements resolve `MobWorld` and spawn-table references into the zone's converted character or creature scene, then play `idle`; NPC scene loading keeps locomotion plus attack, hit and death families while stripping unrelated emotes. A missing or incomplete converted model becomes a colored capsule and is counted in `NpcPlaceholderCount` and `NpcModelFailures`.
 
 ### Online walkabout
 
@@ -66,7 +68,7 @@ The shard decides what exists. Online, `ZoneLoader` counts the map's authored mo
 
 The online walkabout also mounts the gameplay HUD: target frame, one-slot ability bar, pooled floating damage, death feedback, loot, bags, quest log/tracker and quest dialogue. `1` casts, `E` interacts, `I` opens bags and `J` opens the quest log. One focus owner arbitrates the pointer and windows: `Esc` closes the top window, then releases a captured pointer, then leaves walkabout; right-click recaptures it. The widgets use converted Ingame forms when present and code-built frames when `converted/` is absent. Their addon-facing model and event contract is in [`docs/gameplay-hud-addon-surface.md`](docs/gameplay-hud-addon-surface.md).
 
-Nameplates come from `name_key` and never from the wire (ADR 0007). When there is no locale string the key is slugged — `Rat1_1_Name.txt` reads `Rat  (2)` — so a nameplate is always readable and never a raw key.
+Nameplates come from `name_key` and never from a display string on the wire (ADR 0007). A resolved locale entry is shown unchanged. On a locale miss, file-shaped keys are slugged, while classic `Creatures/<family>/Instances/...` keys fall back to the creature family. For example, `Rat1_1_Name.txt` reads `Rat  (2)` and an internal corridor-zombie resource path reads `Zombie Warrior  (2)`.
 
 `EntitySnapshot.content_id` binds to a converted model through `converted/assets/<ruleset>/entity_models.json`, a manifest derived from extracted content that lives with the converted assets and is never committed here. Write it with:
 
@@ -74,7 +76,7 @@ Nameplates come from `name_key` and never from the wire (ADR 0007). When there i
 ./scripts/build-entity-models.ps1 -DataRepo ..\data
 ```
 
-Without the manifest, or without `converted/` at all, every entity renders as a labelled capsule at its authoritative position. That is a supported way to run the client, and it is what CI builds.
+Without the manifest, or without `converted/` at all, every entity renders as a labelled capsule at its authoritative position. That is supported for asset-free CI. It does not pass the visual gate for a human walkthrough, which requires converted models for every replicated player and creature.
 
 Set `SARNAUT_SERVER_ADDRESS` before starting Godot to change the endpoint default. Online mode accepts the shard's ephemeral self-signed certificate for local development. Production certificate validation remains future work.
 
@@ -89,11 +91,13 @@ Client-side prediction is intentionally left behind the `WalkaboutController.Net
 `converted/` is the user-local mount point and Git ignores its contents. Point `ao-godot-converter` at that directory:
 
 ```powershell
-Set-Location E:\allods\Dev\ao-godot-converter
-cargo run --release -- convert --version 14.1 --output E:\SarnautCore\client\converted
+$Converter = (Resolve-Path '../ao-godot-converter').Path
+$ConvertedRoot = (Join-Path $PWD 'converted')
+Set-Location $Converter
+cargo run --release -- convert --version 1.1 --output $ConvertedRoot
 ```
 
-Replace `14.1` with the converter profile for your own game installation. Return to this repository and click **Refresh converted/** in the viewer after conversion. The tree includes `.png`, `.tres`, `.tscn`, and `.skmesh` files. Images open in a fitted 2D preview. Mesh resources, 3D scenes, and converter meshes open in an orbitable 3D viewport. Drag with the left mouse button to orbit and use the wheel to zoom.
+Replace `1.1` with the converter profile for the client installation you own. Return to this repository and click **Refresh converted/** in the viewer after conversion. The tree includes `.png`, `.tres`, `.tscn`, and `.skmesh` files. Images open in a fitted 2D preview. Mesh resources, 3D scenes, and converter meshes open in an orbitable 3D viewport. Drag with the left mouse button to orbit and use the wheel to zoom.
 
 The client contains the converter's C# runtime resource classes and skinned-mesh loader. The loader path matches the path written into converted scenes.
 
@@ -106,20 +110,17 @@ godot_console --headless --import --path .
 godot_console --headless --path . --scene res://tests/asset_viewer_smoke.tscn
 godot_console --headless --path . --scene res://tests/zone_walkabout_smoke.tscn
 godot_console --headless --path . --scene res://tests/entity_binding_smoke.tscn
+godot_console --path . --scene res://tests/directional_lighting_probe.tscn
 dotnet run --project tools/SarnautCore.EntityBench -c Release -- --entities 288
 ```
 
 The Asset Viewer smoke scene expects local samples under `converted/samples/`. The Zone Walkabout smoke scene expects the classic conversion below `converted/assets/classic-1.1/` and prints the imported terrain and placement counts. These files are intentionally absent from Git because converted game assets must remain local.
 
+The directional-lighting probe also needs the classic conversion and a Forward+ display. It compares the production scene with shadows on, shadows off and the sun off, then fails on crushed blacks, washed highlights or missing rendered shadows. Set `SARNAUT_LIGHTING_PROBE_PREFIX` to an absolute path to keep its three PNG frames.
+
 The Entity Binding smoke scene needs neither: it binds snapshots to visuals, picks one with a ray and retires one, and prints whether it ran on converted models or on capsules. Run it both ways. `SarnautCore.EntityBench` compares the entity update against the pre-registry loop; see `tools/SarnautCore.EntityBench/RESULTS.md`.
 
-For an asset-free end-to-end network check, keep the `server` repository beside this one and run:
-
-```powershell
-../server/scripts/sar20-client-smoke.ps1 -ClientRepository .
-```
-
-For the same rig with the real zone scene on top of it, adding `-EntityProbe` runs `res://tests/zone_online_probe.tscn`: it signs in through the same view models the screens use, enters the live shard, and then checks what the client actually drew — one visual per replicated entity, the controller standing where the shard says, a nameplate and a health bar on each, and `Tab` and a screen-point pick agreeing on the same entity id.
+For an asset-free end-to-end network check, keep the `server` repository beside this one and use the session smoke below. Adding `-EntityProbe` runs `res://tests/zone_online_probe.tscn`: it signs in through the same view models the screens use, enters the live shard, and then checks what the client actually drew. It requires one visual per replicated entity, a controller at the shard's authoritative position, a nameplate and health bar, and matching `Tab` and screen-point targeting.
 
 ```powershell
 ./scripts/m2-session-smoke.ps1 -EntityProbe -Godot <path to godot_console>
@@ -127,7 +128,7 @@ For the same rig with the real zone scene on top of it, adding `-EntityProbe` ru
 
 The script starts the production shard with a temporary synthetic content fixture and runs `tools/SarnautCore.NetSmoke`. It passes only after the client joins, sends movement, and observes its authoritative position advance. The smoke is kept as a local cross-repository check because the two repositories publish independently and Linux runners require a separately installed `libmsquic`. The pure C# protocol, session and interpolation tests run in this repository's CI.
 
-For the whole session slice — register, create a character, select it, enter the zone at the character's own spawn, then sign in again and land on the saved position — start `infra/compose` and run:
+For the client session slice, register, create a character, select it, enter the zone at the character's own spawn, then sign in again and land on the saved position. Start `infra/compose` and run:
 
 ```powershell
 ./scripts/m2-session-smoke.ps1 -ServerRepo ../server
@@ -136,6 +137,8 @@ For the whole session slice — register, create a character, select it, enter t
 It boots auth and a shard, drives the client's own view models rather than a test double, and fails if the shard's spawn disagrees with `GET /v1/chargen/options` or if any output carries a password, an email address or a token.
 
 Add `-GameplayProbe` to drive the gameplay slice through the gameplay view models: target a live mob, cast to a killing blow, populate and take its loot offer, and verify the authoritative inventory update. Quest state, objective counters, refusals, and turn-in rewards use the server's `QuestStateUpdate` payload; reliable spawn/despawn events own entity lifetime while snapshots update known entities.
+
+The server's `scripts/m2-slice-smoke.ps1` is the canonical complete headless chain for login, character creation, movement, combat, loot, quest turn-in, disconnect, and state verification after reconnect. This client script remains the transport, session-view-model, and Godot rendering proof; it does not duplicate the server's gameplay driver. Follow the [M2 Godot demo runbook](https://github.com/SarnautCore/docs/blob/main/specs/world/m2-demo-runbook.md) for the real private pack and human walkthrough.
 
 ## About SarnautCore
 
