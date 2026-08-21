@@ -29,12 +29,27 @@ public readonly record struct HudRewardItem(HudId ItemId, int Count)
     internal bool IsValid => !ItemId.IsEmpty && Count > 0;
 }
 
+public readonly record struct HudInventoryCooldown(
+    HudId SpellId,
+    int RemainingMilliseconds,
+    int DurationMilliseconds)
+{
+    internal bool IsValid => !SpellId.IsEmpty && RemainingMilliseconds > 0 &&
+        DurationMilliseconds >= RemainingMilliseconds;
+}
+
 /// <summary>One complete authoritative bag replacement.</summary>
 public sealed class HudInventorySnapshot
 {
     private readonly HudItemStack?[] _slots;
+    private readonly HudInventoryCooldown?[] _cooldowns;
 
-    public HudInventorySnapshot(int capacity, long currency, HudItemReference equippedBag, HudItemStack?[] slots)
+    public HudInventorySnapshot(
+        int capacity,
+        long currency,
+        HudItemReference equippedBag,
+        HudItemStack?[] slots,
+        HudInventoryCooldown?[]? cooldowns = null)
     {
         ArgumentNullException.ThrowIfNull(slots);
         if (capacity <= 0 || slots.Length != capacity || currency < 0 || !equippedBag.IsValid)
@@ -43,6 +58,13 @@ public sealed class HudInventorySnapshot
         }
 
         _slots = (HudItemStack?[])slots.Clone();
+        _cooldowns = cooldowns is null ? new HudInventoryCooldown?[capacity] :
+            (HudInventoryCooldown?[])cooldowns.Clone();
+        if (_cooldowns.Length != capacity)
+        {
+            throw new ArgumentException("Inventory cooldown state must align one-for-one with the flat slots.", nameof(cooldowns));
+        }
+
         for (int index = 0; index < _slots.Length; index++)
         {
             if (_slots[index] is { } stack && !stack.IsValid)
@@ -54,6 +76,11 @@ public sealed class HudInventorySnapshot
                 (item.InstanceId == equippedBag.InstanceId || HasEarlierInstance(_slots, index, item.InstanceId)))
             {
                 throw new ArgumentException("An inventory item instance cannot occupy multiple slots or the equipped-bag role.", nameof(slots));
+            }
+
+            if (_cooldowns[index] is { } cooldown && (!cooldown.IsValid || _slots[index] is null))
+            {
+                throw new ArgumentException("Inventory cooldowns require an occupied slot, spell, and valid remaining duration.", nameof(cooldowns));
             }
         }
 
@@ -70,9 +97,11 @@ public sealed class HudInventorySnapshot
 
     public ReadOnlySpan<HudItemStack?> Slots => _slots;
 
+    public ReadOnlySpan<HudInventoryCooldown?> Cooldowns => _cooldowns;
+
     internal bool ContentEquals(HudInventorySnapshot other) =>
         Capacity == other.Capacity && Currency == other.Currency && EquippedBag == other.EquippedBag &&
-        Slots.SequenceEqual(other.Slots);
+        Slots.SequenceEqual(other.Slots) && Cooldowns.SequenceEqual(other.Cooldowns);
 
     private static bool HasEarlierInstance(HudItemStack?[] items, int index, ulong instanceId)
     {

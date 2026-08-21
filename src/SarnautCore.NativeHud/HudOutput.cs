@@ -191,12 +191,17 @@ public readonly record struct HudInventorySlotView(
     ulong InstanceId,
     int Count,
     int CounterValue,
+    int DisplayCount,
     bool Bound,
     bool Cursed,
     bool IsQuestOperator,
     long RemoveTime,
     HudId RuneId,
     HudId RuneSlotId,
+    HudId SpellId,
+    int CooldownRemainingMilliseconds,
+    int CooldownDurationMilliseconds,
+    bool PreparedVisible,
     bool Occupied,
     bool Visible);
 

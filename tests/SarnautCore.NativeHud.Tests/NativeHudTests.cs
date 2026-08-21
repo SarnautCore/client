@@ -608,8 +608,10 @@ public sealed class NativeHudTests
         Assert.Equal(Id("multibag-16"), replaced.ReadModel.Inventory.LayoutElement);
         Assert.Equal(Id("item.sword"), view.ItemId);
         Assert.Equal(7, view.CounterValue);
+        Assert.Equal(3, view.DisplayCount);
         Assert.True(view.Bound);
         Assert.True(view.IsQuestOperator);
+        Assert.True(view.PreparedVisible);
 
         hud.Dispatch(HudInput.MoveInventoryItem(2, 5, moveNoMore: true));
         hud.Dispatch(HudInput.DropInventoryItem(2, 2));
@@ -641,6 +643,34 @@ public sealed class NativeHudTests
         duplicate[1] = null;
         Assert.Throws<ArgumentException>(() => new HudInventorySnapshot(
             12, 0, new HudItemReference(Id("bag"), 50), duplicate));
+    }
+
+    [Fact]
+    public void InventorySpellCooldownReconcilesAndDecaysWithoutUsingRemoveTime()
+    {
+        var session = new InMemoryHudSession();
+        using NativeHud hud = Open(session);
+        HudItemStack?[] slots = new HudItemStack?[12];
+        slots[0] = new HudItemStack(Id("item.use"), 1, 61, RemoveTime: long.MinValue);
+        session.TryQueue(HudEvent.InventoryReplaced(
+            Stamp(1), new HudInventorySnapshot(12, 0, new HudItemReference(Id("bag"), 60), slots)));
+        hud.Advance(Frame(100));
+        session.TryQueue(HudEvent.InventoryCooldownStarted(Stamp(2), 0, Id("spell.use"), 80, 100));
+        HudDiff started = hud.Advance(Frame(200));
+        Assert.Equal(80, started.ReadModel.Inventory.Slots[0].CooldownRemainingMilliseconds);
+        Assert.Equal(100, started.ReadModel.Inventory.Slots[0].CooldownDurationMilliseconds);
+        Assert.Equal(long.MinValue, started.ReadModel.Inventory.Slots[0].RemoveTime);
+        hud.Dispatch(HudInput.UseInventoryItem(0));
+
+        HudDiff decayed = hud.Advance(Frame(230));
+        Assert.Equal(50, decayed.ReadModel.Inventory.Slots[0].CooldownRemainingMilliseconds);
+        Assert.Contains(decayed.Changes.ToArray(), change => change.Kind == HudChangeKind.Inventory);
+        Assert.False(session.TryReadCommand(out _));
+
+        session.TryQueue(HudEvent.InventoryCooldownFinished(Stamp(3), 0, Id("spell.use")));
+        HudDiff finished = hud.Advance(Frame(231));
+        Assert.Equal(0, finished.ReadModel.Inventory.Slots[0].CooldownRemainingMilliseconds);
+        Assert.True(finished.ReadModel.Inventory.Slots[0].SpellId.IsEmpty);
     }
 
     [Fact]
