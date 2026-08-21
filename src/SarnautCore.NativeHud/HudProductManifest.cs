@@ -11,6 +11,7 @@ public sealed record HudProductManifest(
     [property: JsonPropertyName("theme")] string Theme,
     [property: JsonPropertyName("timeline_resource")] string TimelineResource,
     [property: JsonPropertyName("chat_commands")] HudChatCommandCatalogReference ChatCommands,
+    [property: JsonPropertyName("chat_antispam")] HudChatAntiSpamCatalogReference ChatAntiSpam,
     [property: JsonPropertyName("options_product")] HudExternalProductReference OptionsProduct,
     [property: JsonPropertyName("item_catalog")] HudItemCatalogReference ItemCatalog,
     [property: JsonPropertyName("external_actions")] HudExternalActions ExternalActions,
@@ -50,6 +51,12 @@ public sealed record HudChatCommandCatalogReference(
     [property: JsonPropertyName("resource")] string Resource,
     [property: JsonPropertyName("locale")] string Locale,
     [property: JsonPropertyName("autocomplete_capacity")] int AutocompleteCapacity);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record HudChatAntiSpamCatalogReference(
+    [property: JsonPropertyName("schema")] string Schema,
+    [property: JsonPropertyName("product_key")] string ProductKey,
+    [property: JsonPropertyName("resource")] string Resource);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record HudExternalProductReference(

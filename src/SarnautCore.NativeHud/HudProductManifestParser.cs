@@ -229,6 +229,12 @@ public static class HudProductManifestParser
         Require(chat.Schema == "sarnaut.chat-commands/v1" && chat.Locale == "eng" &&
             chat.AutocompleteCapacity == 22, "HUD chat command catalog contract changed.");
         ValidateResourcePath(chat.Resource, ".json", "chat_commands.resource");
+        HudChatAntiSpamCatalogReference antiSpam = Required(manifest.ChatAntiSpam, "chat_antispam");
+        Require(antiSpam.Schema == HudChatAntiSpamCatalog.Schema &&
+            antiSpam.ProductKey == HudChatAntiSpamCatalog.ProductKey &&
+            antiSpam.Resource == HudChatAntiSpamCatalog.ProductRelativePath,
+            "HUD chat anti-spam catalog contract changed.");
+        ValidateResourcePath(antiSpam.Resource, ".json", "chat_antispam.resource");
         HudExternalProductReference options = Required(manifest.OptionsProduct, "options_product");
         Require(options.Schema == "sarnaut.options-product/v1" && options.ProductKey == "options",
             "HUD options product reference changed.");

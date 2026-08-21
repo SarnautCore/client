@@ -18,6 +18,7 @@ public sealed class HudProductManifestParserTests
         HudProduct product = HudProductManifestParser.BuildProduct(manifest);
 
         Assert.Equal(HudProductManifestParser.Schema, manifest.Schema);
+        Assert.Equal(HudChatAntiSpamCatalog.ProductRelativePath, manifest.ChatAntiSpam.Resource);
         Assert.Equal(HudSemanticEvent.OpenOptions,
             Assert.Single(manifest.InputBindings, binding => binding.Input == "open-options").Event);
         Assert.Equal((uint)1, manifest.Systems.TargetSelection.Sizing.CullMask);
@@ -87,6 +88,10 @@ public sealed class HudProductManifestParserTests
         JsonObject items = Object();
         items["item_catalog"]!["version"] = 2;
         Assert.Throws<InvalidDataException>(() => HudProductManifestParser.Parse(items.ToJsonString()));
+
+        JsonObject antiSpam = Object();
+        antiSpam["chat_antispam"]!["resource"] = "catalogs/renamed-chat-antispam.json";
+        Assert.Throws<InvalidDataException>(() => HudProductManifestParser.Parse(antiSpam.ToJsonString()));
 
         JsonObject traversal = Object();
         traversal["theme"] = "../theme.res";
@@ -181,6 +186,10 @@ public sealed class HudProductManifestParserTests
             "catalogs/theme.res",
             "catalogs/timelines.res",
             new HudChatCommandCatalogReference("sarnaut.chat-commands/v1", "catalogs/chat-commands-eng.json", "eng", 22),
+            new HudChatAntiSpamCatalogReference(
+                HudChatAntiSpamCatalog.Schema,
+                HudChatAntiSpamCatalog.ProductKey,
+                HudChatAntiSpamCatalog.ProductRelativePath),
             new HudExternalProductReference("sarnaut.options-product/v1", "options"),
             new HudItemCatalogReference("sarnaut.item-presentation-catalog", 1, "hud.items.inst-league1", "item-id"),
             new HudExternalActions("open-options"),
