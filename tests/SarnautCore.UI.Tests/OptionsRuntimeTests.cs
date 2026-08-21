@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace SarnautCore.UI.Tests;
 
 public sealed class OptionsRuntimeTests
@@ -87,8 +89,11 @@ public sealed class OptionsRuntimeTests
         Assert.False(failed.Succeeded);
         Assert.Equal(OptionsCloseDirective.StayOpen, failed.Close);
         Assert.True(runtime.View.IsDirty);
-        Assert.Equal(0, adapters.Settings.PreparedCommitCount);
-        Assert.Equal(0, adapters.Input.PreparedCommitCount);
+        Assert.Equal(1, adapters.Settings.PreparedCommitCount);
+        Assert.Equal(1, adapters.Input.PreparedCommitCount);
+        Assert.Equal(1, adapters.Settings.RollbackCount);
+        Assert.Equal(1, adapters.Input.RollbackCount);
+        Assert.Equal(1, adapters.Persistence.RollbackCount);
     }
 
     [Fact]
@@ -227,6 +232,77 @@ public sealed class OptionsRuntimeTests
     }
 
     [Fact]
+    public void EveryQualityChoiceStagesItsExactAuthoredPresetRow()
+    {
+        OptionsProduct product = OptionsProductFixture.Parse();
+        for (int qualityIndex = 0; qualityIndex < 5; qualityIndex++)
+        {
+            RecordingOptionsAdapters adapters = OptionsProductFixture.Adapters(product);
+            OptionsRuntime runtime = adapters.Create(product);
+            Assert.True(runtime.Open().Succeeded);
+
+            OptionScalar quality = Row(runtime, "gfxSystemSpec").Choices[qualityIndex];
+            Assert.True(runtime.Dispatch(
+                new OptionsCommand.SetOption("gfxSystemSpec", quality)).Succeeded);
+            Assert.True(runtime.Dispatch(new OptionsCommand.Apply()).Succeeded);
+
+            GraphicsPresetDefinition preset = product.GraphicsPresets[qualityIndex];
+            Assert.Equal(OptionsProduct.RequiredPresetOrder[qualityIndex], preset.Id);
+            foreach ((string optionId, double rawValue) in preset.Values)
+            {
+                Assert.Equal(rawValue, adapters.Persistence.State.Global[optionId].Number);
+            }
+        }
+    }
+
+    [Fact]
+    public void CustomQualityChoiceDoesNotReplayAnyPresetRow()
+    {
+        OptionsRuntime runtime = Open(out OptionsProduct product, out _, out _);
+        Dictionary<string, OptionScalar> before = product.GraphicsPresets[0].Values.Keys
+            .ToDictionary(id => id, id => Row(runtime, id).Draft, StringComparer.Ordinal);
+
+        OptionsTransition changed = runtime.Dispatch(new OptionsCommand.SetOption(
+            "gfxSystemSpec",
+            Row(runtime, "gfxSystemSpec").Choices[5]));
+
+        Assert.True(changed.Succeeded);
+        Assert.Equal(5, Row(runtime, "gfxSystemSpec").Draft.Number);
+        foreach ((string optionId, OptionScalar value) in before)
+        {
+            Assert.Equal(value, Row(runtime, optionId).Draft);
+        }
+    }
+
+    [Fact]
+    public void RunsAllPresetRowsFromTheOptInRealManifest()
+    {
+        string? manifest = Environment.GetEnvironmentVariable("SARNAUT_OPTIONS_PRODUCT_MANIFEST");
+        if (string.IsNullOrEmpty(manifest))
+        {
+            return;
+        }
+
+        using FileStream stream = File.OpenRead(manifest);
+        OptionsProduct product = OptionsProductManifestParser.Parse(stream);
+        for (int qualityIndex = 0; qualityIndex < 5; qualityIndex++)
+        {
+            RecordingOptionsAdapters adapters = OptionsProductFixture.Adapters(product);
+            OptionsRuntime runtime = adapters.Create(product);
+            Assert.True(runtime.Open().Succeeded);
+            Assert.True(runtime.Dispatch(new OptionsCommand.SetOption(
+                "gfxSystemSpec",
+                Row(runtime, "gfxSystemSpec").Choices[qualityIndex])).Succeeded);
+            Assert.True(runtime.Dispatch(new OptionsCommand.Apply()).Succeeded);
+
+            foreach ((string optionId, double rawValue) in product.GraphicsPresets[qualityIndex].Values)
+            {
+                Assert.Equal(rawValue, adapters.Persistence.State.Global[optionId].Number);
+            }
+        }
+    }
+
+    [Fact]
     public void AutodetectStagesAdapterValuesWithoutPersisting()
     {
         OptionsRuntime runtime = Open(out _, out RecordingOptionsAdapters adapters, out _);
@@ -246,11 +322,14 @@ public sealed class OptionsRuntimeTests
     {
         OptionsProduct product = OptionsProductFixture.Parse();
         RecordingOptionsAdapters adapters = OptionsProductFixture.Adapters(product);
+        adapters.Settings.Current["gfx_gamma"] = OptionScalar.FromNumber(0);
+        adapters.Settings.Defaults["gfxResolution"] = OptionScalar.FromText("1920x1080");
         adapters.Persistence.State = adapters.Persistence.State with
         {
             Global = adapters.Persistence.State.Global
                 .SetItem("gfx_gamma", OptionScalar.FromBoolean(true))
-                .SetItem("gfx_fog_factor", OptionScalar.FromNumber(2)),
+                .SetItem("gfx_fog_factor", OptionScalar.FromNumber(2))
+                .SetItem("gfxResolution", OptionScalar.FromBoolean(true)),
             User = adapters.Persistence.State.User
                 .SetItem("chat_bubbles_opacity", OptionScalar.FromNumber(99)),
         };
@@ -260,12 +339,15 @@ public sealed class OptionsRuntimeTests
 
         Assert.True(opened.Succeeded);
         Assert.Equal(Row(runtime, "gfx_gamma").Default, Row(runtime, "gfx_gamma").Draft);
+        Assert.Equal("1920x1080", Row(runtime, "gfxResolution").Draft.Text);
         Assert.Equal(7, Row(runtime, "chat_bubbles_opacity").Draft.Number);
         Assert.Equal(1, Row(runtime, "gfx_fog_factor").Draft.Number);
         Assert.Contains(runtime.View.Warnings, warning =>
             warning is { Code: OptionsIssueCode.InvalidStoredOption, RelatedId: "gfx_gamma" });
         Assert.Contains(runtime.View.Warnings, warning =>
             warning is { Code: OptionsIssueCode.InvalidStoredOption, RelatedId: "chat_bubbles_opacity" });
+        Assert.Contains(runtime.View.Warnings, warning =>
+            warning is { Code: OptionsIssueCode.InvalidStoredOption, RelatedId: "gfxResolution" });
         Assert.DoesNotContain(runtime.View.Warnings, warning => warning.RelatedId == "gfx_fog_factor");
     }
 
@@ -274,6 +356,7 @@ public sealed class OptionsRuntimeTests
     {
         OptionsProduct product = OptionsProductFixture.Parse();
         RecordingOptionsAdapters adapters = OptionsProductFixture.Adapters(product);
+        adapters.Settings.Current["gfx_gamma"] = OptionScalar.FromNumber(0);
         adapters.Persistence.State = adapters.Persistence.State with
         {
             User = adapters.Persistence.State.User.SetItem(
@@ -298,6 +381,7 @@ public sealed class OptionsRuntimeTests
     {
         OptionsProduct product = OptionsProductFixture.Parse();
         RecordingOptionsAdapters adapters = OptionsProductFixture.Adapters(product);
+        adapters.Settings.Current["chat_bubbles_opacity"] = OptionScalar.FromNumber(3);
         adapters.Persistence.State = adapters.Persistence.State with
         {
             Global = adapters.Persistence.State.Global.SetItem(
@@ -315,6 +399,66 @@ public sealed class OptionsRuntimeTests
             Code: OptionsIssueCode.InvalidStoredOption,
             RelatedId: "chat_bubbles_opacity",
         });
+    }
+
+    [Fact]
+    public void ValidCorrectOwnerWinsWhileWrongDuplicateStillWarns()
+    {
+        OptionsProduct product = OptionsProductFixture.Parse();
+        RecordingOptionsAdapters adapters = OptionsProductFixture.Adapters(product);
+        adapters.Persistence.State = adapters.Persistence.State with
+        {
+            Global = adapters.Persistence.State.Global.SetItem(
+                "gfx_gamma",
+                OptionScalar.FromNumber(0)),
+            User = adapters.Persistence.State.User.SetItem(
+                "gfx_gamma",
+                OptionScalar.FromNumber(1)),
+        };
+        OptionsRuntime runtime = adapters.Create(product);
+
+        Assert.True(runtime.Open().Succeeded);
+
+        Assert.Equal(0, Row(runtime, "gfx_gamma").Draft.Number);
+        Assert.Contains(runtime.View.Warnings, warning => warning is
+        {
+            Code: OptionsIssueCode.InvalidStoredOption,
+            RelatedId: "gfx_gamma",
+        });
+    }
+
+    [Fact]
+    public void UnauthoredRawPresetValueFallsBackButRetailRawValueSurvives()
+    {
+        OptionsProduct product = OptionsProductFixture.Parse();
+        RecordingOptionsAdapters rejectedAdapters = OptionsProductFixture.Adapters(product);
+        rejectedAdapters.Persistence.State = rejectedAdapters.Persistence.State with
+        {
+            Global = rejectedAdapters.Persistence.State.Global.SetItem(
+                "gfx_fog_factor",
+                OptionScalar.FromNumber(999)),
+        };
+        OptionsRuntime rejected = rejectedAdapters.Create(product);
+
+        Assert.True(rejected.Open().Succeeded);
+        Assert.Equal(Row(rejected, "gfx_fog_factor").Default, Row(rejected, "gfx_fog_factor").Draft);
+        Assert.Contains(rejected.View.Warnings, warning => warning.RelatedId == "gfx_fog_factor");
+        Assert.Throws<ArgumentOutOfRangeException>(() => OptionScalar.FromNumber(double.NaN));
+
+        RecordingOptionsAdapters acceptedAdapters = OptionsProductFixture.Adapters(product);
+        acceptedAdapters.Persistence.State = acceptedAdapters.Persistence.State with
+        {
+            Global = acceptedAdapters.Persistence.State.Global
+                .SetItem("gfx_fog_factor", OptionScalar.FromNumber(2))
+                .SetItem("gfx_lod_factor", OptionScalar.FromNumber(3)),
+        };
+        OptionsRuntime accepted = acceptedAdapters.Create(product);
+
+        Assert.True(accepted.Open().Succeeded);
+        Assert.DoesNotContain(accepted.View.Warnings, warning =>
+            warning.RelatedId is "gfx_fog_factor" or "gfx_lod_factor");
+        Assert.Equal(1, Row(accepted, "gfx_fog_factor").Draft.Number);
+        Assert.Equal(1, Row(accepted, "gfx_lod_factor").Draft.Number);
     }
 
     [Fact]
@@ -380,6 +524,78 @@ public sealed class OptionsRuntimeTests
         Assert.False(Row(runtime, "use_area_effect").Draft.Boolean);
     }
 
+    [Theory]
+    [InlineData("settings", false)]
+    [InlineData("settings", true)]
+    [InlineData("input", false)]
+    [InlineData("input", true)]
+    [InlineData("persistence", false)]
+    [InlineData("persistence", true)]
+    public void CommitFailureRestoresEveryPreviouslyCommittedAdapter(
+        string lane,
+        bool throws)
+    {
+        OptionsRuntime runtime = Open(out _, out RecordingOptionsAdapters adapters, out _);
+        runtime.Dispatch(new OptionsCommand.SetOption("use_area_effect", OptionScalar.FromBoolean(false)));
+        runtime.Dispatch(new OptionsCommand.BeginBindingCapture("binding_00", BindingSlot.Primary));
+        runtime.Dispatch(new OptionsCommand.OfferBinding(new InputChord("BASELINE_KEY")));
+        Assert.True(runtime.Dispatch(new OptionsCommand.Apply()).Succeeded);
+        ImmutableDictionary<string, OptionScalar> settingsBaseline = adapters.Settings.Committed;
+        ImmutableDictionary<string, BindingPair> inputBaseline = adapters.Input.Installed;
+        OptionsStoredState storeBaseline = adapters.Persistence.State;
+
+        runtime.Dispatch(new OptionsCommand.SetOption("use_area_effect", OptionScalar.FromBoolean(true)));
+        runtime.Dispatch(new OptionsCommand.BeginBindingCapture("binding_00", BindingSlot.Primary));
+        runtime.Dispatch(new OptionsCommand.OfferBinding(new InputChord("DRAFT_KEY")));
+        SetCommitFailure(adapters, lane, throws, enabled: true);
+
+        OptionsTransition failed = runtime.Dispatch(new OptionsCommand.Apply());
+
+        Assert.False(failed.Succeeded);
+        Assert.True(runtime.View.IsDirty);
+        Assert.False(Row(runtime, "use_area_effect").Applied.Boolean);
+        Assert.True(Row(runtime, "use_area_effect").Draft.Boolean);
+        Assert.Same(settingsBaseline, adapters.Settings.Committed);
+        Assert.Same(inputBaseline, adapters.Input.Installed);
+        Assert.Same(storeBaseline, adapters.Persistence.State);
+        Assert.Equal(lane is "input" or "persistence" ? 1 : 0, adapters.Input.RollbackCount);
+        Assert.Equal(lane is "persistence" ? 1 : 0, adapters.Persistence.RollbackCount);
+        Assert.Equal(1, adapters.Settings.RollbackCount);
+
+        SetCommitFailure(adapters, lane, throws, enabled: false);
+        Assert.True(runtime.Dispatch(new OptionsCommand.Apply()).Succeeded);
+        Assert.False(runtime.View.IsDirty);
+        Assert.Equal(storeBaseline.Revision + 1, adapters.Persistence.State.Revision);
+    }
+
+    [Fact]
+    public void RollbackViolationIsFatalButStillRollsBackEveryOtherPlan()
+    {
+        OptionsRuntime runtime = Open(out _, out RecordingOptionsAdapters adapters, out _);
+        runtime.Dispatch(new OptionsCommand.SetOption("use_area_effect", OptionScalar.FromBoolean(false)));
+        Assert.True(runtime.Dispatch(new OptionsCommand.Apply()).Succeeded);
+        ImmutableDictionary<string, OptionScalar> settingsBaseline = adapters.Settings.Committed;
+        OptionsStoredState storeBaseline = adapters.Persistence.State;
+
+        runtime.Dispatch(new OptionsCommand.SetOption("use_area_effect", OptionScalar.FromBoolean(true)));
+        adapters.Persistence.FailCommit = true;
+        adapters.Input.FailRollback = true;
+
+        OptionsTransition failed = runtime.Dispatch(new OptionsCommand.Apply());
+
+        OptionsIssue issue = Assert.Single(failed.Issues);
+        Assert.Equal(OptionsIssueCode.RollbackContractViolation, issue.Code);
+        Assert.Equal(OptionsIssueSeverity.Fatal, issue.Severity);
+        Assert.True(runtime.View.IsDirty);
+        Assert.False(Row(runtime, "use_area_effect").Applied.Boolean);
+        Assert.True(Row(runtime, "use_area_effect").Draft.Boolean);
+        Assert.Same(settingsBaseline, adapters.Settings.Committed);
+        Assert.Same(storeBaseline, adapters.Persistence.State);
+        Assert.Equal(1, adapters.Settings.RollbackCount);
+        Assert.Equal(1, adapters.Input.RollbackCount);
+        Assert.Equal(1, adapters.Persistence.RollbackCount);
+    }
+
     [Fact]
     public void ThrowingInputPrepareDisposesThePreparedSettingsPlan()
     {
@@ -424,6 +640,29 @@ public sealed class OptionsRuntimeTests
         opened = runtime.Open();
         Assert.True(opened.Succeeded);
         return runtime;
+    }
+
+    private static void SetCommitFailure(
+        RecordingOptionsAdapters adapters,
+        string lane,
+        bool throws,
+        bool enabled)
+    {
+        if (lane == "settings")
+        {
+            adapters.Settings.FailCommit = enabled && !throws;
+            adapters.Settings.ThrowOnCommit = enabled && throws;
+        }
+        else if (lane == "input")
+        {
+            adapters.Input.FailCommit = enabled && !throws;
+            adapters.Input.ThrowOnCommit = enabled && throws;
+        }
+        else
+        {
+            adapters.Persistence.FailCommit = enabled && !throws;
+            adapters.Persistence.ThrowOnCommit = enabled && throws;
+        }
     }
 
     private static OptionRowView Row(OptionsRuntime runtime, string option) =>

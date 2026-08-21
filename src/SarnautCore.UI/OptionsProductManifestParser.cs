@@ -283,6 +283,10 @@ public static class OptionsProductManifestParser
             [6, 16, 7, 19],
             "page option census");
         RequireCount(product.GraphicsPresets.Length, OptionsProduct.RequiredPresetCount, "graphics presets");
+        RequireIdsInOrder(
+            product.GraphicsPresets.Select(preset => preset.Id),
+            OptionsProduct.RequiredPresetOrder,
+            "graphics preset");
         RequireCount(product.BindingSections.Length, OptionsProduct.RequiredBindingSectionCount, "binding sections");
         RequireIdsInOrder(
             product.BindingSections.Select(section => section.Id),

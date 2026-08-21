@@ -10,8 +10,6 @@ internal static class OptionsProductFixture
     {
         JsonArray options = BuildOptions();
         JsonArray pages = BuildPages(options);
-        string[] presetKeys = [.. OptionsProduct.RequiredPresetOptionIds];
-
         var root = new JsonObject
         {
             ["schema_id"] = OptionsProduct.SchemaId,
@@ -28,23 +26,7 @@ internal static class OptionsProductFixture
             },
             ["pages"] = pages,
             ["options"] = options,
-            ["graphics_presets"] = new JsonArray(
-                Enumerable.Range(0, 5).Select(index =>
-                {
-                    var values = new JsonObject();
-                    for (int keyIndex = 0; keyIndex < presetKeys.Length; keyIndex++)
-                    {
-                        values[presetKeys[keyIndex]] = index == 0 && keyIndex < 2
-                            ? keyIndex + 2
-                            : index % 2;
-                    }
-
-                    return (JsonNode)new JsonObject
-                    {
-                        ["id"] = index.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        ["values"] = values,
-                    };
-                }).ToArray()),
+            ["graphics_presets"] = BuildGraphicsPresets(),
             ["binding_slots"] = 2,
             ["binding_sections"] = BuildBindings(),
             ["content"] = new JsonObject
@@ -76,6 +58,35 @@ internal static class OptionsProductFixture
             .Order(StringComparer.Ordinal)
             .Select(value => (JsonNode?)JsonValue.Create(value))
             .ToArray());
+    }
+
+    private static JsonArray BuildGraphicsPresets()
+    {
+        double[][] rows =
+        [
+            [0, 0, 0.2, 2, 3, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+            [0, 0, 0.6, 1.4, 1.4, 0, 2, 0, 0, 1, 0, 1, 1, 0],
+            [0, 1, 1, 1, 1, 1.7, 3, 0, 0, 1, 1, 1, 1, 1],
+            [2, 2, 1.5, 1, 0.5, 1.7, 4, 0, 0, 2, 1, 1, 1, 1],
+            [4, 3, 2, 1, 0.5, 1.7, 4, 0, 0, 2, 1, 1, 1, 1],
+        ];
+        var presets = new JsonArray();
+        for (int index = 0; index < rows.Length; index++)
+        {
+            var values = new JsonObject();
+            for (int valueIndex = 0; valueIndex < OptionsProduct.RequiredPresetOptionIds.Length; valueIndex++)
+            {
+                values[OptionsProduct.RequiredPresetOptionIds[valueIndex]] = rows[index][valueIndex];
+            }
+
+            presets.Add(new JsonObject
+            {
+                ["id"] = OptionsProduct.RequiredPresetOrder[index],
+                ["values"] = values,
+            });
+        }
+
+        return presets;
     }
 
     public static OptionsProduct Parse()

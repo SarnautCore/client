@@ -88,6 +88,9 @@ public sealed record OptionsProduct(
         "use_area_effect",
         "use_post_effect",
     ];
+
+    public static ImmutableArray<string> RequiredPresetOrder { get; } =
+        ["quality_0", "quality_1", "quality_2", "quality_3", "quality_4"];
 }
 
 public sealed record OptionsLayout(

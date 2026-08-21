@@ -530,62 +530,58 @@ public sealed class OptionsRuntime : IDisposable, IChatBubbleSettingsSource
             return Transition(OptionsOutcome.CloseRequested, OptionsCloseDirective.Accepted);
         }
 
-        IPreparedOptionsApply? preparedSettings = null;
-        IPreparedOptionsApply? preparedInput = null;
+        var plans = new List<IPreparedOptionsTransaction>(3);
         try
         {
-            OptionsAdapterResult<IPreparedOptionsApply> settingsPlan =
+            OptionsAdapterResult<IPreparedOptionsTransaction> settingsPlan =
                 _settings.PrepareApply(PersistableValues(_draft));
             if (!settingsPlan.Succeeded || settingsPlan.Value is null)
             {
                 return Failure(settingsPlan.Error ?? OptionsIssueCode.SettingsPrepareFailed);
             }
 
-            preparedSettings = settingsPlan.Value;
-            OptionsAdapterResult<IPreparedOptionsApply> inputPlan = _input.PrepareApply(_bindingDraft);
+            plans.Add(settingsPlan.Value);
+            OptionsAdapterResult<IPreparedOptionsTransaction> inputPlan =
+                _input.PrepareApply(_bindingDraft);
             if (!inputPlan.Succeeded || inputPlan.Value is null)
             {
-                preparedSettings.Dispose();
+                DisposePlans(plans);
                 return Failure(inputPlan.Error ?? OptionsIssueCode.InputPrepareFailed);
             }
 
-            preparedInput = inputPlan.Value;
+            plans.Add(inputPlan.Value);
+            OptionsAdapterResult<IPreparedOptionsTransaction> persistencePlan =
+                _persistence.PrepareCommit(BuildStoredState());
+            if (!persistencePlan.Succeeded || persistencePlan.Value is null)
+            {
+                DisposePlans(plans);
+                return Failure(persistencePlan.Error ?? OptionsIssueCode.StoreCommitFailed);
+            }
+
+            plans.Add(persistencePlan.Value);
         }
         catch (Exception)
         {
-            preparedSettings?.Dispose();
-            preparedInput?.Dispose();
+            DisposePlans(plans);
             return Failure(OptionsIssueCode.AdapterContractViolation);
         }
 
-        using IPreparedOptionsApply settingsCommit = preparedSettings
-            ?? throw new InvalidOperationException("Settings adapter returned no prepared plan");
-        using IPreparedOptionsApply inputCommit = preparedInput
-            ?? throw new InvalidOperationException("Input adapter returned no prepared plan");
-        OptionsStoredState documents = BuildStoredState();
-        OptionsAdapterResult<bool> persisted;
+        OptionsIssueCode? commitFailure;
+        bool rollbackViolated;
         try
         {
-            persisted = _persistence.Commit(documents);
+            commitFailure = CommitPlans(plans, out rollbackViolated);
         }
-        catch (Exception)
+        finally
         {
-            return Failure(OptionsIssueCode.AdapterContractViolation);
-        }
-
-        if (!persisted.Succeeded)
-        {
-            return Failure(persisted.Error ?? OptionsIssueCode.StoreCommitFailed);
+            DisposePlans(plans);
         }
 
-        try
+        if (commitFailure is OptionsIssueCode failure)
         {
-            settingsCommit.Commit();
-            inputCommit.Commit();
-        }
-        catch (Exception)
-        {
-            return Failure(OptionsIssueCode.AdapterContractViolation, fatal: true);
+            return Failure(
+                rollbackViolated ? OptionsIssueCode.RollbackContractViolation : failure,
+                fatal: rollbackViolated);
         }
 
         _storeRevision++;
@@ -605,6 +601,59 @@ public sealed class OptionsRuntime : IDisposable, IChatBubbleSettingsSource
         }
 
         return Transition(OptionsOutcome.Applied);
+    }
+
+    private static OptionsIssueCode? CommitPlans(
+        IReadOnlyList<IPreparedOptionsTransaction> plans,
+        out bool rollbackViolated)
+    {
+        rollbackViolated = false;
+        for (int index = 0; index < plans.Count; index++)
+        {
+            OptionsIssueCode? failure = null;
+            try
+            {
+                OptionsAdapterResult<bool> result = plans[index].Commit();
+                if (!result.Succeeded)
+                {
+                    failure = result.Error ?? OptionsIssueCode.AdapterContractViolation;
+                }
+            }
+            catch (Exception)
+            {
+                failure = OptionsIssueCode.AdapterContractViolation;
+            }
+
+            if (failure is null)
+            {
+                continue;
+            }
+
+            for (int rollbackIndex = index; rollbackIndex >= 0; rollbackIndex--)
+            {
+                try
+                {
+                    OptionsAdapterResult<bool> rollback = plans[rollbackIndex].Rollback();
+                    rollbackViolated |= !rollback.Succeeded;
+                }
+                catch (Exception)
+                {
+                    rollbackViolated = true;
+                }
+            }
+
+            return failure;
+        }
+
+        return null;
+    }
+
+    private static void DisposePlans(IEnumerable<IPreparedOptionsTransaction> plans)
+    {
+        foreach (IPreparedOptionsTransaction plan in plans)
+        {
+            plan.Dispose();
+        }
     }
 
     private OptionsTransition Cancel()
@@ -697,7 +746,8 @@ public sealed class OptionsRuntime : IDisposable, IChatBubbleSettingsSource
             ImmutableDictionary<string, OptionScalar> wrongOwner = option.Storage == OptionStorage.Global
                 ? stored.User
                 : stored.Global;
-            if (wrongOwner.ContainsKey(option.Id))
+            bool misrouted = wrongOwner.ContainsKey(option.Id);
+            if (misrouted)
             {
                 warnings.Add(new OptionsIssue(
                     OptionsIssueCode.InvalidStoredOption,
@@ -713,11 +763,16 @@ public sealed class OptionsRuntime : IDisposable, IChatBubbleSettingsSource
                 }
                 else
                 {
+                    current = defaultValue;
                     warnings.Add(new OptionsIssue(
                         OptionsIssueCode.InvalidStoredOption,
                         OptionsIssueSeverity.Warning,
                         option.Id));
                 }
+            }
+            else if (misrouted)
+            {
+                current = defaultValue;
             }
 
             choices.Add(option.Id, optionChoices);
@@ -890,9 +945,8 @@ public sealed class OptionsRuntime : IDisposable, IChatBubbleSettingsSource
         OptionScalar value,
         ImmutableArray<OptionScalar> choices) => ValidValue(option, value, choices)
             || IsPresetControlled(option.Id)
-                && option.DataKind is OptionDataKind.Discrete or OptionDataKind.DiscreteFloat
                 && value.Kind == OptionScalarKind.Number
-                && double.IsFinite(value.Number);
+                && IsAuthoredPresetValue(option.Id, value.Number);
 
     private static bool ValidValue(
         OptionDefinition option,
@@ -916,33 +970,25 @@ public sealed class OptionsRuntime : IDisposable, IChatBubbleSettingsSource
         ImmutableDictionary<string, OptionScalar> candidate,
         OptionScalar selected)
     {
-        string id = selected.Kind switch
-        {
-            OptionScalarKind.Text => selected.Text ?? string.Empty,
-            OptionScalarKind.Number => selected.Number.ToString(
-                "R",
-                System.Globalization.CultureInfo.InvariantCulture),
-            _ => string.Empty,
-        };
-        GraphicsPresetDefinition? preset = _product.GraphicsPresets.FirstOrDefault(item => item.Id == id);
-        if (preset is null)
+        OptionDefinition quality = _product.Options.Single(
+            option => option.Handler == OptionHandler.QualityPreset);
+        ImmutableArray<OptionScalar> qualityChoices = _choices[quality.Id];
+        int qualityIndex = qualityChoices.IndexOf(selected);
+        candidate = candidate.SetItem(quality.Id, selected);
+        if (qualityIndex is < 0 or >= 5)
         {
             return candidate;
         }
 
+        string presetId = OptionsProduct.RequiredPresetOrder[qualityIndex];
+        GraphicsPresetDefinition preset = _product.GraphicsPresets.Single(item => item.Id == presetId);
         foreach ((string optionId, double number) in preset.Values)
         {
-            if (!_optionDefinitions.ContainsKey(optionId))
-            {
-                continue;
-            }
-
             OptionScalar value = OptionScalar.FromNumber(number);
             candidate = candidate.SetItem(optionId, value);
         }
 
-        OptionDefinition quality = _product.Options.Single(option => option.Handler == OptionHandler.QualityPreset);
-        return candidate.SetItem(quality.Id, selected);
+        return candidate;
     }
 
     private ImmutableDictionary<string, OptionScalar> StageIndividualOption(
@@ -964,9 +1010,20 @@ public sealed class OptionsRuntime : IDisposable, IChatBubbleSettingsSource
     private bool IsPresetControlled(string optionId) =>
         _product.GraphicsPresets.Any(preset => preset.Values.ContainsKey(optionId));
 
+    private bool IsAuthoredPresetValue(string optionId, double value) =>
+        _product.GraphicsPresets.Any(preset =>
+            preset.Values.TryGetValue(optionId, out double presetValue) && presetValue == value);
+
     private OptionScalar ProjectForView(OptionDefinition option, OptionScalar value)
     {
         ImmutableArray<OptionScalar> choices = _choices[option.Id];
+        if (IsPresetControlled(option.Id)
+            && option.DataKind == OptionDataKind.Boolean
+            && value.Kind == OptionScalarKind.Number)
+        {
+            return OptionScalar.FromBoolean(value.Number != 0);
+        }
+
         if (!IsPresetControlled(option.Id)
             || value.Kind != OptionScalarKind.Number
             || choices.Length == 0

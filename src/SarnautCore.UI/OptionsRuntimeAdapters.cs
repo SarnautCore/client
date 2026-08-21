@@ -18,9 +18,10 @@ internal sealed record OptionsSettingsSnapshot(
     ImmutableDictionary<string, OptionScalar> Defaults,
     ImmutableDictionary<string, ImmutableArray<OptionScalar>> DynamicChoices);
 
-internal interface IPreparedOptionsApply : IDisposable
+internal interface IPreparedOptionsTransaction : IDisposable
 {
-    void Commit();
+    OptionsAdapterResult<bool> Commit();
+    OptionsAdapterResult<bool> Rollback();
 }
 
 internal interface IOptionsSettingsAdapter
@@ -30,7 +31,7 @@ internal interface IOptionsSettingsAdapter
     OptionsAdapterResult<ImmutableDictionary<string, OptionScalar>> Autodetect(
         OptionsProduct product);
 
-    OptionsAdapterResult<IPreparedOptionsApply> PrepareApply(
+    OptionsAdapterResult<IPreparedOptionsTransaction> PrepareApply(
         ImmutableDictionary<string, OptionScalar> values);
 }
 
@@ -44,14 +45,14 @@ internal interface IOptionsInputAdapter
 {
     OptionsAdapterResult<InputChord> Validate(InputChord chord);
 
-    OptionsAdapterResult<IPreparedOptionsApply> PrepareApply(
+    OptionsAdapterResult<IPreparedOptionsTransaction> PrepareApply(
         ImmutableDictionary<string, BindingPair> bindings);
 }
 
 internal interface IOptionsPersistenceAdapter
 {
     OptionsAdapterResult<OptionsStoredState> Load();
-    OptionsAdapterResult<bool> Commit(OptionsStoredState state);
+    OptionsAdapterResult<IPreparedOptionsTransaction> PrepareCommit(OptionsStoredState state);
 }
 
 internal readonly record struct BindingPair(InputChord? Primary, InputChord? Secondary)
@@ -88,14 +89,22 @@ internal sealed class RecordingOptionsAdapters
         new(product, Settings, Audio, Input, Persistence);
 }
 
-internal sealed class RecordingPreparedApply(Action commit) : IPreparedOptionsApply
+internal sealed class RecordingPreparedTransaction(
+    Func<OptionsAdapterResult<bool>> commit,
+    Func<OptionsAdapterResult<bool>> rollback) : IPreparedOptionsTransaction
 {
     private bool _disposed;
 
-    public void Commit()
+    public OptionsAdapterResult<bool> Commit()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        commit();
+        return commit();
+    }
+
+    public OptionsAdapterResult<bool> Rollback()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return rollback();
     }
 
     public bool IsDisposed => _disposed;
@@ -107,15 +116,21 @@ internal sealed class RecordingSettingsAdapter : IOptionsSettingsAdapter
     public bool FailRead { get; set; }
     public bool FailAutodetect { get; set; }
     public bool FailPrepare { get; set; }
-    public bool ThrowOnPreparedCommit { get; set; }
+    public bool FailCommit { get; set; }
+    public bool ThrowOnCommit { get; set; }
+    public bool FailRollback { get; set; }
+    public bool ThrowOnRollback { get; set; }
     public int PreparedCommitCount { get; private set; }
+    public int RollbackCount { get; private set; }
     public int AutodetectCount { get; private set; }
-    public RecordingPreparedApply? LastPlan { get; private set; }
+    public RecordingPreparedTransaction? LastPlan { get; private set; }
     public Dictionary<string, OptionScalar> Current { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, OptionScalar> Defaults { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, ImmutableArray<OptionScalar>> DynamicChoices { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, OptionScalar> Detected { get; } = new(StringComparer.Ordinal);
     public ImmutableDictionary<string, OptionScalar>? LastPrepared { get; private set; }
+    public ImmutableDictionary<string, OptionScalar> Committed { get; private set; } =
+        ImmutableDictionary<string, OptionScalar>.Empty;
 
     public OptionsAdapterResult<OptionsSettingsSnapshot> Read(OptionsProduct product) => FailRead
         ? OptionsAdapterResult<OptionsSettingsSnapshot>.Failure(OptionsIssueCode.SettingsReadFailed)
@@ -135,25 +150,49 @@ internal sealed class RecordingSettingsAdapter : IOptionsSettingsAdapter
                 Detected.ToImmutableDictionary(StringComparer.Ordinal));
     }
 
-    public OptionsAdapterResult<IPreparedOptionsApply> PrepareApply(
+    public OptionsAdapterResult<IPreparedOptionsTransaction> PrepareApply(
         ImmutableDictionary<string, OptionScalar> values)
     {
         LastPrepared = values;
         if (FailPrepare)
         {
-            return OptionsAdapterResult<IPreparedOptionsApply>.Failure(OptionsIssueCode.SettingsPrepareFailed);
+            return OptionsAdapterResult<IPreparedOptionsTransaction>.Failure(
+                OptionsIssueCode.SettingsPrepareFailed);
         }
 
-        LastPlan = new RecordingPreparedApply(() =>
-        {
-            if (ThrowOnPreparedCommit)
+        ImmutableDictionary<string, OptionScalar> previous = Committed;
+        LastPlan = new RecordingPreparedTransaction(
+            commit: () =>
             {
-                throw new InvalidOperationException("Injected prepared settings commit failure");
-            }
+                PreparedCommitCount++;
+                Committed = values;
+                if (ThrowOnCommit)
+                {
+                    throw new InvalidOperationException("Injected prepared settings commit failure");
+                }
 
-            PreparedCommitCount++;
-        });
-        return OptionsAdapterResult<IPreparedOptionsApply>.Success(LastPlan);
+                return FailCommit
+                    ? OptionsAdapterResult<bool>.Failure(OptionsIssueCode.SettingsCommitFailed)
+                    : OptionsAdapterResult<bool>.Success(true);
+            },
+            rollback: () =>
+            {
+                RollbackCount++;
+                if (ThrowOnRollback)
+                {
+                    throw new InvalidOperationException("Injected settings rollback failure");
+                }
+
+                if (FailRollback)
+                {
+                    return OptionsAdapterResult<bool>.Failure(
+                        OptionsIssueCode.RollbackContractViolation);
+                }
+
+                Committed = previous;
+                return OptionsAdapterResult<bool>.Success(true);
+            });
+        return OptionsAdapterResult<IPreparedOptionsTransaction>.Success(LastPlan);
     }
 }
 
@@ -186,15 +225,22 @@ internal sealed class RecordingInputAdapter : IOptionsInputAdapter
     public bool FailValidation { get; set; }
     public bool FailPrepare { get; set; }
     public bool ThrowOnPrepare { get; set; }
-    public bool ThrowOnPreparedCommit { get; set; }
+    public bool FailCommit { get; set; }
+    public bool ThrowOnCommit { get; set; }
+    public bool FailRollback { get; set; }
+    public bool ThrowOnRollback { get; set; }
     public int PreparedCommitCount { get; private set; }
+    public int RollbackCount { get; private set; }
     public ImmutableDictionary<string, BindingPair>? LastPrepared { get; private set; }
+    public ImmutableDictionary<string, BindingPair> Installed { get; private set; } =
+        ImmutableDictionary<string, BindingPair>.Empty;
+    public RecordingPreparedTransaction? LastPlan { get; private set; }
 
     public OptionsAdapterResult<InputChord> Validate(InputChord chord) => FailValidation
         ? OptionsAdapterResult<InputChord>.Failure(OptionsIssueCode.InvalidBinding)
         : OptionsAdapterResult<InputChord>.Success(new InputChord(chord.Token));
 
-    public OptionsAdapterResult<IPreparedOptionsApply> PrepareApply(
+    public OptionsAdapterResult<IPreparedOptionsTransaction> PrepareApply(
         ImmutableDictionary<string, BindingPair> bindings)
     {
         if (ThrowOnPrepare)
@@ -203,18 +249,45 @@ internal sealed class RecordingInputAdapter : IOptionsInputAdapter
         }
 
         LastPrepared = bindings;
-        return FailPrepare
-            ? OptionsAdapterResult<IPreparedOptionsApply>.Failure(OptionsIssueCode.InputPrepareFailed)
-            : OptionsAdapterResult<IPreparedOptionsApply>.Success(
-                new RecordingPreparedApply(() =>
-                {
-                    if (ThrowOnPreparedCommit)
-                    {
-                        throw new InvalidOperationException("Injected prepared input commit failure");
-                    }
+        if (FailPrepare)
+        {
+            return OptionsAdapterResult<IPreparedOptionsTransaction>.Failure(
+                OptionsIssueCode.InputPrepareFailed);
+        }
 
-                    PreparedCommitCount++;
-                }));
+        ImmutableDictionary<string, BindingPair> previous = Installed;
+        LastPlan = new RecordingPreparedTransaction(
+            commit: () =>
+            {
+                PreparedCommitCount++;
+                Installed = bindings;
+                if (ThrowOnCommit)
+                {
+                    throw new InvalidOperationException("Injected prepared input commit failure");
+                }
+
+                return FailCommit
+                    ? OptionsAdapterResult<bool>.Failure(OptionsIssueCode.InputCommitFailed)
+                    : OptionsAdapterResult<bool>.Success(true);
+            },
+            rollback: () =>
+            {
+                RollbackCount++;
+                if (ThrowOnRollback)
+                {
+                    throw new InvalidOperationException("Injected input rollback failure");
+                }
+
+                if (FailRollback)
+                {
+                    return OptionsAdapterResult<bool>.Failure(
+                        OptionsIssueCode.RollbackContractViolation);
+                }
+
+                Installed = previous;
+                return OptionsAdapterResult<bool>.Success(true);
+            });
+        return OptionsAdapterResult<IPreparedOptionsTransaction>.Success(LastPlan);
     }
 }
 
@@ -222,7 +295,12 @@ internal sealed class RecordingPersistenceAdapter : IOptionsPersistenceAdapter
 {
     public bool FailLoad { get; set; }
     public bool FailCommit { get; set; }
+    public bool ThrowOnCommit { get; set; }
+    public bool FailRollback { get; set; }
+    public bool ThrowOnRollback { get; set; }
     public int CommitCount { get; private set; }
+    public int RollbackCount { get; private set; }
+    public RecordingPreparedTransaction? LastPlan { get; private set; }
     public OptionsStoredState State { get; set; } = new(
         0,
         ImmutableDictionary<string, OptionScalar>.Empty,
@@ -233,20 +311,46 @@ internal sealed class RecordingPersistenceAdapter : IOptionsPersistenceAdapter
         ? OptionsAdapterResult<OptionsStoredState>.Failure(OptionsIssueCode.StoreReadFailed)
         : OptionsAdapterResult<OptionsStoredState>.Success(State);
 
-    public OptionsAdapterResult<bool> Commit(OptionsStoredState state)
+    public OptionsAdapterResult<IPreparedOptionsTransaction> PrepareCommit(OptionsStoredState state)
     {
-        if (FailCommit)
-        {
-            return OptionsAdapterResult<bool>.Failure(OptionsIssueCode.StoreCommitFailed);
-        }
-
         if (state.Revision != State.Revision)
         {
-            return OptionsAdapterResult<bool>.Failure(OptionsIssueCode.ConcurrentStoreChange);
+            return OptionsAdapterResult<IPreparedOptionsTransaction>.Failure(
+                OptionsIssueCode.ConcurrentStoreChange);
         }
 
-        CommitCount++;
-        State = state with { Revision = State.Revision + 1 };
-        return OptionsAdapterResult<bool>.Success(true);
+        OptionsStoredState previous = State;
+        LastPlan = new RecordingPreparedTransaction(
+            commit: () =>
+            {
+                CommitCount++;
+                State = state with { Revision = previous.Revision + 1 };
+                if (ThrowOnCommit)
+                {
+                    throw new InvalidOperationException("Injected persistence commit failure");
+                }
+
+                return FailCommit
+                    ? OptionsAdapterResult<bool>.Failure(OptionsIssueCode.StoreCommitFailed)
+                    : OptionsAdapterResult<bool>.Success(true);
+            },
+            rollback: () =>
+            {
+                RollbackCount++;
+                if (ThrowOnRollback)
+                {
+                    throw new InvalidOperationException("Injected persistence rollback failure");
+                }
+
+                if (FailRollback)
+                {
+                    return OptionsAdapterResult<bool>.Failure(
+                        OptionsIssueCode.RollbackContractViolation);
+                }
+
+                State = previous;
+                return OptionsAdapterResult<bool>.Success(true);
+            });
+        return OptionsAdapterResult<IPreparedOptionsTransaction>.Success(LastPlan);
     }
 }
