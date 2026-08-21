@@ -151,6 +151,23 @@ public sealed class HudChatCompositionTests
             22));
     }
 
+    [Fact]
+    public void SubmissionRejectsChannelAndTargetMismatches()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            new HudChatSubmission(HudChatChannel.Whisper, "hello").Validate());
+        Assert.Throws<ArgumentException>(() =>
+            new HudChatSubmission(
+                HudChatChannel.Say,
+                "hello",
+                new HudChatTarget.WhisperCharacterName("Alice")).Validate());
+        Assert.Throws<ArgumentException>(() =>
+            new HudChatSubmission(
+                HudChatChannel.World,
+                "hello",
+                new HudChatTarget.NamedChannel("trade")).Validate());
+    }
+
     private static HudChatComposer NewComposer()
     {
         HudChatCommandDefinition[] commands =

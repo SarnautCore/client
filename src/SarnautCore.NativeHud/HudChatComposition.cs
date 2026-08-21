@@ -223,10 +223,11 @@ public sealed record HudChatSubmission(
     public HudChatSubmission Validate()
     {
         HudChatText.Validate(Text);
-        bool validTarget = Target switch
+        bool validTarget = (Channel, Target) switch
         {
-            HudChatTarget.NoTarget => true,
-            HudChatTarget.WhisperCharacterName or HudChatTarget.NamedChannel => true,
+            (HudChatChannel.Whisper, HudChatTarget.WhisperCharacterName) => true,
+            (HudChatChannel.Whisper, _) => false,
+            (_, HudChatTarget.NoTarget) => true,
             _ => false,
         };
         if (!validTarget)
