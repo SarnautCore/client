@@ -45,7 +45,7 @@ public sealed class NativeHudTests
     {
         var session = new InMemoryHudSession();
         using NativeHud hud = Open(session);
-        HudEvent item = HudEvent.ActionSlotChanged(Stamp(1), 0, Id("ability"), 10);
+        HudEvent item = HudEvent.ActionSlotChanged(Stamp(1), 0, Id("ability"), 0);
         session.TryQueue(item);
         hud.Advance(Frame(0));
         session.TryQueue(item);
@@ -193,7 +193,8 @@ public sealed class NativeHudTests
         Assert.True(session.TryReadCommand(out HudCommand command));
         Assert.Equal(HudCommandKind.ActivateAction, command.Kind);
         Assert.Equal(3, command.Slot);
-        Assert.Equal(Id("slash"), command.Value);
+        Assert.True(command.Value.IsEmpty);
+        Assert.Equal(Stamp(1), command.ExpectedRevision);
         Assert.False(session.TryReadCommand(out _));
     }
 
@@ -564,6 +565,241 @@ public sealed class NativeHudTests
         Assert.Throws<ObjectDisposedException>(() => hud.Advance(Frame(0)));
     }
 
+    [Fact]
+    public void ContextProductPreservesRetailCensusesAndCharacterRoles()
+    {
+        HudContextProduct contexts = Product().Contexts;
+
+        Assert.Equal([12, 16, 18, 24, 30, 36, 42, 48, 54, 60],
+            contexts.Inventory.Layouts.ToArray().Select(layout => layout.Capacity));
+        Assert.Equal(20, contexts.Loot.MaxEntries);
+        Assert.Equal(4, contexts.Loot.PageSlots.Length);
+        Assert.Equal(20, contexts.QuestLog.Entries.Length);
+        Assert.Equal(3, contexts.QuestLog.Bookmarks.Length);
+        Assert.Equal(15, contexts.QuestLog.SecretComponents.Length);
+        Assert.Equal(20, contexts.QuestInfo.TalkOptions.Length);
+        Assert.Equal(6, contexts.QuestInfo.Objectives.Length);
+        Assert.Equal(21, contexts.Character.EquipmentSlots.Length);
+        Assert.Equal(contexts.Character.EquipmentSlots[19], contexts.Character.BagSlot);
+        Assert.Equal(contexts.Character.EquipmentSlots[20], contexts.Character.DeathInsuranceSlot);
+        Assert.Equal(14, contexts.Character.StatRows.Length);
+
+        Assert.Throws<ArgumentException>(() => new HudLootProduct(
+            Id("loot"), Enumerable.Range(1, 4).Select(index => Id($"loot-{index}")).ToArray(), 19));
+        Assert.Throws<ArgumentException>(() => new HudCharacterProduct(
+            Id("character"), Enumerable.Range(1, 20).Select(index => Id($"slot-{index}")).ToArray(),
+            Enumerable.Range(1, 14).Select(index => Id($"stat-{index}")).ToArray()));
+    }
+
+    [Fact]
+    public void InventoryReplacementSelectsExactLayoutAndEmitsTypedCommands()
+    {
+        var session = new InMemoryHudSession();
+        using NativeHud hud = Open(session);
+        HudItemStack?[] slots = new HudItemStack?[16];
+        slots[2] = new HudItemStack(Id("item.sword"), 3, 2003, CounterValue: 7, Bound: true,
+            IsQuestOperator: true);
+        session.TryQueue(HudEvent.InventoryReplaced(
+            Stamp(1), new HudInventorySnapshot(16, 42, new HudItemReference(Id("bag.16"), 2000), slots)));
+
+        HudDiff replaced = hud.Advance(Frame(0));
+        HudInventorySlotView view = replaced.ReadModel.Inventory.Slots[2];
+        Assert.True(replaced.ReadModel.Inventory.HasAuthority);
+        Assert.Equal(Id("multibag-16"), replaced.ReadModel.Inventory.LayoutElement);
+        Assert.Equal(Id("item.sword"), view.ItemId);
+        Assert.Equal(7, view.CounterValue);
+        Assert.True(view.Bound);
+        Assert.True(view.IsQuestOperator);
+
+        hud.Dispatch(HudInput.MoveInventoryItem(2, 5, moveNoMore: true));
+        hud.Dispatch(HudInput.DropInventoryItem(2, 2));
+        hud.Dispatch(HudInput.UseInventoryItem(2));
+        hud.Advance(Frame(1));
+
+        Assert.True(session.TryReadCommand(out HudCommand move));
+        Assert.Equal(HudCommandKind.MoveInventoryItem, move.Kind);
+        Assert.Equal(2, move.Slot);
+        Assert.Equal(5, move.Auxiliary);
+        Assert.True(move.Flag);
+        Assert.Equal(Stamp(1), move.ExpectedRevision);
+        Assert.True(session.TryReadCommand(out HudCommand drop));
+        Assert.Equal(HudCommandKind.DropInventoryItem, drop.Kind);
+        Assert.Equal(2, drop.Count);
+        Assert.True(session.TryReadCommand(out HudCommand use));
+        Assert.Equal(HudCommandKind.UseInventoryItem, use.Kind);
+    }
+
+    [Fact]
+    public void InventoryReplacementRejectsDuplicateOrEquippedBagInstanceIds()
+    {
+        HudItemStack?[] duplicate = new HudItemStack?[12];
+        duplicate[0] = new HudItemStack(Id("item.a"), 1, 50);
+        duplicate[1] = new HudItemStack(Id("item.b"), 1, 50);
+        Assert.Throws<ArgumentException>(() => new HudInventorySnapshot(
+            12, 0, new HudItemReference(Id("bag"), 40), duplicate));
+
+        duplicate[1] = null;
+        Assert.Throws<ArgumentException>(() => new HudInventorySnapshot(
+            12, 0, new HudItemReference(Id("bag"), 50), duplicate));
+    }
+
+    [Fact]
+    public void LootUsesFourVisibleRowsFivePagesAndAbsoluteEntryCommands()
+    {
+        var session = new InMemoryHudSession();
+        using NativeHud hud = Open(session);
+        HudLootItem[] items = Enumerable.Range(0, 20)
+            .Select(index => new HudLootItem(Id($"loot.{index:00}"), index + 1))
+            .ToArray();
+        session.TryQueue(HudEvent.LootReplaced(Stamp(1), new HudLootSnapshot(77, 10, items)));
+        HudDiff opened = hud.Advance(Frame(0));
+
+        Assert.Equal(5, opened.ReadModel.Loot.PageCount);
+        Assert.Equal(4, opened.ReadModel.Loot.PageSlots.Length);
+        hud.Dispatch(HudInput.LootNextPage());
+        hud.Dispatch(HudInput.TakeLootItem(7));
+        hud.Dispatch(HudInput.TakeLootMoney());
+        hud.Dispatch(HudInput.TakeAllLoot());
+        HudDiff next = hud.Advance(Frame(1));
+
+        Assert.Equal(1, next.ReadModel.Loot.Page);
+        Assert.Equal(4, next.ReadModel.Loot.PageSlots[0].Entry);
+        Assert.True(session.TryReadCommand(out HudCommand item));
+        Assert.Equal(HudCommandKind.TakeLootItem, item.Kind);
+        Assert.Equal(7, item.Slot);
+        Assert.True(session.TryReadCommand(out HudCommand money));
+        Assert.Equal(HudCommandKind.TakeLootMoney, money.Kind);
+        Assert.True(session.TryReadCommand(out HudCommand all));
+        Assert.Equal(HudCommandKind.TakeAllLoot, all.Kind);
+    }
+
+    [Fact]
+    public void QuestAbandonRequiresThirtySecondConfirmationAndTurnInCarriesRewardIndex()
+    {
+        var session = new InMemoryHudSession();
+        using NativeHud hud = Open(session);
+        HudQuestDocument quest = Quest(Id("quest.one"), HudQuestClientState.Completable, canAbandon: true);
+        session.TryQueue(HudEvent.QuestLogReplaced(Stamp(1), new HudQuestLogSnapshot([quest])));
+        hud.Advance(Frame(100));
+        hud.Dispatch(HudInput.AbandonQuest(quest.QuestId));
+        HudDiff pending = hud.Advance(Frame(101));
+        Assert.Equal(quest.QuestId, pending.ReadModel.QuestLog.PendingAbandonQuestId);
+        Assert.Equal(30_101, pending.ReadModel.QuestLog.AbandonConfirmationExpiresAtMilliseconds);
+        Assert.False(session.TryReadCommand(out _));
+
+        hud.Dispatch(HudInput.ConfirmAbandonQuest(quest.QuestId));
+        hud.Advance(Frame(102));
+        Assert.True(session.TryReadCommand(out HudCommand abandon));
+        Assert.Equal(HudCommandKind.AbandonQuest, abandon.Kind);
+
+        var rewards = new HudQuestRewardSnapshot(
+            1, 2, 3, [], [new HudRewardItem(Id("reward.a"), 1), new HudRewardItem(Id("reward.b"), 1)], [], []);
+        session.TryQueue(HudEvent.QuestInfoReplaced(
+            Stamp(2), new HudQuestInfoSnapshot(HudQuestInfoMode.TurnIn, quest, 88, rewards)));
+        hud.Advance(Frame(103));
+        hud.Dispatch(HudInput.SelectQuestReward(1));
+        hud.Dispatch(HudInput.TurnInQuest());
+        HudDiff selected = hud.Advance(Frame(104));
+        Assert.Equal(1, selected.ReadModel.QuestInfo.SelectedRewardIndex);
+        Assert.True(session.TryReadCommand(out HudCommand turnIn));
+        Assert.Equal(HudCommandKind.TurnInQuest, turnIn.Kind);
+        Assert.Equal(1, turnIn.Slot);
+    }
+
+    [Fact]
+    public void QuestShareInvitationIsBoundedAndResponseCarriesLogRevision()
+    {
+        var session = new InMemoryHudSession();
+        using NativeHud hud = Open(session);
+        HudQuestDocument quest = Quest(Id("quest.shared"), HudQuestClientState.InProgress);
+        var invitation = new HudQuestShareInvitation(Id("share.1"), quest.QuestId, Id("sharer.name"));
+        session.TryQueue(HudEvent.QuestLogReplaced(
+            Stamp(3), new HudQuestLogSnapshot([quest], shareInvitation: invitation)));
+        HudDiff offered = hud.Advance(Frame(500));
+        Assert.Equal(invitation, offered.ReadModel.QuestLog.ShareInvitation);
+        Assert.Equal(30_500, offered.ReadModel.QuestLog.ShareInvitationExpiresAtMilliseconds);
+
+        hud.Dispatch(HudInput.AcceptSharedQuest(invitation.ShareId, invitation.QuestId));
+        hud.Advance(Frame(501));
+        Assert.True(session.TryReadCommand(out HudCommand command));
+        Assert.Equal(HudCommandKind.AcceptSharedQuest, command.Kind);
+        Assert.Equal(Stamp(3), command.ExpectedRevision);
+    }
+
+    [Fact]
+    public void CharacterUsesTwentyOneNumberedSlotsAndKeepsMissingAuthorityExplicit()
+    {
+        var session = new InMemoryHudSession();
+        using NativeHud hud = Open(session);
+        HudDiff initial = hud.Advance(Frame(0));
+        Assert.False(initial.ReadModel.Character.HasAuthority);
+        Assert.Equal(21, initial.ReadModel.Character.Equipment.Length);
+
+        HudItemStack?[] equipment = new HudItemStack?[21];
+        equipment[19] = new HudItemStack(Id("bag.item"), 1, 4001);
+        equipment[20] = new HudItemStack(Id("death.insurance"), 1, 4002);
+        HudCharacterStat[] stats = Enumerable.Range(1, 14)
+            .Select(index => new HudCharacterStat(Id($"stat.{index:00}"), index, index + 1, index + 2))
+            .ToArray();
+        session.TryQueue(HudEvent.CharacterReplaced(
+            Stamp(1), new HudCharacterSnapshot(Id("hero"), 7, equipment, stats)));
+        HudDiff updated = hud.Advance(Frame(1));
+
+        Assert.True(updated.ReadModel.Character.HasAuthority);
+        Assert.Equal(HudCharacterEquipmentRole.Bag, updated.ReadModel.Character.Equipment[19].Role);
+        Assert.Equal(HudCharacterEquipmentRole.DeathInsurance, updated.ReadModel.Character.Equipment[20].Role);
+        Assert.Equal(Id("bag.item"), updated.ReadModel.Character.Bag.ItemId);
+        Assert.Equal(14, updated.ReadModel.Character.Stats.Length);
+    }
+
+    [Fact]
+    public void EscapeClosesTheLastOpenedContextAndSelectedTargetIsAuthoritative()
+    {
+        var session = new InMemoryHudSession();
+        using NativeHud hud = Open(session);
+        session.TryQueue(HudEvent.TargetSelectionChanged(Stamp(1), 55));
+        session.TryQueue(HudEvent.ActionSlotChanged(Stamp(1), 0, Id("ability.one"), 0, enabled: true));
+        hud.Dispatch(HudInput.ToggleInventory());
+        hud.Dispatch(HudInput.ToggleCharacter());
+        HudDiff opened = hud.Advance(Frame(0));
+        Assert.Equal(55UL, opened.ReadModel.SelectedTarget.EntityId);
+        Assert.True(opened.ReadModel.SelectedTarget.HasAuthority);
+        Assert.True(opened.ReadModel.ActionSlots[0].HasAuthority);
+        Assert.True(opened.ReadModel.Inventory.Open);
+        Assert.True(opened.ReadModel.Character.Open);
+
+        hud.Dispatch(HudInput.Cancel());
+        HudDiff escaped = hud.Advance(Frame(1));
+        Assert.True(escaped.ReadModel.Inventory.Open);
+        Assert.False(escaped.ReadModel.Character.Open);
+        Assert.Equal(HudFocus.Hud, escaped.ReadModel.Focus);
+    }
+
+    [Fact]
+    public void ActionCooldownDecaysFromReceiptAndSuppressesActivationUntilZero()
+    {
+        var session = new InMemoryHudSession();
+        using NativeHud hud = Open(session);
+        session.TryQueue(HudEvent.ActionSlotChanged(
+            Stamp(1), 4, Id("ability.cooldown"), 100, enabled: true, cooldownDurationMilliseconds: 500));
+        HudDiff received = hud.Advance(Frame(1_000));
+        Assert.Equal(100, received.ReadModel.ActionSlots[4].CooldownMilliseconds);
+        Assert.Equal(500, received.ReadModel.ActionSlots[4].CooldownDurationMilliseconds);
+
+        hud.Dispatch(HudInput.ActivateAction(4));
+        HudDiff halfway = hud.Advance(Frame(1_050));
+        Assert.Equal(50, halfway.ReadModel.ActionSlots[4].CooldownMilliseconds);
+        Assert.False(session.TryReadCommand(out _));
+
+        hud.Dispatch(HudInput.ActivateAction(4));
+        HudDiff ready = hud.Advance(Frame(1_101));
+        Assert.Equal(0, ready.ReadModel.ActionSlots[4].CooldownMilliseconds);
+        Assert.True(session.TryReadCommand(out HudCommand command));
+        Assert.Equal(HudCommandKind.ActivateAction, command.Kind);
+        Assert.Equal(4, command.Slot);
+        Assert.True(command.Value.IsEmpty);
+    }
+
     private static NativeHud Open(InMemoryHudSession session, InMemoryHudWorld? world = null, HudProduct? product = null) =>
         NativeHud.Open(product ?? Product(), session, world ?? new InMemoryHudWorld());
 
@@ -608,6 +844,7 @@ public sealed class NativeHudTests
             Id("overtip-prototype"),
             new HudCursorCatalog(Id("cursor-default"), Id("cursor-hover"), Id("cursor-text"), Id("cursor-drag")),
             timelines ?? HudTimelineCatalog.Retail,
+            ContextProduct(),
             masked,
             maxEntities: maxEntities,
             maxOvertips: maxOvertips ?? Math.Min(4, maxEntities),
@@ -615,7 +852,54 @@ public sealed class NativeHudTests
             maxChangesPerFrame: maxChangesPerFrame);
     }
 
+    private static HudContextProduct ContextProduct()
+    {
+        int[][] partitions =
+        [
+            [12], [16], [12, 6], [16, 8], [30], [8, 8, 8, 6, 6], [30, 12],
+            [12, 12, 12, 12], [30, 12, 12], [30, 30],
+        ];
+        int[] capacities = [12, 16, 18, 24, 30, 36, 42, 48, 54, 60];
+        HudInventoryLayoutProduct[] layouts = capacities.Select((capacity, layoutIndex) =>
+        {
+            HudId[] slots = Enumerable.Range(1, capacity)
+                .Select(index => Id($"multibag-{capacity}-slot-{index:00}"))
+                .ToArray();
+            int first = 0;
+            HudInventoryPartitionProduct[] bags = partitions[layoutIndex].Select((count, bagIndex) =>
+            {
+                var bag = new HudInventoryPartitionProduct(Id($"multibag-{capacity}-partition-{bagIndex + 1:00}"), first, count);
+                first += count;
+                return bag;
+            }).ToArray();
+            return new HudInventoryLayoutProduct(Id($"multibag-{capacity}"), capacity, slots, bags);
+        }).ToArray();
+
+        static HudId[] Roles(string prefix, int count) => Enumerable.Range(1, count)
+            .Select(index => Id($"{prefix}-{index:00}"))
+            .ToArray();
+
+        return new HudContextProduct(
+            new HudInventoryProduct(Id("multibag"), layouts),
+            new HudLootProduct(Id("loot-bag"), Roles("loot-item", HudProduct.LootPageSize)),
+            new HudQuestLogProduct(
+                Id("quest-log"), Roles("quest-log-row", 20), Roles("quest-log-bookmark", 3),
+                Roles("quest-log-objective", 5), Roles("quest-log-choice", 5),
+                Roles("quest-log-mandatory", 5), Roles("quest-log-reputation", 5),
+                Roles("quest-log-currency", 5), Roles("quest-log-secret", 15)),
+            new HudQuestInfoProduct(
+                Id("quest-info"), Id("npc-talk"), Roles("quest-talk-option", 20), Roles("quest-info-objective", 6),
+                Roles("quest-info-choice", 5), Roles("quest-info-mandatory", 5),
+                Roles("quest-info-reputation", 5), Roles("quest-info-currency", 5)),
+            new HudCharacterProduct(
+                Id("character"), Roles("character-equipment", 21), Roles("character-stat", 14)));
+    }
+
     private static HudFrame Frame(long now) => new(now, Viewport);
+
+    private static HudQuestDocument Quest(HudId questId, HudQuestClientState state, bool canAbandon = false) =>
+        new(questId, Id($"{questId.Value}.title"), Id($"{questId.Value}.description"), state, canAbandon,
+            [new HudQuestObjective(0, Id($"{questId.Value}.objective"), 1, 1, true)]);
 
     private static HudStamp Stamp(ulong revision) => new(1, revision, 0);
 

@@ -93,11 +93,18 @@ public enum HudEventFamilies
 {
     None = 0,
     ActionSlots = 1 << 0,
+    TargetSelection = 1 << 10,
     Units = 1 << 1,
     CombatFeedback = 1 << 2,
     QuestTracker = 1 << 3,
     Chat = 1 << 4,
-    All = ActionSlots | Units | CombatFeedback | QuestTracker | Chat,
+    Inventory = 1 << 5,
+    Loot = 1 << 6,
+    QuestLog = 1 << 7,
+    QuestInfo = 1 << 8,
+    Character = 1 << 9,
+    All = ActionSlots | TargetSelection | Units | CombatFeedback | QuestTracker | Chat | Inventory | Loot |
+        QuestLog | QuestInfo | Character,
 }
 
 [Flags]
@@ -108,7 +115,23 @@ public enum HudCommandFamilies
     SelectWorldEntity = 1 << 1,
     SubmitChat = 1 << 2,
     InteractWorldEntity = 1 << 3,
-    All = ActivateAction | SelectWorldEntity | SubmitChat | InteractWorldEntity,
+    MoveInventoryItem = 1 << 4,
+    DropInventoryItem = 1 << 5,
+    UseInventoryItem = 1 << 6,
+    DressInventoryItem = 1 << 7,
+    UndressInventoryItem = 1 << 8,
+    TakeLoot = 1 << 9,
+    CloseLoot = 1 << 10,
+    AbandonQuest = 1 << 11,
+    ShareQuest = 1 << 12,
+    AcceptSharedQuest = 1 << 13,
+    DeclineSharedQuest = 1 << 14,
+    AcceptQuest = 1 << 15,
+    TurnInQuest = 1 << 16,
+    All = ActivateAction | SelectWorldEntity | SubmitChat | InteractWorldEntity |
+        MoveInventoryItem | DropInventoryItem | UseInventoryItem | DressInventoryItem |
+        UndressInventoryItem | TakeLoot | CloseLoot | AbandonQuest | ShareQuest |
+        AcceptSharedQuest | DeclineSharedQuest | AcceptQuest | TurnInQuest,
 }
 
 public readonly record struct HudSessionCapabilities(HudEventFamilies Events, HudCommandFamilies Commands);
