@@ -75,6 +75,9 @@ foreach ($probe in $probes) {
         PassThru = $true
     }
     $process = Start-Process @startParameters
+    # Cache the handle; without it Wait-Process leaves ExitCode null and every
+    # probe fails the gate with a blank "exit code" reason.
+    $null = $process.Handle
     $timedOut = $false
     try {
         Wait-Process -Id $process.Id -Timeout $probe.Timeout -ErrorAction Stop

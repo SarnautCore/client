@@ -308,8 +308,10 @@ public partial class ZoneLoader : Node3D
     {
         error = string.Empty;
 
-        // Extract tile coordinates from the converted path (e.g., "0_2_terrain").
-        string fileName = System.IO.Path.GetFileNameWithoutExtension(convertedPath);
+        // Extract the tile coordinates from the converted path: the stem of
+        // ".../0_2.terrain.tscn" is "0_2". GetFileNameWithoutExtension would
+        // only strip ".tscn" and leave "0_2.terrain".
+        string fileName = System.IO.Path.GetFileName(TerrainSourceStem(convertedPath));
 
         // Build native path: <native_root>/maps/<kebab-map-name>/<coords>/<coords>_terrain.tscn
         string kebabMapName = MapNameTransform.ToKebabCase(MapName);
