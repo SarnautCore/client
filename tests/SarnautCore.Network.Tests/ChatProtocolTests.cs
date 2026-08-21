@@ -25,6 +25,31 @@ public sealed class ChatProtocolTests
     }
 
     [Fact]
+    public void RejectionAndEnvelopeNumbersRemainWireStable()
+    {
+        Assert.Equal(18, (int)ClientMessage.PayloadOneofCase.ChatSendRequest);
+        Assert.Equal(20, (int)ServerMessage.PayloadOneofCase.ChatDelivery);
+        Assert.Equal(21, (int)ServerMessage.PayloadOneofCase.ChatRejection);
+
+        Assert.Equal(0, (int)ChatRejectionReason.Mute);
+        Assert.Equal(1, (int)ChatRejectionReason.InternalError);
+        Assert.Equal(2, (int)ChatRejectionReason.Silence);
+        Assert.Equal(3, (int)ChatRejectionReason.NoPoints);
+        Assert.Equal(4, (int)ChatRejectionReason.EnemyFaction);
+        Assert.Equal(5, (int)ChatRejectionReason.Ignored);
+        Assert.Equal(6, (int)ChatRejectionReason.Dead);
+        Assert.Equal(7, (int)ChatRejectionReason.NotPsionic);
+        Assert.Equal(8, (int)ChatRejectionReason.TargetNotFound);
+        Assert.Equal(9, (int)ChatRejectionReason.TargetOffline);
+        Assert.Equal(10, (int)ChatRejectionReason.RateLimited);
+        Assert.Equal(11, (int)ChatRejectionReason.TooLong);
+        Assert.Equal(12, (int)ChatRejectionReason.NotMember);
+        Assert.Equal(13, (int)ChatRejectionReason.NotAuthorized);
+        Assert.Equal(14, (int)ChatRejectionReason.UnsupportedChannel);
+        Assert.Equal(15, (int)ChatRejectionReason.Empty);
+    }
+
+    [Fact]
     public void TypedRequestSurvivesTheClientEnvelopeRoundTrip()
     {
         var envelope = new ClientMessage
