@@ -2,6 +2,15 @@ namespace SarnautCore.NativeHud;
 
 public readonly record struct HudFeedbackPoolProduct(HudFeedbackKind Kind, HudId[] Elements);
 
+public readonly record struct HudPlateAssignment(HudId SemanticId)
+{
+    public bool IsNone => SemanticId.IsEmpty;
+
+    public static HudPlateAssignment None => default;
+}
+
+public readonly record struct HudUnitPlateProduct(HudPlateAssignment Assignment, HudId Element);
+
 public readonly record struct HudCursorCatalog(HudId Default, HudId Hover, HudId Text, HudId Drag)
 {
     internal HudId Resolve(HudCursor cursor) => cursor switch
@@ -88,16 +97,20 @@ public sealed class HudProduct
     public const int ActionSlotCount = 36;
     public const int FeedbackPoolCount = 5;
     public const int QuestTrackerRowCount = 20;
+    public const int UnitPlateCount = 10;
 
     public HudProduct(
         HudId[] actionSlots,
         HudFeedbackPoolProduct[] feedbackPools,
         HudId[] questTrackerRows,
+        HudUnitPlateProduct[] unitPlates,
+        HudId overtipPrototype,
         HudCursorCatalog cursors,
         HudTimelineCatalog timelines,
         HudId[]? pixelMaskedElements = null,
         float pixelMaskThreshold = 0.5f,
         int maxEntities = 128,
+        int maxOvertips = 128,
         int maxPendingInputs = 64,
         int maxSessionEventsPerFrame = 128,
         int maxChatEntries = 128,
@@ -110,11 +123,15 @@ public sealed class HudProduct
         FeedbackPools = Clone(feedbackPools);
         ArgumentNullException.ThrowIfNull(questTrackerRows);
         QuestTrackerRows = (HudId[])questTrackerRows.Clone();
+        ArgumentNullException.ThrowIfNull(unitPlates);
+        UnitPlates = (HudUnitPlateProduct[])unitPlates.Clone();
+        OvertipPrototype = overtipPrototype;
         Cursors = cursors;
         Timelines = timelines;
         PixelMaskedElements = pixelMaskedElements is null ? [] : (HudId[])pixelMaskedElements.Clone();
         PixelMaskThreshold = pixelMaskThreshold;
         MaxEntities = maxEntities;
+        MaxOvertips = maxOvertips;
         MaxPendingInputs = maxPendingInputs;
         MaxSessionEventsPerFrame = maxSessionEventsPerFrame;
         MaxChatEntries = maxChatEntries;
@@ -129,6 +146,11 @@ public sealed class HudProduct
 
     public HudId[] QuestTrackerRows { get; }
 
+    public HudUnitPlateProduct[] UnitPlates { get; }
+
+    /// <summary>The one hidden retail factory prototype compiled by the offline bake.</summary>
+    public HudId OvertipPrototype { get; }
+
     public HudCursorCatalog Cursors { get; }
 
     public HudTimelineCatalog Timelines { get; }
@@ -138,6 +160,12 @@ public sealed class HudProduct
     public float PixelMaskThreshold { get; }
 
     public int MaxEntities { get; }
+
+    /// <summary>
+    /// SarnautCore runtime policy bound. This is not an authored retail count. The engine adapter
+    /// pre-materializes exactly this many prototype clones during Open.
+    /// </summary>
+    public int MaxOvertips { get; }
 
     public int MaxPendingInputs { get; }
 
@@ -173,6 +201,19 @@ public sealed class HudProduct
         }
 
         return false;
+    }
+
+    internal int FindUnitPlate(HudPlateAssignment assignment)
+    {
+        for (int index = 0; index < UnitPlates.Length; index++)
+        {
+            if (UnitPlates[index].Assignment == assignment)
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 
     internal HudId[] GetFeedbackElements(HudFeedbackKind kind)
@@ -240,6 +281,26 @@ public sealed class HudProduct
         }
 
         ValidateUnique(QuestTrackerRows, nameof(QuestTrackerRows));
+        if (UnitPlates.Length != UnitPlateCount)
+        {
+            throw new ArgumentException($"HUD must author exactly {UnitPlateCount} fixed unit plates.", nameof(UnitPlates));
+        }
+
+        for (int index = 0; index < UnitPlates.Length; index++)
+        {
+            HudUnitPlateProduct plate = UnitPlates[index];
+            ValidateId(plate.Assignment.SemanticId, nameof(UnitPlates));
+            ValidateId(plate.Element, nameof(UnitPlates));
+            for (int earlier = 0; earlier < index; earlier++)
+            {
+                if (UnitPlates[earlier].Assignment == plate.Assignment || UnitPlates[earlier].Element == plate.Element)
+                {
+                    throw new ArgumentException("Unit plate semantic assignments and elements must be unique.", nameof(UnitPlates));
+                }
+            }
+        }
+
+        ValidateId(OvertipPrototype, nameof(OvertipPrototype));
         ValidateId(Cursors.Default, nameof(Cursors));
         ValidateId(Cursors.Hover, nameof(Cursors));
         ValidateId(Cursors.Text, nameof(Cursors));
@@ -250,7 +311,8 @@ public sealed class HudProduct
             throw new ArgumentOutOfRangeException(nameof(PixelMaskThreshold));
         }
 
-        if (MaxEntities <= 0 || MaxPendingInputs <= 0 || MaxSessionEventsPerFrame <= 0 || MaxChatEntries <= 0 ||
+        if (MaxEntities <= 0 || MaxOvertips <= 0 || MaxOvertips > MaxEntities ||
+            MaxPendingInputs <= 0 || MaxSessionEventsPerFrame <= 0 || MaxChatEntries <= 0 ||
             MaxChangesPerFrame < ActionSlotCount + (3 * FeedbackPoolCount) || MaxErrorsPerFrame <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(MaxEntities), "HUD capacities must be positive and the change buffer must fit the authored stable pools.");

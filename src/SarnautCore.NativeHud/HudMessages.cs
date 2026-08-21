@@ -14,6 +14,11 @@ public enum HudEventKind
     ChatRemoved,
 }
 
+public readonly record struct HudUnitPresentation(HudPlateAssignment Plate, bool OvertipCandidate)
+{
+    public static HudUnitPresentation OvertipOnly => new(HudPlateAssignment.None, true);
+}
+
 public readonly record struct HudQuestObjective(uint Index, HudId TextId, int Current, int Required, bool ShowCount);
 
 /// <summary>One atomic, ordered quest tracker replacement.</summary>
@@ -95,7 +100,8 @@ public readonly record struct HudEvent(
     HudId ContentId,
     HudFeedbackKind FeedbackKind,
     HudQuestSnapshot? Quest,
-    HudChatMessage? Chat)
+    HudChatMessage? Chat,
+    HudUnitPresentation UnitPresentation)
 {
     public static HudEvent ActionSlotChanged(
         HudStamp stamp,
@@ -103,16 +109,23 @@ public readonly record struct HudEvent(
         HudId abilityId,
         int cooldownMilliseconds,
         bool enabled = true) =>
-        new(HudEventKind.ActionSlotChanged, stamp, HudId.Empty, 0, slot, cooldownMilliseconds, 0, enabled, abilityId, default, null, null);
+        new(HudEventKind.ActionSlotChanged, stamp, HudId.Empty, 0, slot, cooldownMilliseconds, 0, enabled, abilityId, default, null, null, default);
 
     public static HudEvent ActionSlotCleared(HudStamp stamp, int slot) =>
-        new(HudEventKind.ActionSlotCleared, stamp, HudId.Empty, 0, slot, 0, 0, false, HudId.Empty, default, null, null);
+        new(HudEventKind.ActionSlotCleared, stamp, HudId.Empty, 0, slot, 0, 0, false, HudId.Empty, default, null, null, default);
 
-    public static HudEvent UnitChanged(HudStamp stamp, ulong entityId, HudId name, int health, int maximumHealth) =>
-        new(HudEventKind.UnitChanged, stamp, HudId.Empty, entityId, -1, health, maximumHealth, true, name, default, null, null);
+    public static HudEvent UnitChanged(
+        HudStamp stamp,
+        ulong entityId,
+        HudId name,
+        int health,
+        int maximumHealth,
+        HudUnitPresentation? presentation = null) =>
+        new(HudEventKind.UnitChanged, stamp, HudId.Empty, entityId, -1, health, maximumHealth, true, name, default, null, null,
+            presentation ?? HudUnitPresentation.OvertipOnly);
 
     public static HudEvent UnitRemoved(HudStamp stamp, ulong entityId) =>
-        new(HudEventKind.UnitRemoved, stamp, HudId.Empty, entityId, -1, 0, 0, false, HudId.Empty, default, null, null);
+        new(HudEventKind.UnitRemoved, stamp, HudId.Empty, entityId, -1, 0, 0, false, HudId.Empty, default, null, null, default);
 
     public static HudEvent FeedbackRaised(
         HudStamp stamp,
@@ -121,33 +134,33 @@ public readonly record struct HudEvent(
         ulong entityId,
         int amount,
         bool critical = false) =>
-        new(HudEventKind.FeedbackRaised, stamp, eventId, entityId, -1, amount, 0, critical, HudId.Empty, kind, null, null);
+        new(HudEventKind.FeedbackRaised, stamp, eventId, entityId, -1, amount, 0, critical, HudId.Empty, kind, null, null, default);
 
     public static HudEvent FeedbackCancelled(HudStamp stamp, HudId eventId) =>
-        new(HudEventKind.FeedbackCancelled, stamp, eventId, 0, -1, 0, 0, false, HudId.Empty, default, null, null);
+        new(HudEventKind.FeedbackCancelled, stamp, eventId, 0, -1, 0, 0, false, HudId.Empty, default, null, null, default);
 
     public static HudEvent QuestTracked(HudStamp stamp, HudQuestSnapshot snapshot) =>
-        new(HudEventKind.QuestTracked, stamp, HudId.Empty, 0, -1, 0, 0, false, snapshot.QuestId, default, snapshot, null);
+        new(HudEventKind.QuestTracked, stamp, HudId.Empty, 0, -1, 0, 0, false, snapshot.QuestId, default, snapshot, null, default);
 
     public static HudEvent QuestUntracked(HudStamp stamp, HudId questId) =>
-        new(HudEventKind.QuestUntracked, stamp, HudId.Empty, 0, -1, 0, 0, false, questId, default, null, null);
+        new(HudEventKind.QuestUntracked, stamp, HudId.Empty, 0, -1, 0, 0, false, questId, default, null, null, default);
 
     public static HudEvent ChatReceived(HudStamp stamp, HudChatMessage message)
     {
         message.Validate();
         return new HudEvent(HudEventKind.ChatReceived, stamp, message.EventId, message.SenderEntityId, -1, 0, 0,
-            message.WorldBubble, message.ChannelId, default, null, message);
+            message.WorldBubble, message.ChannelId, default, null, message, default);
     }
 
     public static HudEvent ChatRemoved(HudStamp stamp, HudId eventId) =>
-        new(HudEventKind.ChatRemoved, stamp, eventId, 0, -1, 0, 0, false, HudId.Empty, default, null, null);
+        new(HudEventKind.ChatRemoved, stamp, eventId, 0, -1, 0, 0, false, HudId.Empty, default, null, null, default);
 
     internal bool PayloadEquals(in HudEvent other) =>
         Kind == other.Kind && EventId == other.EventId && EntityId == other.EntityId && Slot == other.Slot &&
         Value == other.Value && Auxiliary == other.Auxiliary && Flag == other.Flag &&
         ContentId == other.ContentId && FeedbackKind == other.FeedbackKind &&
         (ReferenceEquals(Quest, other.Quest) || (Quest is not null && other.Quest is not null && Quest.ContentEquals(other.Quest))) &&
-        Equals(Chat, other.Chat);
+        Equals(Chat, other.Chat) && UnitPresentation == other.UnitPresentation;
 }
 
 public enum HudInputKind
