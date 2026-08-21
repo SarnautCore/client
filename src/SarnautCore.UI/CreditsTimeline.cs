@@ -2,18 +2,24 @@ namespace SarnautCore.UI;
 
 public sealed record CreditsTimeline(
     string Locale,
+    string MediaNode,
     CreditsTextTrack Text,
     CreditsVisualTrack Pictures,
     CreditsVisualTrack Backgrounds,
     string MusicCue)
 {
-    public const string SchemaId = "sarnaut.ui-credits-timeline/v1";
+    public const string SchemaId = "sarnaut.ui-credits-timeline/v2";
 
     public void ValidateAuthoredContract()
     {
         if (string.IsNullOrWhiteSpace(Locale))
         {
             throw new InvalidDataException("Credits locale must not be empty");
+        }
+
+        if (MediaNode != "CreditsMedia")
+        {
+            throw new InvalidDataException("Credits media node must be 'CreditsMedia'");
         }
 
         if (MusicCue != "credits_music")
@@ -35,11 +41,11 @@ public sealed record CreditsTimeline(
             throw new InvalidDataException("Credits tracks do not match the authored timings or priorities");
         }
 
-        string[] textures = Pictures.Frames
+        string[] textureIds = Pictures.Frames
             .Concat(Backgrounds.Frames)
-            .Select(frame => frame.Texture.Value)
+            .Select(frame => frame.TextureId)
             .ToArray();
-        if (textures.Distinct(StringComparer.Ordinal).Count() != textures.Length)
+        if (textureIds.Distinct(StringComparer.Ordinal).Count() != textureIds.Length)
         {
             throw new InvalidDataException("Credits visual tracks repeat a texture");
         }
@@ -90,16 +96,16 @@ public sealed record CreditsVisualTrack(
         {
             CreditsVisualFrame frame = Frames[index];
             string expected = $"credits-{label}-{index + 1:00}";
-            if (frame.Id != expected)
+            if (frame.Id != expected || frame.TextureId != expected)
             {
                 throw new InvalidDataException(
-                    $"Credits {label} frame {index + 1} is outside the authored sequence");
+                    $"Credits {label} frame {index + 1} is outside the authored media sequence");
             }
         }
     }
 }
 
-public sealed record CreditsVisualFrame(string Id, NativeContentPath Texture);
+public sealed record CreditsVisualFrame(string Id, string TextureId);
 
 public readonly record struct CreditsTiming(
     TimeSpan FadeIn,

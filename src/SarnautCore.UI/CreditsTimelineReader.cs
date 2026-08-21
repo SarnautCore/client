@@ -17,6 +17,7 @@ public static class CreditsTimelineReader
                 "credits timeline",
                 "schema_id",
                 "locale",
+                "media_node",
                 "text",
                 "pictures",
                 "backgrounds",
@@ -29,6 +30,7 @@ public static class CreditsTimelineReader
 
             var timeline = new CreditsTimeline(
                 UiManifestJson.String(root, "locale", "credits timeline"),
+                UiManifestJson.String(root, "media_node", "credits timeline"),
                 ReadText(UiManifestJson.Required(root, "text", JsonValueKind.Object, "credits timeline")),
                 ReadVisual(
                     UiManifestJson.Required(root, "pictures", JsonValueKind.Object, "credits timeline"),
@@ -99,10 +101,10 @@ public static class CreditsTimelineReader
     {
         string context = $"{parent}.frames[]";
         UiManifestJson.Object(element, context);
-        UiManifestJson.Only(element, context, "id", "texture");
+        UiManifestJson.Only(element, context, "id", "texture_id");
         return new CreditsVisualFrame(
             UiManifestJson.Key(element, "id", context),
-            UiManifestJson.Path(element, "texture", ".png", context));
+            UiManifestJson.Key(element, "texture_id", context));
     }
 
     private static CreditsTiming ReadTiming(JsonElement element, string parent)

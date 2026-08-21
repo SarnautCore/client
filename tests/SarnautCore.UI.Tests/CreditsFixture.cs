@@ -12,6 +12,7 @@ internal static class CreditsFixture
             writer.WriteStartObject();
             writer.WriteString("schema_id", CreditsTimeline.SchemaId);
             writer.WriteString("locale", locale);
+            writer.WriteString("media_node", "CreditsMedia");
             WriteText(writer);
             WriteVisual(writer, "pictures", "picture", 20, 100, "multiply");
             WriteVisual(writer, "backgrounds", "background", 8, 0, "alpha");
@@ -31,6 +32,7 @@ internal static class CreditsFixture
             writer.WriteStartObject();
             writer.WriteString("schema_id", CreditsTimeline.SchemaId);
             writer.WriteString("locale", "eng");
+            writer.WriteString("media_node", "CreditsMedia");
             WriteText(writer);
             WriteVisual(writer, "pictures", "picture", 20, 100, "multiply");
             WriteVisual(writer, "backgrounds", "background", 8, 0, "alpha");
@@ -81,7 +83,7 @@ internal static class CreditsFixture
         {
             writer.WriteStartObject();
             writer.WriteString("id", $"credits-{label}-{index:00}");
-            writer.WriteString("texture", $"media/credits/{label}-{index:00}.png");
+            writer.WriteString("texture_id", $"credits-{label}-{index:00}");
             writer.WriteEndObject();
         }
 

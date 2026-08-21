@@ -39,7 +39,7 @@ public sealed record CreditsTextPresentation(
 
 public sealed record CreditsVisualPresentation(
     string Id,
-    NativeContentPath Texture,
+    string TextureId,
     int Priority,
     CreditsBlend Blend,
     double Opacity);
@@ -400,7 +400,7 @@ public sealed class CreditsController : IDisposable
         CreditsVisualFrame frame = track.Frames[index];
         return new CreditsVisualPresentation(
             frame.Id,
-            frame.Texture,
+            frame.TextureId,
             track.Priority,
             track.Blend,
             Opacity(frameElapsed, track.Timing));
