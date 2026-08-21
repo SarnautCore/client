@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Godot;
 using SarnautCore.Content;
 
@@ -18,6 +19,31 @@ public partial class NativeCharacterLodSmoke : Node3D
         string characterKey = ReadSetting("SARNAUT_NATIVE_CHARACTER_LOD_KEY", FixtureKey);
         var manifest = new NativeCharacterManifestReader(nativeRoot);
         Expect(manifest.Manifest is not null, $"manifest loads from {nativeRoot}: {manifest.LastError}");
+        if (manifest.Manifest is null)
+        {
+            Finish();
+            return;
+        }
+
+        if (characterKey == "*")
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (NativeCharacterModel identityModel in manifest.Manifest.Models
+                .OrderBy(model => model.IdentityId, StringComparer.Ordinal))
+            {
+                if (seen.Add(identityModel.IdentityId))
+                {
+                    ValidateCharacter(manifest, identityModel);
+                }
+            }
+
+            Expect(seen.Count == manifest.Manifest.IdentityCount,
+                $"validated {seen.Count}/{manifest.Manifest.IdentityCount} identities");
+            GD.Print($"NATIVE_CHARACTER_LOD identities={seen.Count}/{manifest.Manifest.IdentityCount}");
+            Finish();
+            return;
+        }
+
         if (!manifest.TryResolve(characterKey, out NativeCharacterModel model))
         {
             Fail($"character key '{characterKey}' resolves: {manifest.LastError}");
@@ -25,11 +51,18 @@ public partial class NativeCharacterLodSmoke : Node3D
             return;
         }
 
+        ValidateCharacter(manifest, model);
+        Finish();
+    }
+
+    private void ValidateCharacter(
+        NativeCharacterManifestReader manifest,
+        NativeCharacterModel model)
+    {
         NativeCharacterLod? lod = model.Lod;
         if (lod is null)
         {
             Fail($"identity '{model.IdentityId}' declares native LOD metadata");
-            Finish();
             return;
         }
 
@@ -41,53 +74,66 @@ public partial class NativeCharacterLodSmoke : Node3D
             ScenePath = manifest.ResolveScenePath(model),
         };
         AddChild(rig);
-        if (!rig.Load() || rig.Model is null)
-        {
-            Fail($"native scene loads: {rig.LastError}");
-            Finish();
-            return;
-        }
-
-        IReadOnlyList<MeshInstance3D> levels;
         try
         {
-            levels = NativeCharacterLodContract.Inspect(rig.Model, lod);
-        }
-        catch (Exception exception)
-        {
-            Fail(exception.Message);
-            Finish();
-            return;
-        }
+            if (!rig.Load() || rig.Model is null)
+            {
+                Fail($"identity '{model.IdentityId}' scene loads: {rig.LastError}");
+                return;
+            }
 
-        var camera = new Camera3D { Name = "ControlledLodCamera", Current = true };
-        AddChild(camera);
-        Vector3 meshOrigin = levels[0].GlobalPosition;
-        for (int level = 0; level < lod.Levels; level++)
-        {
-            float requestedDistance = NativeCharacterLodContract.ProbeDistance(lod, level);
-            camera.GlobalPosition = meshOrigin + (Vector3.Back * requestedDistance);
-            float actualDistance = camera.GlobalPosition.DistanceTo(meshOrigin);
+            IReadOnlyList<MeshInstance3D> levels;
             try
             {
-                MeshInstance3D selected = NativeCharacterLodContract.SelectAtDistance(
-                    levels,
-                    actualDistance);
-                string expectedName = level == 0 ? "Mesh" : $"MeshLOD{level}";
-                Expect(selected.Name == expectedName, $"distance {actualDistance} selects {expectedName}");
-                if (level > 0)
-                {
-                    Expect(!ReferenceEquals(selected, levels[0]),
-                        $"LOD0 does not overlap level {level} at distance {actualDistance}");
-                }
+                levels = NativeCharacterLodContract.Inspect(rig.Model, lod);
             }
             catch (Exception exception)
             {
-                Fail(exception.Message);
+                Fail($"identity '{model.IdentityId}': {exception.Message}");
+                return;
+            }
+
+            var camera = new Camera3D { Name = "ControlledLodCamera", Current = true };
+            AddChild(camera);
+            try
+            {
+                Vector3 meshOrigin = levels[0].GlobalPosition;
+                for (int level = 0; level < lod.Levels; level++)
+                {
+                    float requestedDistance = NativeCharacterLodContract.ProbeDistance(lod, level);
+                    camera.GlobalPosition = meshOrigin + (Vector3.Back * requestedDistance);
+                    float actualDistance = camera.GlobalPosition.DistanceTo(meshOrigin);
+                    try
+                    {
+                        MeshInstance3D selected = NativeCharacterLodContract.SelectAtDistance(
+                            levels,
+                            actualDistance);
+                        string expectedName = level == 0 ? "Mesh" : $"MeshLOD{level}";
+                        Expect(selected.Name == expectedName,
+                            $"identity '{model.IdentityId}' distance {actualDistance} selects {expectedName}");
+                        if (level > 0)
+                        {
+                            Expect(!ReferenceEquals(selected, levels[0]),
+                                $"identity '{model.IdentityId}' LOD0 does not overlap level {level} at distance {actualDistance}");
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        Fail($"identity '{model.IdentityId}': {exception.Message}");
+                    }
+                }
+            }
+            finally
+            {
+                RemoveChild(camera);
+                camera.Free();
             }
         }
-
-        Finish();
+        finally
+        {
+            RemoveChild(rig);
+            rig.Free();
+        }
     }
 
     private static string ReadSetting(string name, string fallback)

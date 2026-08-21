@@ -84,6 +84,9 @@ public sealed class NativeCharacterManifest
 
     public int IdentityCount { get; }
 
+    /// <summary>All canonical character bindings in deterministic manifest order.</summary>
+    public IEnumerable<NativeCharacterModel> Models => _characters.Values;
+
     /// <summary>
     /// Resolves a canonical server content id, a decimal alias, or a player key.
     /// </summary>
