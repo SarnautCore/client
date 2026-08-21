@@ -14,6 +14,8 @@ public enum HudEventKind
     ChatReceived,
     ChatRemoved,
     InventoryReplaced,
+    InventoryCooldownStarted,
+    InventoryCooldownFinished,
     LootReplaced,
     QuestLogReplaced,
     QuestInfoReplaced,
@@ -189,6 +191,19 @@ public readonly record struct HudEvent(
     public static HudEvent InventoryReplaced(HudStamp stamp, HudInventorySnapshot snapshot) =>
         new(HudEventKind.InventoryReplaced, stamp, HudId.Empty, 0, -1, 0, 0, false, HudId.Empty, default,
             null, null, default, snapshot, null, null, null, null);
+
+    public static HudEvent InventoryCooldownStarted(
+        HudStamp stamp,
+        int slot,
+        HudId spellId,
+        int remainingMilliseconds,
+        int durationMilliseconds) =>
+        new(HudEventKind.InventoryCooldownStarted, stamp, HudId.Empty, 0, slot, remainingMilliseconds,
+            durationMilliseconds, true, spellId, default, null, null, default, null, null, null, null, null);
+
+    public static HudEvent InventoryCooldownFinished(HudStamp stamp, int slot, HudId spellId) =>
+        new(HudEventKind.InventoryCooldownFinished, stamp, HudId.Empty, 0, slot, 0, 0, false,
+            spellId, default, null, null, default, null, null, null, null, null);
 
     public static HudEvent LootReplaced(HudStamp stamp, HudLootSnapshot snapshot) =>
         new(HudEventKind.LootReplaced, stamp, HudId.Empty, snapshot.CorpseEntityId, -1, 0, 0, snapshot.Open,

@@ -28,6 +28,7 @@ public sealed class NativeHud : IDisposable
     private readonly HudUnitPlateView[] _unitPlateViews;
     private readonly HudOvertipView[] _overtipViews;
     private readonly HudInventorySlotView[] _inventorySlotViews;
+    private readonly InventoryCooldownState[] _inventoryCooldowns;
     private readonly HudInventoryPartitionView[] _inventoryPartitionViews;
     private readonly HudLootSlotView[] _lootSlotViews;
     private readonly HudQuestLogEntryView[] _questLogViews;
@@ -102,6 +103,7 @@ public sealed class NativeHud : IDisposable
         _unitPlateViews = new HudUnitPlateView[_unitPlates.Length];
         _overtipViews = new HudOvertipView[_overtips.Length];
         _inventorySlotViews = new HudInventorySlotView[HudProduct.InventorySlotCount];
+        _inventoryCooldowns = new InventoryCooldownState[HudProduct.InventorySlotCount];
         _inventoryPartitionViews = new HudInventoryPartitionView[HudProduct.InventoryPartitionCount];
         _lootSlotViews = new HudLootSlotView[HudProduct.LootPageSize];
         _questLogViews = new HudQuestLogEntryView[product.Contexts.QuestLog.MaxEntries];
@@ -266,6 +268,7 @@ public sealed class NativeHud : IDisposable
         DrainInput();
         AdvanceFeedback(now, frame.Viewport);
         AdvanceActionCooldowns(now);
+        AdvanceInventoryCooldowns(now);
         AdvanceWorldChat(frame.Viewport);
         AdvanceOvertips(frame.Viewport);
         UpdateCursor();
@@ -368,6 +371,10 @@ public sealed class NativeHud : IDisposable
                 break;
             case HudEventKind.InventoryReplaced:
                 ApplyInventory(item);
+                break;
+            case HudEventKind.InventoryCooldownStarted:
+            case HudEventKind.InventoryCooldownFinished:
+                ApplyInventoryCooldown(item);
                 break;
             case HudEventKind.LootReplaced:
                 ApplyLoot(item);
@@ -981,8 +988,52 @@ public sealed class NativeHud : IDisposable
         }
 
         _inventory.Set(item.Stamp, item, snapshot);
+        for (int index = 0; index < _inventoryCooldowns.Length; index++)
+        {
+            ref InventoryCooldownState cooldown = ref _inventoryCooldowns[index];
+            cooldown.HasAuthority = index < snapshot.Capacity;
+            cooldown.Stamp = item.Stamp;
+            cooldown.LastEvent = item;
+            cooldown.Value = index < snapshot.Capacity ? snapshot.Cooldowns[index] : null;
+            cooldown.ReceivedAt = _lastNow;
+        }
+
         UpdateInventoryViews();
         EmitContext(HudChangeKind.Inventory, _product.Contexts.Inventory.Root, snapshot.Capacity, _inventoryOpen, item.Stamp);
+    }
+
+    private void ApplyInventoryCooldown(in HudEvent item)
+    {
+        int capacity = _inventory.Value?.Capacity ?? 0;
+        if ((uint)item.Slot >= (uint)capacity || item.ContentId.IsEmpty ||
+            (item.Kind == HudEventKind.InventoryCooldownStarted &&
+                (item.Value <= 0 || item.Auxiliary < item.Value)))
+        {
+            AddError(HudErrorCode.InvalidEvent, item.Stamp, item.ContentId, 0, item.Slot);
+            return;
+        }
+
+        ref InventoryCooldownState state = ref _inventoryCooldowns[item.Slot];
+        if (item.Kind == HudEventKind.InventoryCooldownFinished &&
+            state.Value is { } active && active.SpellId != item.ContentId)
+        {
+            AddError(HudErrorCode.InvalidEvent, item.Stamp, item.ContentId, 0, item.Slot);
+            return;
+        }
+
+        if (!AcceptAuthority(state.HasAuthority, state.Stamp, state.LastEvent, item, item.ContentId, 0, item.Slot))
+        {
+            return;
+        }
+
+        state.HasAuthority = true;
+        state.Stamp = item.Stamp;
+        state.LastEvent = item;
+        state.Value = item.Kind == HudEventKind.InventoryCooldownStarted ?
+            new HudInventoryCooldown(item.ContentId, item.Value, item.Auxiliary) : null;
+        state.ReceivedAt = _lastNow;
+        UpdateInventoryViews();
+        EmitContext(HudChangeKind.Inventory, _product.Contexts.Inventory.Root, item.Slot, _inventoryOpen, item.Stamp);
     }
 
     private void ApplyLoot(in HudEvent item)
@@ -1456,7 +1507,8 @@ public sealed class NativeHud : IDisposable
                 InventorySlotCommand(HudCommand.DressInventoryItem(input.Slot, _inventory.Stamp), HudCommandFamilies.DressInventoryItem, input.Slot);
                 break;
             case HudInputKind.UndressInventoryItem:
-                if ((uint)input.Slot < HudProduct.CharacterEquipmentSlotCount)
+                if ((uint)input.Slot < HudProduct.CharacterEquipmentSlotCount &&
+                    _character.Value is { } character && character.Equipment[input.Slot] is not null)
                 {
                     SendCommand(HudCommand.UndressInventoryItem(input.Slot, _character.Stamp), HudCommandFamilies.UndressInventoryItem);
                 }
@@ -1547,8 +1599,14 @@ public sealed class NativeHud : IDisposable
 
     private void MoveInventoryItem(int fromSlot, int toSlot, bool moveNoMore)
     {
-        int capacity = _inventory.Value?.Capacity ?? 0;
+        HudInventorySnapshot? snapshot = _inventory.Value;
+        int capacity = snapshot?.Capacity ?? 0;
         if ((uint)fromSlot >= (uint)capacity || (uint)toSlot >= (uint)capacity || fromSlot == toSlot)
+        {
+            return;
+        }
+
+        if (snapshot is null || snapshot.Slots[fromSlot] is null)
         {
             return;
         }
@@ -1558,11 +1616,17 @@ public sealed class NativeHud : IDisposable
 
     private void InventorySlotCommand(in HudCommand command, HudCommandFamilies family, int slot)
     {
-        int capacity = _inventory.Value?.Capacity ?? 0;
-        if ((uint)slot < (uint)capacity)
+        HudInventorySnapshot? snapshot = _inventory.Value;
+        int capacity = snapshot?.Capacity ?? 0;
+        if ((uint)slot >= (uint)capacity || snapshot is null || snapshot.Slots[slot] is not { } item ||
+            (command.Kind == HudCommandKind.DropInventoryItem && command.Count > item.Count) ||
+            (command.Kind == HudCommandKind.UseInventoryItem &&
+                RemainingInventoryCooldown(_inventoryCooldowns[slot], _lastNow) > 0))
         {
-            SendCommand(command, family);
+            return;
         }
+
+        SendCommand(command, family);
     }
 
     private void TakeLootItem(int entry)
@@ -2234,19 +2298,25 @@ public sealed class NativeHud : IDisposable
             if (snapshot is not null && layout is not null && index < snapshot.Capacity)
             {
                 HudItemStack? stack = snapshot.Slots[index];
+                HudInventoryCooldown? cooldown = _inventoryCooldowns[index].Value;
+                int remaining = RemainingInventoryCooldown(_inventoryCooldowns[index], _lastNow);
+                int displayCount = stack is { Count: > 1 } ? stack.Value.Count :
+                    stack is { CounterValue: > 1 } ? stack.Value.CounterValue : 0;
                 _inventorySlotViews[index] = new HudInventorySlotView(
                     layout.Slots[index], index, stack?.ItemId ?? HudId.Empty, stack?.InstanceId ?? 0,
-                    stack?.Count ?? 0,
-                    stack?.CounterValue ?? 0, stack?.Bound ?? false, stack?.Cursed ?? false,
+                    stack?.Count ?? 0, stack?.CounterValue ?? 0, displayCount,
+                    stack?.Bound ?? false, stack?.Cursed ?? false,
                     stack?.IsQuestOperator ?? false, stack?.RemoveTime ?? 0,
                     stack?.RuneId ?? HudId.Empty, stack?.RuneSlotId ?? HudId.Empty,
+                    cooldown?.SpellId ?? HudId.Empty, remaining, cooldown?.DurationMilliseconds ?? 0,
+                    stack?.IsQuestOperator ?? false,
                     stack is not null, true);
             }
             else
             {
                 _inventorySlotViews[index] = new HudInventorySlotView(
-                    HudId.Empty, index, HudId.Empty, 0, 0, 0, false, false, false, 0,
-                    HudId.Empty, HudId.Empty, false, false);
+                    HudId.Empty, index, HudId.Empty, 0, 0, 0, 0, false, false, false, 0,
+                    HudId.Empty, HudId.Empty, HudId.Empty, 0, 0, false, false, false);
             }
         }
 
@@ -2271,6 +2341,38 @@ public sealed class NativeHud : IDisposable
         _inventoryRead.EquippedBag = snapshot?.EquippedBag ?? default;
         _inventoryRead.LayoutElement = layout?.Element ?? HudId.Empty;
         _inventoryRead.Revision = _inventory.Stamp;
+    }
+
+    private void AdvanceInventoryCooldowns(long now)
+    {
+        int capacity = _inventory.Value?.Capacity ?? 0;
+        bool changed = false;
+        for (int index = 0; index < capacity; index++)
+        {
+            if (_inventorySlotViews[index].CooldownRemainingMilliseconds !=
+                RemainingInventoryCooldown(_inventoryCooldowns[index], now))
+            {
+                changed = true;
+                break;
+            }
+        }
+
+        if (changed)
+        {
+            UpdateInventoryViews();
+            EmitContext(HudChangeKind.Inventory, _product.Contexts.Inventory.Root, capacity, _inventoryOpen, _inventory.Stamp);
+        }
+    }
+
+    private static int RemainingInventoryCooldown(in InventoryCooldownState state, long now)
+    {
+        if (state.Value is not { } cooldown)
+        {
+            return 0;
+        }
+
+        long elapsed = Math.Max(0, now - state.ReceivedAt);
+        return (int)Math.Max(0, cooldown.RemainingMilliseconds - elapsed);
     }
 
     private void UpdateLootViews()
@@ -2737,6 +2839,15 @@ public sealed class NativeHud : IDisposable
             LastEvent = lastEvent;
             Value = value;
         }
+    }
+
+    private struct InventoryCooldownState
+    {
+        public bool HasAuthority;
+        public HudStamp Stamp;
+        public HudEvent LastEvent;
+        public HudInventoryCooldown? Value;
+        public long ReceivedAt;
     }
 
     private enum HudContextWindow
