@@ -77,6 +77,7 @@ public partial class ConvertedModelAnimationSmoke : Node3D
 
         bool playerDeforms = CheckCharacter("local-player", playerCharacter, playerCharacter.HasModel);
         CheckCuratedWarriorAppearance(playerCharacter);
+        CheckMalformedRootLifecycle();
         if (playerCharacter.HasModel)
         {
             loaded++;
@@ -98,6 +99,22 @@ public partial class ConvertedModelAnimationSmoke : Node3D
         }
 
         GetTree().Quit(passed ? 0 : 1);
+    }
+
+    private void CheckMalformedRootLifecycle()
+    {
+        var rig = new CharacterRig
+        {
+            Name = "MalformedRootRig",
+            AutoLoad = false,
+            ShowPlaceholderOnFailure = false,
+            ScenePath = "res://tests/fixtures/native-character-content/malformed-root.tscn",
+        };
+        AddChild(rig);
+        Expect(!rig.Load(), "a native character scene with a non-Node3D root is rejected");
+        Expect(rig.Model == null, "a rejected native character scene leaves no model wrapper behind");
+        RemoveChild(rig);
+        rig.Free();
     }
 
     private bool CheckCharacter(string contentId, CharacterRig? character, bool hasModel)

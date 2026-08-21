@@ -57,7 +57,9 @@ function Get-VisualGateDiagnosticReasons {
         [AllowEmptyString()]
         [string]$Stderr = "",
 
-        [string[]]$AllowedErrorPatterns = @()
+        [string[]]$AllowedErrorPatterns = @(),
+
+        [string[]]$RequiredStdoutPatterns = @()
     )
 
     $reasons = @()
@@ -92,6 +94,15 @@ function Get-VisualGateDiagnosticReasons {
             '(?:^|\s)result=PASS(?:\s|$)',
             [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
         $reasons += "stdout does not report result=PASS"
+    }
+
+    foreach ($pattern in $RequiredStdoutPatterns) {
+        if (-not [System.Text.RegularExpressions.Regex]::IsMatch(
+                $Stdout,
+                $pattern,
+                [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
+            $reasons += "stdout does not satisfy coverage requirement '$pattern'"
+        }
     }
 
     $reasons

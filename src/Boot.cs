@@ -49,7 +49,7 @@ public partial class Boot : Control
         string mapName = _zoneName.Text.Trim();
         if (string.IsNullOrEmpty(mapName))
         {
-            _message.Text = "Enter a converted map name.";
+            _message.Text = "Enter a native map name.";
             _message.Visible = true;
             _zoneName.GrabFocus();
             return;
@@ -57,8 +57,7 @@ public partial class Boot : Control
 
         _message.Visible = false;
         // Offline is a tool, not a game session: no account, no ticket, no
-        // shard. It keeps working when converted assets are the only thing
-        // present.
+        // shard. It reads the same baked native content as the session path.
         _session.Zone = ZoneRequest.Offline(mapName, _session.Zone.ZoneId);
         GetTree().ChangeSceneToFile("res://scenes/zone_walkabout.tscn");
     }

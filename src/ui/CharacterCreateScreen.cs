@@ -159,7 +159,7 @@ public partial class CharacterCreateScreen : Control
                 $"Spawns in {selected.SpawnZoneId}");
 
             // Rendering happens on every keystroke in the name field; rebuilding
-            // the rig each time would reload a converted model per character
+            // the rig each time would reload a native character scene per character
             // typed.
             if (_previewedOptionId != selected.Id)
             {

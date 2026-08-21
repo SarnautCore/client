@@ -36,11 +36,20 @@ New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $probes = @(
     @{ Scene = "authored_presentation_spawn_probe"; Timeout = 240 },
     @{ Scene = "canonical_player_grounding_probe"; Timeout = 240 },
-    @{ Scene = "converted_model_animation_smoke"; Timeout = 300 },
+    @{ Scene = "converted_model_animation_smoke"; Timeout = 300; RequiredStdoutPatterns = @(
+            '(?m)^CONVERTED_MODEL_ANIMATION cases=53\s'
+        )
+    },
     @{ Scene = "directional_lighting_probe"; Timeout = 300 },
     @{ Scene = "gameplay_hud_converted_lifecycle_smoke"; Timeout = 240 },
     @{ Scene = "gameplay_hud_layout_smoke"; Timeout = 240 },
     @{ Scene = "live_zone_player_animation_probe"; Timeout = 240 },
+    @{ Scene = "native_character_lod_smoke"; Timeout = 600; Environment = @{
+            SARNAUT_NATIVE_CHARACTER_LOD_KEY = "*"
+        }; RequiredStdoutPatterns = @(
+            '(?m)^NATIVE_CHARACTER_LOD identities=40/40\s*$'
+        )
+    },
     @{ Scene = "online_coordinate_frame_smoke"; Timeout = 120 },
     @{ Scene = "origin_applied_manifest_probe"; Timeout = 240 },
     @{ Scene = "partial_native_terrain_fallback_probe"; Timeout = 240 },
@@ -103,10 +112,17 @@ foreach ($probe in $probes) {
     if ($timedOut) { $reasons += "timed out after $($probe.Timeout)s" }
     elseif ($process.ExitCode -ne 0) { $reasons += "exit code $($process.ExitCode)" }
     $allowedErrorPatterns = @(Get-VisualGateAllowedErrorPatterns -Scene $scene)
+    $requiredStdoutPatterns = if ($probe.ContainsKey("RequiredStdoutPatterns")) {
+        @($probe.RequiredStdoutPatterns)
+    }
+    else {
+        @()
+    }
     $reasons += @(Get-VisualGateDiagnosticReasons `
         -Stdout $stdoutText `
         -Stderr $stderrText `
-        -AllowedErrorPatterns $allowedErrorPatterns)
+        -AllowedErrorPatterns $allowedErrorPatterns `
+        -RequiredStdoutPatterns $requiredStdoutPatterns)
 
     if ($reasons.Count -gt 0) {
         $failures += "{0}: {1}" -f $scene, ($reasons -join "; ")

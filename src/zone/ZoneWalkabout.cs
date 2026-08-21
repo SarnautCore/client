@@ -92,7 +92,10 @@ public partial class ZoneWalkabout : Node3D
         ApplyAuthoredEnvironment(
             mapName,
             string.IsNullOrWhiteSpace(request.ZoneId) ? DefaultZoneId : request.ZoneId);
-        _walker.Position = _loader.SuggestedSpawnPosition;
+        ApplyPresentationSpawn(
+            _walker,
+            _loader.SuggestedSpawnPosition,
+            _loader.SuggestedSpawnRotation);
         _zoneStatus =
             $"{mapName}  |  {_loader.TerrainTileCount} terrain tiles  |  {_loader.VisualObjectCount} visual objects";
         _status.Text = _zoneStatus;
@@ -137,6 +140,15 @@ public partial class ZoneWalkabout : Node3D
             SetNetworkStatus,
             OnAdmitted,
             OnRefused);
+    }
+
+    internal static void ApplyPresentationSpawn(
+        Node3D walker,
+        Vector3 position,
+        Quaternion rotation)
+    {
+        walker.Position = position;
+        walker.Quaternion = rotation;
     }
 
     /// <summary>

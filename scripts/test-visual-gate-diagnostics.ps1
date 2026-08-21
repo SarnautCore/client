@@ -15,6 +15,8 @@ function Assert-Reasons {
 
         [string[]]$AllowedErrorPatterns = @(),
 
+        [string[]]$RequiredStdoutPatterns = @(),
+
         [Parameter(Mandatory = $true)]
         [AllowEmptyCollection()]
         [string[]]$ExpectedReasons
@@ -23,7 +25,8 @@ function Assert-Reasons {
     $actual = @(Get-VisualGateDiagnosticReasons `
         -Stdout $Stdout `
         -Stderr $Stderr `
-        -AllowedErrorPatterns $AllowedErrorPatterns)
+        -AllowedErrorPatterns $AllowedErrorPatterns `
+        -RequiredStdoutPatterns $RequiredStdoutPatterns)
     if ($actual.Count -ne $ExpectedReasons.Count) {
         throw "$Name expected $($ExpectedReasons.Count) reason(s), got $($actual.Count): $($actual -join '; ')"
     }
@@ -43,6 +46,18 @@ $fixtures = @(
         Name = "clean pass"
         Stdout = "PROBE value=1 result=PASS"
         ExpectedReasons = @()
+    },
+    @{
+        Name = "required coverage present"
+        Stdout = "PROBE cases=53 result=PASS"
+        RequiredStdoutPatterns = @('(?:^|\s)cases=53(?:\s|$)')
+        ExpectedReasons = @()
+    },
+    @{
+        Name = "required coverage missing"
+        Stdout = "PROBE cases=52 result=PASS"
+        RequiredStdoutPatterns = @('(?:^|\s)cases=53(?:\s|$)')
+        ExpectedReasons = @("stdout does not satisfy coverage requirement '(?:^|\s)cases=53(?:\s|$)'")
     },
     @{
         Name = "missing result"
@@ -141,8 +156,29 @@ foreach ($fixture in $fixtures) {
     if ($fixture.ContainsKey("AllowedErrorPatterns")) {
         $parameters.AllowedErrorPatterns = [string[]]$fixture.AllowedErrorPatterns
     }
+    if ($fixture.ContainsKey("RequiredStdoutPatterns")) {
+        $parameters.RequiredStdoutPatterns = [string[]]$fixture.RequiredStdoutPatterns
+    }
 
     Assert-Reasons @parameters
 }
 
-Write-Output "visual-gate diagnostics self-test: PASS ($($fixtures.Count) fixtures)"
+$visualGate = Get-Content -LiteralPath (Join-Path $PSScriptRoot "visual-gate.ps1") -Raw
+$probeCount = [regex]::Matches($visualGate, '@\{\s*Scene\s*=').Count
+if ($probeCount -ne 17) {
+    throw "visual gate must contain 17 probes, found $probeCount"
+}
+
+foreach ($requiredContract in @(
+    'Scene = "converted_model_animation_smoke"',
+    'CONVERTED_MODEL_ANIMATION cases=53',
+    'Scene = "native_character_lod_smoke"',
+    'SARNAUT_NATIVE_CHARACTER_LOD_KEY = "*"',
+    'NATIVE_CHARACTER_LOD identities=40/40'
+)) {
+    if (-not $visualGate.Contains($requiredContract, [StringComparison]::Ordinal)) {
+        throw "visual gate is missing standing coverage contract: $requiredContract"
+    }
+}
+
+Write-Output "visual-gate diagnostics self-test: PASS ($($fixtures.Count) fixtures, $probeCount probes)"

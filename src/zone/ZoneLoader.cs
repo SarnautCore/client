@@ -156,7 +156,7 @@ public partial class ZoneLoader : Node3D
                 + $"root={NativeContentSettings.NativeRoot}");
         }
 
-        NativeStaticsIndex? nativeStatics = TryIndexNativeStatics();
+        using NativeStaticsIndex? nativeStatics = TryIndexNativeStatics();
         if (nativeStatics != null)
         {
             foreach (NativeStaticsRuntimeCell nativeCell in nativeStatics.Cells)
@@ -316,60 +316,70 @@ public partial class ZoneLoader : Node3D
         var seenTileIds = new HashSet<string>(StringComparer.Ordinal);
         var seenScenes = new HashSet<string>(StringComparer.Ordinal);
         var pending = new List<NativeTerrainRuntimeTile>(manifest.Tiles.Length);
-        foreach (NativeTerrainTile entry in manifest.Tiles)
+        try
         {
-            string pathError = string.Empty;
-            if (string.IsNullOrWhiteSpace(entry.TileId)
-                || entry.TileId.IndexOfAny(['/', '\\', ':']) >= 0
-                || !seenTileIds.Add(entry.TileId)
-                || entry.Origin == null
-                || !entry.Origin.IsFinite
-                || entry.ScenePath.Replace('\\', '/').Split('/').Contains("..", StringComparer.Ordinal)
-                || !TryResolveRelativeResourcePath(
-                    manifestPath,
-                    entry.ScenePath,
-                    terrainRoot,
-                    ".tscn",
-                    out string scenePath,
-                    out pathError))
+            foreach (NativeTerrainTile entry in manifest.Tiles)
             {
-                error = $"Native terrain entry is incompatible: {entry.TileId}. {pathError}".Trim();
-                return false;
+                string pathError = string.Empty;
+                if (string.IsNullOrWhiteSpace(entry.TileId)
+                    || entry.TileId.IndexOfAny(['/', '\\', ':']) >= 0
+                    || !seenTileIds.Add(entry.TileId)
+                    || entry.Origin == null
+                    || !entry.Origin.IsFinite
+                    || entry.ScenePath.Replace('\\', '/').Split('/').Contains("..", StringComparer.Ordinal)
+                    || !TryResolveRelativeResourcePath(
+                        manifestPath,
+                        entry.ScenePath,
+                        terrainRoot,
+                        ".tscn",
+                        out string scenePath,
+                        out pathError))
+                {
+                    error = $"Native terrain entry is incompatible: {entry.TileId}. {pathError}".Trim();
+                    return false;
+                }
+
+                if (!FileAccess.FileExists(scenePath))
+                {
+                    error = $"Native terrain scene is missing: {scenePath}";
+                    return false;
+                }
+
+                if (!seenScenes.Add(scenePath))
+                {
+                    error = $"Native terrain scene is listed more than once: {scenePath}";
+                    return false;
+                }
+
+                PackedScene? scene = ResourceLoader.Load<PackedScene>(scenePath);
+                if (scene == null)
+                {
+                    error = $"Native terrain scene is not loadable: {scenePath}";
+                    return false;
+                }
+
+                pending.Add(new NativeTerrainRuntimeTile(entry, scenePath, scene));
             }
 
-            if (!FileAccess.FileExists(scenePath))
+            foreach (NativeTerrainRuntimeTile runtime in pending)
             {
-                error = $"Native terrain scene is missing: {scenePath}";
-                return false;
+                if (!TryAddNativeTerrainTile(runtime, out error))
+                {
+                    ClearNativeTerrainAfterFailure();
+                    return false;
+                }
             }
 
-            if (!seenScenes.Add(scenePath))
-            {
-                error = $"Native terrain scene is listed more than once: {scenePath}";
-                return false;
-            }
-
-            PackedScene? scene = ResourceLoader.Load<PackedScene>(scenePath);
-            if (scene == null)
-            {
-                error = $"Native terrain scene is not loadable: {scenePath}";
-                return false;
-            }
-
-            pending.Add(new NativeTerrainRuntimeTile(entry, scenePath, scene));
+            error = string.Empty;
+            return true;
         }
-
-        foreach (NativeTerrainRuntimeTile runtime in pending)
+        finally
         {
-            if (!TryAddNativeTerrainTile(runtime, out error))
+            foreach (NativeTerrainRuntimeTile runtime in pending)
             {
-                ClearNativeTerrainAfterFailure();
-                return false;
+                runtime.Scene.Dispose();
             }
         }
-
-        error = string.Empty;
-        return true;
     }
 
     private void ClearNativeTerrainAfterFailure()
@@ -473,6 +483,8 @@ public partial class ZoneLoader : Node3D
             return null;
         }
 
+        var scenes = new Dictionary<string, PackedScene>(StringComparer.Ordinal);
+        bool indexOwnsScenes = false;
         try
         {
             NativeStaticsBakeManifest? bake = JsonSerializer.Deserialize<NativeStaticsBakeManifest>(
@@ -496,7 +508,6 @@ public partial class ZoneLoader : Node3D
 
             var seenCells = new HashSet<NativeStaticCellKey>();
             var runtimeCells = new List<NativeStaticsRuntimeCell>();
-            var scenes = new Dictionary<string, PackedScene>(StringComparer.Ordinal);
             int manifestPlacements = 0;
             int manifestVisual = 0;
             int manifestNonVisual = 0;
@@ -586,12 +597,21 @@ public partial class ZoneLoader : Node3D
                     $"Native static bake report does not match its cell manifests: {bakePath}");
             }
 
-            return new NativeStaticsIndex(runtimeCells, scenes, bake.Report);
+            var index = new NativeStaticsIndex(runtimeCells, scenes, bake.Report);
+            indexOwnsScenes = true;
+            return index;
         }
         catch (Exception exception)
         {
             return DeclineNativeStatics(
                 $"Native static bake could not be indexed: {bakePath}: {exception.Message}");
+        }
+        finally
+        {
+            if (!indexOwnsScenes)
+            {
+                DisposePackedScenes(scenes.Values);
+            }
         }
     }
 
@@ -599,6 +619,14 @@ public partial class ZoneLoader : Node3D
     {
         GD.PushWarning($"ZoneLoader: {error}; using the converted static route for the whole zone.");
         return null;
+    }
+
+    private static void DisposePackedScenes(IEnumerable<PackedScene> scenes)
+    {
+        foreach (PackedScene scene in scenes)
+        {
+            scene.Dispose();
+        }
     }
 
     private static bool TryValidateNativeStaticsManifest(
@@ -695,6 +723,7 @@ public partial class ZoneLoader : Node3D
                 probe?.Free();
                 if (scene == null || !validRoot)
                 {
+                    scene?.Dispose();
                     error = $"Native static scene does not instantiate as Node3D: {scenePath}";
                     return false;
                 }
@@ -1672,10 +1701,24 @@ public partial class ZoneLoader : Node3D
 
     private sealed record NativeStaticsRuntimeCell(NativeStaticsManifest Manifest);
 
-    private sealed record NativeStaticsIndex(
-        IReadOnlyList<NativeStaticsRuntimeCell> Cells,
-        IReadOnlyDictionary<string, PackedScene> Scenes,
-        NativeStaticsReport Report);
+    private sealed class NativeStaticsIndex : IDisposable
+    {
+        public NativeStaticsIndex(
+            IReadOnlyList<NativeStaticsRuntimeCell> cells,
+            IReadOnlyDictionary<string, PackedScene> scenes,
+            NativeStaticsReport report)
+        {
+            Cells = cells;
+            Scenes = scenes;
+            Report = report;
+        }
+
+        public IReadOnlyList<NativeStaticsRuntimeCell> Cells { get; }
+        public IReadOnlyDictionary<string, PackedScene> Scenes { get; }
+        public NativeStaticsReport Report { get; }
+
+        public void Dispose() => DisposePackedScenes(Scenes.Values);
+    }
 
     private sealed class MapPlacementDocument
     {

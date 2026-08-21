@@ -22,7 +22,7 @@ public sealed class NativeCharacterPlacementsTests
           },
           "presentation_spawn": {
             "position": [321.8298, 156.142, -5793.858],
-            "rotation": [0.0, 0.0, 0.0, 1.0]
+            "rotation": [0.0, 0.70710677, 0.0, 0.70710677]
           },
           "placements": [
             {
@@ -47,6 +47,8 @@ public sealed class NativeCharacterPlacementsTests
         Assert.Equal(321.8298f, parsed.PresentationSpawn.PositionX);
         Assert.Equal(156.142f, parsed.PresentationSpawn.PositionY);
         Assert.Equal(-5793.858f, parsed.PresentationSpawn.PositionZ);
+        Assert.Equal(0.70710677f, parsed.PresentationSpawn.RotationY);
+        Assert.Equal(0.70710677f, parsed.PresentationSpawn.RotationW);
         Assert.Equal("inst-league-start.000-020.1-2.3", placement.SpawnId);
         Assert.Equal("mob.inst-league1.rat.rat1-1", placement.CharacterKey);
         Assert.Equal(316.46f, placement.PositionX);
@@ -123,7 +125,7 @@ public sealed class NativeCharacterPlacementsTests
     public void RejectsNonUnitPresentationSpawnRotation()
     {
         string corrupted = Valid.Replace(
-            "\"rotation\": [0.0, 0.0, 0.0, 1.0]",
+            "\"rotation\": [0.0, 0.70710677, 0.0, 0.70710677]",
             "\"rotation\": [0.0, 0.0, 0.0, 2.0]",
             StringComparison.Ordinal);
 

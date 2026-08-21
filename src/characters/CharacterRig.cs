@@ -58,8 +58,24 @@ public partial class CharacterRig : Node3D, ICharacterRig
     {
         ClearModel();
         PackedScene? scene = ResourceLoader.Load<PackedScene>(ScenePath);
-        if (scene?.Instantiate() is not Node3D model)
+        if (scene == null)
         {
+            return Fail($"Native character scene is unavailable or is not Node3D: {ScenePath}");
+        }
+
+        Node instance;
+        try
+        {
+            instance = scene.Instantiate();
+        }
+        finally
+        {
+            scene.Dispose();
+        }
+
+        if (instance is not Node3D model)
+        {
+            instance.Free();
             return Fail($"Native character scene is unavailable or is not Node3D: {ScenePath}");
         }
 

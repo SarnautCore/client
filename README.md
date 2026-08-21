@@ -2,7 +2,7 @@
 
 The SarnautCore game client uses Godot 4.7.2 .NET and C#. C++ GDExtensions are reserved for measured hot paths. The Lua addon interface will come later.
 
-The current milestone includes a development hub, the session shell (login, character select, character create), an Asset Viewer, and a 3D Zone Walkabout for locally converted Allods assets.
+The current milestone includes a development hub, the session shell (login, character select, character create), an Asset Viewer, and a 3D Zone Walkabout backed by baked native content.
 
 ## Development quickstart
 
@@ -13,13 +13,13 @@ dotnet build SarnautCore.sln
 godot --editor --path .
 ```
 
-The default scene opens a small development hub. Choose **Asset Viewer** to browse supported files below `converted/`, **Walk a converted zone** for the offline walkabout, or **Play** for the session shell.
+The default scene opens a small development hub. Choose **Asset Viewer** to inspect development assets, **Zone Walkabout** for the offline walkabout, or **Play** for the session shell.
 
 ### The session shell
 
 **Play** opens login, then character select, then character create — three view-model and scene pairs backed by the `Session` autoload, which carries the account, its token and the chosen character across scene changes.
 
-Everything decidable lives in `src/SarnautCore.Shell`, a plain-C# assembly with no Godot reference: the account client, the three view models, the character-name rule, and the screen-flow state machine. A Godot headless smoke needs converted assets and libmsquic and cannot run in CI, so anything left in a `Control` subclass would ship untested. `tests/SarnautCore.Shell.Tests` covers all of it and runs on every push.
+Everything decidable lives in `src/SarnautCore.Shell`, a plain-C# assembly with no Godot reference: the account client, the three view models, the character-name rule, and the screen-flow state machine. A Godot headless smoke needs the private baked content and libmsquic and cannot run in CI, so anything left in a `Control` subclass would ship untested. `tests/SarnautCore.Shell.Tests` covers all of it and runs on every push.
 
 The screens talk to the account service over HTTP (`POST /v1/accounts`, `POST /v1/sessions`, the character routes, `POST /v1/tickets`, `GET /v1/chargen/options`; ADR 0030). Set `SARNAUT_AUTH_ADDRESS` to move it off `http://127.0.0.1:8083`.
 
@@ -60,7 +60,7 @@ Walkabout loads the selected native character scene and crossfades between `idle
 
 ### Online walkabout
 
-Entering the world is now part of the session shell rather than a toggle on the hub: choose a character and press **Enter the world**. Character select mints the opaque single-use shard ticket, and the zone scene presents it in `EnterZoneRequest` (ADR 0030 §2). The walkabout joins the chargen option's spawn zone, sends the controller's world-space movement at 20 Hz, and renders authoritative snapshots with a 125 ms interpolation delay. The spawn the server answers with is authoritative and the client snaps to it. **Walk a converted zone** on the hub is the offline controller, unchanged and with no shard involved.
+Entering the world is now part of the session shell rather than a toggle on the hub: choose a character and press **Enter the world**. Character select mints the opaque single-use shard ticket, and the zone scene presents it in `EnterZoneRequest` (ADR 0030 §2). The walkabout joins the chargen option's spawn zone, sends the controller's world-space movement at 20 Hz, and renders authoritative snapshots with a 125 ms interpolation delay. The spawn the server answers with is authoritative and the client snaps to it. **Zone Walkabout** on the hub is the offline controller, with no shard involved.
 
 #### Server entities
 
@@ -70,13 +70,7 @@ The online walkabout also mounts the gameplay HUD: target frame, one-slot abilit
 
 Nameplates come from `name_key` and never from a display string on the wire (ADR 0007). A resolved locale entry is shown unchanged. On a locale miss, file-shaped keys are slugged, while classic `Creatures/<family>/Instances/...` keys fall back to the creature family. For example, `Rat1_1_Name.txt` reads `Rat  (2)` and an internal corridor-zombie resource path reads `Zombie Warrior  (2)`.
 
-`EntitySnapshot.content_id` binds to a converted model through `converted/assets/<ruleset>/entity_models.json`, a manifest derived from extracted content that lives with the converted assets and is never committed here. Write it with:
-
-```powershell
-./scripts/build-entity-models.ps1 -DataRepo ..\data
-```
-
-Without the manifest, or without `converted/` at all, every entity renders as a labelled capsule at its authoritative position. That is supported for asset-free CI. It does not pass the visual gate for a human walkthrough, which requires converted models for every replicated player and creature.
+`EntitySnapshot.content_id` binds to a native character scene through `characters/manifest.json` in the private baked content. Unknown ids render as labelled capsules at their authoritative positions. Capsules remain useful for asset-free tests, but the visual gate requires native scenes for every replicated player and creature.
 
 Set `SARNAUT_SERVER_ADDRESS` before starting Godot to change the endpoint default. Online mode accepts the shard's ephemeral self-signed certificate for local development. Production certificate validation remains future work.
 
@@ -86,20 +80,17 @@ The networking assembly uses `System.Net.Quic`, backed by MsQuic on Windows 11 a
 
 Client-side prediction is intentionally left behind the `WalkaboutController.NetworkControlled` seam. SAR-20 displays interpolated authoritative state without predicting ahead of the server.
 
-### Convert local assets
+### Mount baked content
 
-`converted/` is the user-local mount point and Git ignores its contents. Point `ao-godot-converter` at that directory:
+[ADR 0040](https://github.com/SarnautCore/docs/blob/main/adr/0040-materialized-native-content-architecture.md) makes content materialization an offline maintainer pipeline. The runtime does not convert source files, users do not run a local bake, and `ao-godot-converter` is private build machinery rather than a product component.
+
+Maintainers mount an existing private content workspace into a development checkout with:
 
 ```powershell
-$Converter = (Resolve-Path '../ao-godot-converter').Path
-$ConvertedRoot = (Join-Path $PWD 'converted')
-Set-Location $Converter
-cargo run --release -- convert --version 1.1 --output $ConvertedRoot
+./scripts/mount-assets.ps1 -AssetRoot E:\SarnautCore\assets
 ```
 
-Replace `1.1` with the converter profile for the client installation you own. Return to this repository and click **Refresh converted/** in the viewer after conversion. The tree includes `.png`, `.tres`, `.tscn`, and `.skmesh` files. Images open in a fitted 2D preview. Mesh resources, 3D scenes, and converter meshes open in an orbitable 3D viewport. Drag with the left mouse button to orbit and use the wheel to zoom.
-
-The client contains the converter's C# runtime resource classes and skinned-mesh loader. The loader path matches the path written into converted scenes.
+The script mounts `content/league-slice` from `content-staging/league-slice`. Baked product content is stored privately in Perforce `//content/main`; source inputs remain separate in `//assets/main`. A public code checkout intentionally contains neither tree.
 
 ### Command-line checks
 
@@ -116,13 +107,13 @@ godot_console --path . --scene res://tests/directional_lighting_probe.tscn
 dotnet run --project tools/SarnautCore.EntityBench -c Release -- --entities 288
 ```
 
-The Asset Viewer smoke scene expects local samples under `converted/samples/`. The Zone Walkabout smoke scene expects the classic conversion below `converted/assets/classic-1.1/` and prints the imported terrain and placement counts. These files are intentionally absent from Git because converted game assets must remain local.
+The Asset Viewer smoke scene expects local samples under `converted/samples/`. The Zone Walkabout smoke scene expects the private League-slice content mount and prints the native terrain, static, and character placement counts. These files are intentionally absent from the public Git repository.
 
 The directional-lighting probe also needs the classic conversion and a Forward+ display. It compares the production scene with shadows on, shadows off and the sun off, then fails on crushed blacks, washed highlights or missing rendered shadows. Set `SARNAUT_LIGHTING_PROBE_PREFIX` to an absolute path to keep its three PNG frames.
 
-The visual gate requires every probe to print `result=PASS` and rejects leak or unexpected `ERROR` diagnostics from either output stream. Captures taken at animated p4 and p5 moments are comparison evidence. They do not need to be byte-identical or pixel-identical unless the capture fixes animation time and every other render input. Compare composition and bounded image metrics when the frames are not deterministic.
+The visual gate now has 17 probes: the original 16 plus standing validation of authored LODs for all 40 native character identities. It also pins the 53-case animation census. Every probe must print `result=PASS`; the gate rejects leaks, unexpected `ERROR` diagnostics, and reduced coverage from either output stream. Captures taken at animated p4 and p5 moments are comparison evidence. They do not need to be byte-identical or pixel-identical unless the capture fixes animation time and every other render input. Compare composition and bounded image metrics when the frames are not deterministic.
 
-The Entity Binding smoke scene needs neither: it binds snapshots to visuals, picks one with a ray and retires one, and prints whether it ran on converted models or on capsules. Run it both ways. `SarnautCore.EntityBench` compares the entity update against the pre-registry loop; see `tools/SarnautCore.EntityBench/RESULTS.md`.
+The Entity Binding smoke scene needs neither: it binds snapshots to visuals, picks one with a ray and retires one, and prints whether it ran on native models or on capsules. Run it both ways. `SarnautCore.EntityBench` compares the entity update against the pre-registry loop; see `tools/SarnautCore.EntityBench/RESULTS.md`.
 
 For an asset-free end-to-end network check, keep the `server` repository beside this one and use the session smoke below. Adding `-EntityProbe` runs `res://tests/zone_online_probe.tscn`: it signs in through the same view models the screens use, enters the live shard, and then checks what the client actually drew. It requires one visual per replicated entity, a controller at the shard's authoritative position, a nameplate and health bar, and matching `Tab` and screen-point targeting.
 
@@ -148,11 +139,11 @@ The server's `scripts/m2-slice-smoke.ps1` is the canonical complete headless cha
 
 This repository is part of SarnautCore, a fan-driven, non-commercial, open-source recreation kit for Allods Online.
 
-The project charter and the architecture decision records live in [SarnautCore/docs](https://github.com/SarnautCore/docs). Read those before opening a pull request here.
+The project charter and the architecture decision records live in [SarnautCore/docs](https://github.com/SarnautCore/docs). Read those before opening a pull request here. ADR 0040 governs the public-code/private-content split and the offline bake architecture.
 
 ## Clean-room posture
 
-SarnautCore is built clean-room. This project never distributes game assets or data owned by MY.GAMES. The client ships as an empty shell; you supply the content from your own copy of the game, converted locally.
+SarnautCore is built clean-room. Engine and server code are public; every derived content byte stays in the project's private distribution. The public client repository contains no runtime converter and no original-format reader.
 
 ## License
 

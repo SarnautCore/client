@@ -61,14 +61,14 @@ text = "Offline tools"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
-placeholder_text = "Converted map directory"
-tooltip_text = "Directory name below converted/assets/classic-1.1/assets/Maps/"
+placeholder_text = "Native map name"
+tooltip_text = "Map name in the mounted private baked content"
 
 [node name="Walkabout" type="Button" parent="Center/Menu"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
-text = "Walk a converted zone"
+text = "Zone Walkabout"
 
 [node name="AssetViewer" type="Button" parent="Center/Menu"]
 unique_name_in_owner = true
@@ -80,7 +80,7 @@ text = "Asset Viewer"
 unique_name_in_owner = true
 visible = false
 layout_mode = 2
-text = "Enter a converted map name."
+text = "Enter a native map name."
 autowrap_mode = 3
 
 [node name="Quit" type="Button" parent="Center/Menu"]
