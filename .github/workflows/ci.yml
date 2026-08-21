@@ -46,6 +46,17 @@ jobs:
         shell: pwsh
         run: ./scripts/sync-proto.ps1 -Check -ServerRepo .server-proto
 
+      # Audit is intentionally non-blocking until the native HUD cutover lands.
+      # The fixture suite keeps strict mode honest in the meantime, including the
+      # product-content/private-provenance exclusion boundary.
+      - name: Test the conversion-retirement gate
+        shell: pwsh
+        run: ./scripts/test-conversion-retirement-fixtures.ps1
+
+      - name: Report conversion-retirement blockers
+        shell: pwsh
+        run: ./scripts/test-conversion-retirement.ps1 -Mode Audit
+
       - name: Restore
         run: dotnet restore SarnautCore.sln
 
