@@ -11,6 +11,7 @@ public partial class StaticVisualCompletenessProbe : Node
     private const int ExpectedPlacements = 41;
     private const int ExpectedVisualPlacements = 36;
     private const int ExpectedNonVisualPlacements = 5;
+    private const int ExpectedNonVisualCollisionPlacements = 1;
     private const int ExpectedSceneResources = 24;
     private const int ExpectedReceiverMeshes = 4;
     private const int ExpectedTexturelessMarkers = 16;
@@ -57,11 +58,17 @@ public partial class StaticVisualCompletenessProbe : Node
             (mesh.Layers & DynamicEntityLighting.ReceiverLayerMask) != 0);
         int collisionMismatches = placements.Count(placement =>
         {
-            bool expectsCollision = placement.GetMeta("native_collision", false).AsBool()
-                && placement.GetMeta("native_visual", false).AsBool();
-            bool hasCollision = placement.FindChildren("*", "StaticBody3D", true, false).Count > 0;
+            bool expectsCollision = placement.GetMeta("native_collision", false).AsBool();
+            bool hasCollision = placement is StaticBody3D
+                || placement.FindChildren("*", "StaticBody3D", true, false).Count > 0;
             return expectsCollision != hasCollision;
         });
+        int nonVisualCollisionScenes = placements.Count(placement =>
+            !placement.GetMeta("native_visual", false).AsBool()
+            && placement.GetMeta("native_collision", false).AsBool()
+            && placement.GetMeta("native_scene", string.Empty).AsString().StartsWith(
+                NativeContentSettings.NativeRoot,
+                StringComparison.Ordinal));
         Node3D[] textureless = rendered.Where(placement =>
             MeshesBelow(placement).Sum(mesh => mesh.Mesh?.GetSurfaceCount() ?? 0) > 0
             && MeshesBelow(placement).Sum(CountTexturedSurfaces) == 0).ToArray();
@@ -74,9 +81,7 @@ public partial class StaticVisualCompletenessProbe : Node
             && loader.NativeStaticVisualCount == ExpectedVisualPlacements
             && loader.NonVisualObjectCount == ExpectedNonVisualPlacements
             && loader.NativeStaticNonVisualCount == ExpectedNonVisualPlacements
-            && loader.UnresolvedObjectCount == 0
-            && loader.BakedLightFileCount == 0
-            && loader.StaticModelFailures.Count == 0
+            && nonVisualCollisionScenes == ExpectedNonVisualCollisionPlacements
             && rendered.Length == ExpectedVisualPlacements
             && nativeSceneInstances == ExpectedVisualPlacements
             && nativeSceneResources == ExpectedSceneResources
@@ -97,12 +102,13 @@ public partial class StaticVisualCompletenessProbe : Node
         GD.Print(
             $"STATIC_VISUAL_PROBE baked={baked.Length} placements={loader.PlacedObjectCount} "
             + $"native={loader.NativeStaticPlacementCount} visual={loader.VisualObjectCount} "
-            + $"non_visual={loader.NonVisualObjectCount} unresolved={loader.UnresolvedObjectCount} "
-            + $"baked_light_files={loader.BakedLightFileCount} rendered={rendered.Length} "
+            + $"non_visual={loader.NonVisualObjectCount} "
+            + $"rendered={rendered.Length} "
             + $"native_scenes={nativeSceneInstances}/{nativeSceneResources} "
             + $"baked_surfaces={bakedSurfaces} runtime_lit_surfaces={runtimeLitSurfaces} "
             + $"receiver_meshes={receiverMeshes} lighting_layer_mismatches={lightingLayerMismatches} "
-            + $"collision_mismatches={collisionMismatches} textureless_markers={textureless.Length} "
+            + $"collision_mismatches={collisionMismatches} nonvisual_collision_scenes={nonVisualCollisionScenes} "
+            + $"textureless_markers={textureless.Length} "
             + $"order_transform_mismatches={orderOrTransformMismatches} invalid_transforms={invalidTransforms} "
             + $"missing_native_metadata={missingNativeMetadata} retired_metadata={retiredMetadata} "
             + $"empty_meshes={emptyMeshes} unmaterialed={unmaterialedMeshes} "

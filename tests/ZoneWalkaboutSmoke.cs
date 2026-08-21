@@ -33,7 +33,7 @@ public partial class ZoneWalkaboutSmoke : Node
             && idleSelected;
         GD.Print(
             $"ZONE_WALKABOUT_SMOKE terrain={loader.TerrainTileCount} vertices={loader.TerrainVertexCount} " +
-            $"placed={loader.PlacedObjectCount} visual={loader.VisualObjectCount} unresolved={loader.UnresolvedObjectCount} " +
+            $"placed={loader.PlacedObjectCount} visual={loader.VisualObjectCount} " +
             $"server={loader.ServerObjectCount} npc={loader.NpcVisualCount}/{loader.NpcPlacementCount} " +
             $"npc_placeholders={loader.NpcPlaceholderCount} player_bones={player.SkeletonBoneCount} " +
             $"player_clips={player.ClipCount} idle_run={idleSelected && runSelected} " +

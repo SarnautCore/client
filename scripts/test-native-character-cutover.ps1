@@ -20,7 +20,7 @@ $source = ($runtimeFiles | ForEach-Object {
 
 $zone = Get-Content -LiteralPath (Join-Path $root "src\zone\ZoneLoader.cs") -Raw
 $zoneStart = $zone.IndexOf("private bool TryLoadNativeCharacterPlacements", [StringComparison]::Ordinal)
-$zoneEnd = $zone.IndexOf("private StaticObjectResolution ResolveStaticObject", $zoneStart, [StringComparison]::Ordinal)
+$zoneEnd = $zone.IndexOf("private static CoordinateManifestDocument? ReadCoordinateManifestDocument", $zoneStart, [StringComparison]::Ordinal)
 if ($zoneStart -lt 0 -or $zoneEnd -le $zoneStart) {
     throw "native character ZoneLoader section was not found"
 }

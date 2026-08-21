@@ -7,23 +7,15 @@ namespace SarnautCore;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Retail shades a zone with two disjoint models: statics carry their offline
-/// bake (lightvrt vertex colors, terrain lightmaps) and ignore runtime lights,
-/// while dynamic entities and unbaked props are lit at runtime by the zone's
-/// ambient plus its point lights. Here the runtime point lights — authored
-/// <c>client.Scene.LightComponent</c> placements and the sampled-bake fill
-/// (<see cref="SampledEntityLight"/>) — carry a light cull mask of
-/// <see cref="ReceiverLayerMask"/> only, and only runtime-lit meshes join that
-/// layer. Baked statics are demoted back to <see cref="BakedOnlyLayers"/> when
-/// their bake applies, so they can never be double-lit: their unshaded baked
-/// materials already ignore lights, and the mask keeps the separation explicit
-/// even for a static whose material later becomes shaded.
+/// Native statics with unshaded baked materials stay on
+/// <see cref="BakedOnlyLayers"/> and ignore runtime lights. Dynamic entities and
+/// shaded props join <see cref="ReceiverLayerMask"/> so sampled entity lighting
+/// can reach them without double-lighting baked surfaces.
 /// </para>
 /// <para>
-/// Every converted mesh starts as a receiver because at materialization time
-/// nobody knows yet whether a bake covers it; <see cref="BakedStaticLighting"/>
-/// owns the demotion. The camera's default cull mask sees all layers, so layer
-/// membership never affects visibility, only which lights reach a surface.
+/// Native scene setup chooses this membership from each mesh material's shading
+/// mode. The camera's default cull mask sees all layers, so layer membership
+/// never affects visibility, only which lights reach a surface.
 /// </para>
 /// </remarks>
 public static class DynamicEntityLighting

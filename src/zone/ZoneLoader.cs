@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Xml.Linq;
 using Godot;
 using SarnautCore.Content;
+using InvalidDataException = System.IO.InvalidDataException;
 
 namespace SarnautCore;
 
@@ -14,7 +14,6 @@ public partial class ZoneLoader : Node3D
     public const string DefaultMapName = "Inst_LeagueStart";
 
     private const string DefaultConvertedRoot = "res://converted/assets/classic-1.1";
-    private const string MapRegionSuffix = "_MapRegion.xdb.placements.json";
     private const string TileCoordinateFrameId = "allods-tile-local-v1";
     private const string TileCoordinateScope = "tile-local";
     private const float TerrainTilePitch = 256.0f;
@@ -22,29 +21,18 @@ public partial class ZoneLoader : Node3D
     {
         PropertyNameCaseInsensitive = true,
     };
-    private const string BakedLightSuffix = "_MapRegion.xdb.lightvrt.json";
-    private const string AuthoredLightsSuffix = "_MapRegion.xdb.lights.json";
-    private const string NativeStaticsBakeFormat = "sarnaut-native-statics-v2";
-    private const string NativeStaticsCellFormat = "sarnaut-native-statics-v1";
-    private const string NativeStaticsFrameId = "godot-world-v1";
-    private const string NativeStaticsCoordinateScope = "world";
-    private const string NativeStaticsCellPolicy = "nonempty_placements_only";
     private const string NativeTerrainFrameId = "godot-world-v1";
     private readonly HashSet<string> _npcModelFailures = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _staticModelFailures = new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<PendingBakedLight> _pendingBakedLight = [];
-    private readonly List<PendingAuthoredLights> _pendingAuthoredLights = [];
     private BakedLightProbe _lightProbe = new();
     private readonly List<Aabb> _terrainSpawnBounds = [];
     private readonly List<Vector3> _spawnHints = [];
     private readonly List<Vector3> _presentationSpawnHints = [];
-    private AllodsResourceTree _tree = new(DefaultConvertedRoot);
     private Node3D? _terrainRoot;
     private Node3D? _objectsRoot;
     private Node3D? _charactersRoot;
     private bool _terrainFatal;
+    private bool _staticFatal;
     private bool _characterFatal;
-    private bool _authoredLightsPlaced;
     private int _nativeTerrainTileCount;
     private int _nativeStaticPlacementCount;
     private int _nativeStaticVisualCount;
@@ -73,19 +61,11 @@ public partial class ZoneLoader : Node3D
     public int PlacedObjectCount { get; private set; }
     public int VisualObjectCount { get; private set; }
     public int NonVisualObjectCount { get; private set; }
-    public int UnresolvedObjectCount { get; private set; }
     public int ServerObjectCount { get; private set; }
     public int NpcPlacementCount { get; private set; }
     public int NpcVisualCount { get; private set; }
     public int NpcPlaceholderCount { get; private set; }
-    public int PlacementFileCount { get; private set; }
     public int ServerPlacementFileCount { get; private set; }
-    public int BakedLightFileCount { get; private set; }
-    public int BakedLitObjectCount { get; private set; }
-    public int BakedLitSurfaceCount { get; private set; }
-    public int AuthoredLightFileCount { get; private set; }
-    public int AuthoredLightCount { get; private set; }
-    public int AuthoredAntiLightCount { get; private set; }
     public int LightProbeTileCount => _lightProbe.TileCount;
     public int NativeTerrainTileCount => _nativeTerrainTileCount;
     public int NativeStaticPlacementCount => _nativeStaticPlacementCount;
@@ -98,15 +78,12 @@ public partial class ZoneLoader : Node3D
     public string LastError { get; private set; } = string.Empty;
 
     /// <summary>
-    /// True when every renderable placement resolved and no loader error was
-    /// recorded. Probes pin this; the zone itself no longer aborts on
-    /// unresolved props, only on terrain failure.
+    /// True when every authoritative native inventory loaded without error.
     /// </summary>
-    public bool IsFullyResolved => UnresolvedObjectCount == 0 && string.IsNullOrWhiteSpace(LastError);
+    public bool IsFullyResolved => string.IsNullOrWhiteSpace(LastError);
     public Aabb TerrainBounds { get; private set; }
     public bool HasTerrainBounds { get; private set; }
     public IReadOnlyCollection<string> NpcModelFailures => _npcModelFailures;
-    public IReadOnlyCollection<string> StaticModelFailures => _staticModelFailures;
 
     public Vector3 SuggestedSpawnPosition => _presentationSpawnHints.FirstOrDefault(
         ZoneSpawnFrame.Suggest(_terrainSpawnBounds, _spawnHints));
@@ -123,14 +100,12 @@ public partial class ZoneLoader : Node3D
     public bool LoadZone(string mapName)
     {
         ResetZone();
-        _tree = new AllodsResourceTree(ConvertedRoot);
         MapName = mapName.Trim();
         if (!IsSafeMapName(MapName))
         {
             return Fail($"Invalid map name '{MapName}'.");
         }
 
-        string mapRoot = $"{ConvertedRoot.TrimEnd('/')}/assets/Maps/{MapName}";
         _terrainRoot = new Node3D { Name = "Terrain" };
         _objectsRoot = new Node3D { Name = "StaticObjects" };
         _charactersRoot = new Node3D { Name = "NpcCharacters" };
@@ -138,10 +113,6 @@ public partial class ZoneLoader : Node3D
         AddChild(_objectsRoot);
         AddChild(_charactersRoot);
 
-        var files = DirAccess.Open(mapRoot) == null ? [] : EnumerateFiles(mapRoot);
-        var placementFiles = files.Where(path => path.EndsWith(MapRegionSuffix, StringComparison.OrdinalIgnoreCase)).ToArray();
-
-        PlacementFileCount = placementFiles.Length;
         if (!TryLoadNativeTerrain(out string terrainError))
         {
             _terrainFatal = true;
@@ -156,26 +127,27 @@ public partial class ZoneLoader : Node3D
                 + $"root={NativeContentSettings.NativeRoot}");
         }
 
-        using NativeStaticsIndex? nativeStatics = TryIndexNativeStatics();
-        if (nativeStatics != null)
+        bool staticsReady = TryIndexNativeStatics(
+            out NativeStaticsIndex? nativeStatics,
+            out string staticError);
+        using NativeStaticsIndex? ownedNativeStatics = nativeStatics;
+        if (staticsReady)
         {
-            foreach (NativeStaticsRuntimeCell nativeCell in nativeStatics.Cells)
+            foreach (NativeStaticCell nativeCell in nativeStatics!.Bake.Cells)
             {
                 LoadNativeStaticPlacements(nativeCell, nativeStatics);
             }
         }
         else
         {
-            foreach (string placementPath in placementFiles)
-            {
-                LoadStaticPlacements(placementPath);
-            }
+            _staticFatal = true;
+            Fail(staticError);
         }
 
         if (nativeStatics != null && _nativeStaticPlacementCount > 0)
         {
             GD.Print(
-                $"ZoneLoader: native statics | map={MapName} cells={nativeStatics.Cells.Count} "
+                $"ZoneLoader: native statics | map={MapName} cells={nativeStatics.Bake.Cells.Count} "
                 + $"placements={_nativeStaticPlacementCount}/{PlacedObjectCount} "
                 + $"visual={_nativeStaticVisualCount}/{VisualObjectCount} "
                 + $"non_visual={_nativeStaticNonVisualCount}/{NonVisualObjectCount} "
@@ -192,24 +164,11 @@ public partial class ZoneLoader : Node3D
         GD.Print(
             $"ZoneLoader: {MapName} | terrain={TerrainTileCount} | placements={PlacedObjectCount} " +
             $"| visual={VisualObjectCount} | non_visual={NonVisualObjectCount} " +
-            $"| unresolved={UnresolvedObjectCount} | server={ServerObjectCount} " +
+            $"| server={ServerObjectCount} " +
             $"| npc={NpcVisualCount}/{NpcPlacementCount} | npc_placeholders={NpcPlaceholderCount}");
-        if (UnresolvedObjectCount > 0)
-        {
-            string firstFailure = _staticModelFailures.FirstOrDefault() ?? "No resource detail was recorded.";
-            // Recorded through Fail so an earlier terrain diagnostic is not
-            // clobbered: first error wins, later ones append.
-            Fail($"{UnresolvedObjectCount} renderable static placements could not load. " +
-                "If the converted source files exist, import them before starting the zone. " +
-                $"First failure: {firstFailure}");
-        }
-
-        // Unresolved props no longer abort the zone: the walkabout with a
-        // missing barrel beats a refusal to load. Probes assert zero through
-        // UnresolvedObjectCount/IsFullyResolved; terrain failure stays fatal.
         return TerrainTileCount > 0
-            && PlacedObjectCount > 0
             && !_terrainFatal
+            && !_staticFatal
             && !_characterFatal;
     }
 
@@ -227,24 +186,15 @@ public partial class ZoneLoader : Node3D
         _objectsRoot = null;
         _charactersRoot = null;
         _terrainFatal = false;
+        _staticFatal = false;
         _characterFatal = false;
-        _authoredLightsPlaced = false;
         _npcModelFailures.Clear();
-        _staticModelFailures.Clear();
-        _pendingBakedLight.Clear();
-        _pendingAuthoredLights.Clear();
         if (BakedLightProbe.Active == _lightProbe)
         {
             BakedLightProbe.Activate(null);
         }
 
         _lightProbe = new BakedLightProbe();
-        BakedLightFileCount = 0;
-        BakedLitObjectCount = 0;
-        BakedLitSurfaceCount = 0;
-        AuthoredLightFileCount = 0;
-        AuthoredLightCount = 0;
-        AuthoredAntiLightCount = 0;
         _terrainSpawnBounds.Clear();
         _spawnHints.Clear();
         _presentationSpawnHints.Clear();
@@ -260,12 +210,10 @@ public partial class ZoneLoader : Node3D
         PlacedObjectCount = 0;
         VisualObjectCount = 0;
         NonVisualObjectCount = 0;
-        UnresolvedObjectCount = 0;
         ServerObjectCount = 0;
         NpcPlacementCount = 0;
         NpcVisualCount = 0;
         NpcPlaceholderCount = 0;
-        PlacementFileCount = 0;
         ServerPlacementFileCount = 0;
         UsedFlatTerrainFallback = false;
         HasTerrainBounds = false;
@@ -320,7 +268,6 @@ public partial class ZoneLoader : Node3D
         {
             foreach (NativeTerrainTile entry in manifest.Tiles)
             {
-                string pathError = string.Empty;
                 string selectedScene;
                 try
                 {
@@ -329,12 +276,13 @@ public partial class ZoneLoader : Node3D
                         entry.RuntimeScene,
                         allowParentSegments: true);
                 }
-                catch (System.IO.InvalidDataException exception)
+                catch (InvalidDataException exception)
                 {
                     error = $"Native terrain entry '{entry.TileId}' has an invalid scene: {exception.Message}";
                     return false;
                 }
 
+                string pathError = string.Empty;
                 if (string.IsNullOrWhiteSpace(entry.TileId)
                     || entry.TileId.IndexOfAny(['/', '\\', ':']) >= 0
                     || !seenTileIds.Add(entry.TileId)
@@ -388,10 +336,7 @@ public partial class ZoneLoader : Node3D
         }
         finally
         {
-            foreach (NativeTerrainRuntimeTile runtime in pending)
-            {
-                runtime.Scene.Dispose();
-            }
+            DisposePackedScenes(pending.Select(runtime => runtime.Scene));
         }
     }
 
@@ -481,143 +426,85 @@ public partial class ZoneLoader : Node3D
     }
 
     /// <summary>
-    /// Builds one validated native-static index for the zone. Native statics
-    /// are all-or-nothing: the aggregate owns ordered cell discovery, and
-    /// every referenced cell and scene must load before any instance is added.
-    /// A partial or malformed bake falls back to the complete converted route.
+    /// Builds the complete native static inventory before adding any instance.
+    /// The bake is authoritative, so every manifest and scene must resolve.
     /// </summary>
-    private NativeStaticsIndex? TryIndexNativeStatics()
+    private bool TryIndexNativeStatics(out NativeStaticsIndex? index, out string error)
     {
+        index = null;
         string staticsRoot = $"{NativeContentSettings.NativeRoot}/maps/"
             + $"{MapNameTransform.ToKebabCase(MapName)}/statics";
         string bakePath = $"{staticsRoot}/bake.json";
         if (!FileAccess.FileExists(bakePath))
         {
-            return null;
+            error = $"Native static bake manifest is missing: {bakePath}";
+            return false;
         }
 
         var scenes = new Dictionary<string, PackedScene>(StringComparer.Ordinal);
         bool indexOwnsScenes = false;
         try
         {
-            NativeStaticsBakeManifest? bake = JsonSerializer.Deserialize<NativeStaticsBakeManifest>(
-                FileAccess.GetFileAsString(bakePath), JsonOptions);
-            if (bake == null
-                || bake.Format != NativeStaticsBakeFormat
-                || bake.SchemaVersion != 2
-                || !bake.Map.Equals(MapName, StringComparison.Ordinal)
-                || string.IsNullOrWhiteSpace(bake.Zone)
-                || bake.Frame?.Id != NativeStaticsFrameId
-                || bake.Frame.CoordinateScope != NativeStaticsCoordinateScope
-                || !bake.Frame.OriginApplied
-                || bake.CellPolicy != NativeStaticsCellPolicy
-                || bake.Report == null
-                || bake.Report.Unresolved != 0
-                || bake.Cells == null)
+            NativeStaticBake bake = NativeStaticBake.Parse(
+                FileAccess.GetFileAsString(bakePath),
+                MapName,
+                relativePath =>
+                {
+                    string path = $"{staticsRoot}/{relativePath}";
+                    return FileAccess.FileExists(path) ? FileAccess.GetFileAsString(path) : null;
+                });
+            foreach (NativeStaticPlacement placement in bake.Cells.SelectMany(cell => cell.Placements))
             {
-                return DeclineNativeStatics(
-                    $"Native static bake manifest is incompatible or unresolved: {bakePath}");
+                if (placement.ScenePath == null)
+                {
+                    continue;
+                }
+
+                string scenePath = $"{staticsRoot}/{placement.ScenePath}";
+                if (scenes.ContainsKey(scenePath))
+                {
+                    continue;
+                }
+
+                if (!FileAccess.FileExists(scenePath))
+                {
+                    error = $"Native static scene is missing: {scenePath}";
+                    return false;
+                }
+
+                PackedScene? scene = ResourceLoader.Load<PackedScene>(scenePath);
+                Node? probe = scene?.Instantiate();
+                bool validRoot = probe is Node3D;
+                bool validCollision = placement.Visual
+                    || !placement.Collision
+                    || probe != null && HasUsableNativeCollision(probe);
+                probe?.Free();
+                if (scene == null || !validRoot || !validCollision)
+                {
+                    scene?.Dispose();
+                    error = !validCollision
+                        ? $"Native nonvisual collision scene has no usable collision shape: {scenePath}"
+                        : $"Native static scene does not instantiate as Node3D: {scenePath}";
+                    return false;
+                }
+
+                scenes.Add(scenePath, scene);
             }
 
-            var seenCells = new HashSet<NativeStaticCellKey>();
-            var runtimeCells = new List<NativeStaticsRuntimeCell>();
-            int manifestPlacements = 0;
-            int manifestVisual = 0;
-            int manifestNonVisual = 0;
-
-            NativeStaticsBakeCell[] orderedCells = bake.Cells
-                .OrderBy(cell => cell.Order)
-                .ToArray();
-            for (int cellIndex = 0; cellIndex < orderedCells.Length; cellIndex++)
-            {
-                NativeStaticsBakeCell bakeCell = orderedCells[cellIndex];
-                string manifestPath = string.Empty;
-                string manifestPathError = string.Empty;
-                if (bakeCell.Order != cellIndex
-                    || bakeCell.Cell?.Sector is not { Length: 2 }
-                    || bakeCell.Cell.Tile is not { Length: 2 }
-                    || bakeCell.Report == null
-                    || bakeCell.Report.Unresolved != 0
-                    || !TryResolveRelativeResourcePath(
-                        bakePath,
-                        bakeCell.Placements,
-                        staticsRoot,
-                        ".json",
-                        out manifestPath,
-                        out manifestPathError))
-                {
-                    return DeclineNativeStatics(
-                        $"Native static bake cell {cellIndex} is incompatible: "
-                        + (string.IsNullOrWhiteSpace(manifestPathError) ? bakePath : manifestPathError));
-                }
-
-                if (!FileAccess.FileExists(manifestPath))
-                {
-                    return DeclineNativeStatics($"Native static cell manifest is missing: {manifestPath}");
-                }
-
-                NativeStaticsManifest? manifest = JsonSerializer.Deserialize<NativeStaticsManifest>(
-                    FileAccess.GetFileAsString(manifestPath), JsonOptions);
-                if (!TryValidateNativeStaticsManifest(
-                        manifest,
-                        manifestPath,
-                        staticsRoot,
-                        MapName,
-                        bake.Zone,
-                        scenes,
-                        out NativeStaticCellKey cellKey,
-                        out string manifestError))
-                {
-                    return DeclineNativeStatics(manifestError);
-                }
-
-                NativeStaticCellKey declaredCellKey = NativeStaticCellKey.From(bakeCell.Cell);
-                NativeStaticPlacement[] placements = manifest!.Placements!;
-                int cellVisual = placements.Count(placement => placement.Visual);
-                int cellNonVisual = placements.Length - cellVisual;
-                if (cellKey != declaredCellKey
-                    || bakeCell.Report.Placements != placements.Length
-                    || bakeCell.Report.Visual != cellVisual
-                    || bakeCell.Report.NonVisual != cellNonVisual
-                    || bakeCell.Report.PointLights != 0
-                    || bakeCell.Report.AntiLights != 0
-                    || !string.IsNullOrWhiteSpace(bakeCell.AuthoredLights))
-                {
-                    return DeclineNativeStatics(
-                        $"Native static bake cell report does not match {manifestPath}");
-                }
-
-                if (!seenCells.Add(declaredCellKey))
-                {
-                    return DeclineNativeStatics(
-                        $"Native static bake has duplicate cell {declaredCellKey}: {manifestPath}");
-                }
-
-                manifestPlacements += placements.Length;
-                manifestVisual += cellVisual;
-                manifestNonVisual += cellNonVisual;
-                runtimeCells.Add(new NativeStaticsRuntimeCell(manifest));
-            }
-
-            if (runtimeCells.Count != bake.Report.Cells
-                || manifestPlacements != bake.Report.Placements
-                || manifestVisual != bake.Report.Visual
-                || manifestNonVisual != bake.Report.NonVisual
-                || bake.Report.PointLights != 0
-                || bake.Report.AntiLights != 0)
-            {
-                return DeclineNativeStatics(
-                    $"Native static bake report does not match its cell manifests: {bakePath}");
-            }
-
-            var index = new NativeStaticsIndex(runtimeCells, scenes, bake.Report);
+            index = new NativeStaticsIndex(staticsRoot, bake, scenes);
             indexOwnsScenes = true;
-            return index;
+            error = string.Empty;
+            return true;
+        }
+        catch (InvalidDataException exception)
+        {
+            error = $"Native static bake is invalid: {bakePath}: {exception.Message}";
+            return false;
         }
         catch (Exception exception)
         {
-            return DeclineNativeStatics(
-                $"Native static bake could not be indexed: {bakePath}: {exception.Message}");
+            error = $"Native static bake could not be indexed: {bakePath}: {exception.Message}";
+            return false;
         }
         finally
         {
@@ -628,143 +515,12 @@ public partial class ZoneLoader : Node3D
         }
     }
 
-    private NativeStaticsIndex? DeclineNativeStatics(string error)
-    {
-        GD.PushWarning($"ZoneLoader: {error}; using the converted static route for the whole zone.");
-        return null;
-    }
-
     private static void DisposePackedScenes(IEnumerable<PackedScene> scenes)
     {
         foreach (PackedScene scene in scenes)
         {
             scene.Dispose();
         }
-    }
-
-    private static bool TryValidateNativeStaticsManifest(
-        NativeStaticsManifest? manifest,
-        string manifestPath,
-        string staticsRoot,
-        string expectedMap,
-        string expectedZone,
-        Dictionary<string, PackedScene> scenes,
-        out NativeStaticCellKey cellKey,
-        out string error)
-    {
-        cellKey = default;
-        if (manifest == null
-            || manifest.Format != NativeStaticsCellFormat
-            || !manifest.Map.Equals(expectedMap, StringComparison.Ordinal)
-            || !manifest.Zone.Equals(expectedZone, StringComparison.Ordinal)
-            || manifest.Cell?.Sector is not { Length: 2 }
-            || manifest.Cell.Tile is not { Length: 2 }
-            || manifest.Frame?.Id != NativeStaticsFrameId
-            || !manifest.Frame.OriginApplied
-            || manifest.Placements == null)
-        {
-            error = $"Native static cell manifest is incompatible: {manifestPath}";
-            return false;
-        }
-
-        cellKey = NativeStaticCellKey.From(manifest.Cell);
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        for (int placementIndex = 0; placementIndex < manifest.Placements.Length; placementIndex++)
-        {
-            NativeStaticPlacement placement = manifest.Placements[placementIndex];
-            if (placement.Order != placementIndex)
-            {
-                error = $"Native static placement order is not contiguous in {manifestPath}";
-                return false;
-            }
-
-            if (!TryReadNativeTransform(placement, out _, out _, out _, out string transformError))
-            {
-                error = $"Native static placement '{placement.Name}' is invalid in {manifestPath}: {transformError}";
-                return false;
-            }
-
-            if (string.IsNullOrWhiteSpace(placement.Name) || !names.Add(placement.Name))
-            {
-                error = $"Native static placement names are empty or duplicated in {manifestPath}";
-                return false;
-            }
-
-            if (!placement.Visual)
-            {
-                if (!string.IsNullOrWhiteSpace(placement.Scene)
-                    || !string.IsNullOrWhiteSpace(placement.RuntimeScene)
-                    || (placement.NonVisualReason != "collision_only"
-                        && placement.NonVisualReason != "invisible_portal")
-                    || placement.Classification != placement.NonVisualReason)
-                {
-                    error = $"Native nonvisual placement '{placement.Name}' is invalid in {manifestPath}";
-                    return false;
-                }
-
-                continue;
-            }
-
-            if (placement.Classification != "visual")
-            {
-                error = $"Native visual placement '{placement.Name}' has an invalid classification in {manifestPath}";
-                return false;
-            }
-
-            string selectedScene;
-            try
-            {
-                selectedScene = NativeSceneReference.Select(
-                    placement.Scene,
-                    placement.RuntimeScene,
-                    allowParentSegments: true);
-            }
-            catch (System.IO.InvalidDataException exception)
-            {
-                error = $"Native static placement '{placement.Name}' has an invalid scene: {exception.Message}";
-                return false;
-            }
-
-            if (!TryResolveRelativeResourcePath(
-                    manifestPath,
-                    selectedScene,
-                    staticsRoot,
-                    NativeSceneReference.Extension(selectedScene),
-                    out string scenePath,
-                    out string scenePathError))
-            {
-                error = $"Native static placement '{placement.Name}' has an invalid scene: {scenePathError}";
-                return false;
-            }
-
-            if (!scenes.TryGetValue(scenePath, out PackedScene? scene))
-            {
-                if (!FileAccess.FileExists(scenePath))
-                {
-                    error = $"Native static scene is missing: {scenePath}";
-                    return false;
-                }
-
-                scene = ResourceLoader.Load<PackedScene>(scenePath);
-                Node? probe = scene?.Instantiate();
-                bool validRoot = probe is Node3D;
-                probe?.Free();
-                if (scene == null || !validRoot)
-                {
-                    scene?.Dispose();
-                    error = $"Native static scene does not instantiate as Node3D: {scenePath}";
-                    return false;
-                }
-
-                scenes.Add(scenePath, scene);
-            }
-
-            placement.ResolvedScenePath = scenePath;
-        }
-
-        manifest.SourcePath = manifestPath;
-        error = string.Empty;
-        return true;
     }
 
     private static bool TryResolveRelativeResourcePath(
@@ -829,55 +585,23 @@ public partial class ZoneLoader : Node3D
         return true;
     }
 
-    private static bool TryReadNativeTransform(
-        NativeStaticPlacement placement,
-        out Vector3 position,
-        out Quaternion rotation,
-        out Vector3 scale,
-        out string error)
-    {
-        position = Vector3.Zero;
-        rotation = Quaternion.Identity;
-        scale = Vector3.One;
-        if (placement.Position is not { Length: 3 }
-            || placement.Rotation is not { Length: 4 }
-            || !placement.Position.All(float.IsFinite)
-            || !placement.Rotation.All(float.IsFinite)
-            || !float.IsFinite(placement.Scale)
-            || placement.Scale <= 0)
-        {
-            error = "position, rotation, or scale is missing or non-finite";
-            return false;
-        }
-
-        position = new Vector3(placement.Position[0], placement.Position[1], placement.Position[2]);
-        rotation = new Quaternion(
-            placement.Rotation[0],
-            placement.Rotation[1],
-            placement.Rotation[2],
-            placement.Rotation[3]);
-        if (!Mathf.IsEqualApprox(rotation.LengthSquared(), 1.0f))
-        {
-            error = "rotation is not a unit quaternion";
-            return false;
-        }
-
-        scale = Vector3.One * placement.Scale;
-        error = string.Empty;
-        return true;
-    }
-
     private void LoadNativeStaticPlacements(
-        NativeStaticsRuntimeCell cell,
+        NativeStaticCell cell,
         NativeStaticsIndex index)
     {
-        foreach (NativeStaticPlacement placement in cell.Manifest.Placements!)
+        foreach (NativeStaticPlacement placement in cell.Placements)
         {
-            _ = TryReadNativeTransform(placement, out Vector3 position, out Quaternion rotation, out Vector3 scale, out _);
+            var position = new Vector3(placement.PositionX, placement.PositionY, placement.PositionZ);
+            var rotation = new Quaternion(
+                placement.RotationX,
+                placement.RotationY,
+                placement.RotationZ,
+                placement.RotationW);
             Node3D instance;
             if (placement.Visual)
             {
-                PackedScene scene = index.Scenes[placement.ResolvedScenePath];
+                string scenePath = $"{index.StaticsRoot}/{placement.ScenePath}";
+                PackedScene scene = index.Scenes[scenePath];
                 instance = (Node3D)scene.Instantiate();
                 ConfigureNativeStaticLighting(instance);
                 _nativeStaticVisualCount++;
@@ -885,7 +609,9 @@ public partial class ZoneLoader : Node3D
             }
             else
             {
-                instance = new Node3D();
+                instance = placement.ScenePath == null
+                    ? new Node3D()
+                    : (Node3D)index.Scenes[$"{index.StaticsRoot}/{placement.ScenePath}"].Instantiate();
                 instance.SetMeta("native_nonvisual_reason", placement.NonVisualReason ?? string.Empty);
                 _nativeStaticNonVisualCount++;
                 NonVisualObjectCount++;
@@ -894,14 +620,14 @@ public partial class ZoneLoader : Node3D
             instance.Name = placement.Name;
             instance.Position = position;
             instance.Quaternion = rotation;
-            instance.Scale = scale;
+            instance.Scale = Vector3.One * placement.Scale;
             instance.SetMeta("native_static", true);
             instance.SetMeta("native_visual", placement.Visual);
             instance.SetMeta("native_collision", placement.Collision);
             instance.SetMeta("native_classification", placement.Classification);
-            if (placement.Visual)
+            if (placement.ScenePath != null)
             {
-                instance.SetMeta("native_scene", placement.ResolvedScenePath);
+                instance.SetMeta("native_scene", $"{index.StaticsRoot}/{placement.ScenePath}");
             }
 
             _objectsRoot!.AddChild(instance);
@@ -939,195 +665,35 @@ public partial class ZoneLoader : Node3D
         }
     }
 
-    private void LoadStaticPlacements(string placementPath)
+    private static bool HasUsableNativeCollision(Node node)
     {
-        MapPlacementDocument? document = ReadPlacementDocument(placementPath);
-        if (document?.Objects == null)
+        if (node is CollisionShape3D { Shape: not null, Disabled: false }
+            && node.GetParent() is StaticBody3D)
         {
-            return;
+            return true;
         }
 
-        if (!TryReadTileOrigin(document.CoordinateManifest, placementPath, out Vector3 tileOrigin, out string manifestError))
+        foreach (Node child in node.GetChildren())
         {
-            Fail(manifestError);
-            return;
+            if (HasUsableNativeCollision(child))
+            {
+                return true;
+            }
         }
 
-        // The baked-light companion indexes objects by their position in this
-        // same placement list (the source MapRegion object order).
-        BakedStaticLighting? bakedLight = placementPath.EndsWith(MapRegionSuffix, StringComparison.OrdinalIgnoreCase)
-            ? BakedStaticLighting.TryLoad(placementPath[..^MapRegionSuffix.Length] + BakedLightSuffix)
-            : null;
-        if (bakedLight != null)
-        {
-            BakedLightFileCount++;
-        }
-
-        LoadAuthoredLights(placementPath, tileOrigin);
-
-        for (int objectIndex = 0; objectIndex < document.Objects.Length; objectIndex++)
-        {
-            MapObjectPlacement placement = document.Objects[objectIndex];
-            StaticObjectResolution resolution = ResolveStaticObject(placement.TemplateHref);
-            Node3D instance = resolution.Instance ?? new Node3D
-            {
-                Name = resolution.Kind == StaticObjectKind.NonVisual
-                    ? "NonVisualStaticObject"
-                    : "UnresolvedStaticObject",
-            };
-            instance.Position = tileOrigin + ConvertPosition(placement.Position);
-            _spawnHints.Add(instance.Position);
-            instance.Quaternion = ConvertRotation(placement.RotationYawPitchRoll);
-            float scale = placement.Scale <= 0 ? 1.0f : placement.Scale;
-            instance.Scale = Vector3.One * scale;
-            instance.SetMeta("allods_template", placement.TemplateHref);
-            instance.SetMeta("allods_ai_collision", placement.AiCollision);
-            _objectsRoot!.AddChild(instance);
-
-            // Map statics are authored support geometry as well as scenery.
-            // The converted scenes contain render meshes but no physics bodies,
-            // so without this the online controller can appear to stand on a
-            // floor while an offline controller falls straight through it.
-            if (resolution.Kind == StaticObjectKind.Visual && placement.AiCollision)
-            {
-                AddStaticCollision(instance);
-            }
-
-            PlacedObjectCount++;
-            if (resolution.Kind == StaticObjectKind.Visual)
-            {
-                VisualObjectCount++;
-                if (bakedLight != null && bakedLight.HasObject(objectIndex))
-                {
-                    _pendingBakedLight.Add(new PendingBakedLight(bakedLight, instance, objectIndex));
-                }
-            }
-            else if (resolution.Kind == StaticObjectKind.NonVisual)
-            {
-                NonVisualObjectCount++;
-            }
-            else
-            {
-                UnresolvedObjectCount++;
-                _staticModelFailures.Add($"{placement.TemplateHref}: {resolution.Error}");
-            }
-        }
+        return false;
     }
 
-    /// <summary>
-    /// Reads a cell's authored point-light companion. The lights are held
-    /// until <see cref="ApplyZoneLighting"/> because their color is the zone's
-    /// authored PointLightColor, which only the environment settings know.
-    /// </summary>
-    private void LoadAuthoredLights(string placementPath, Vector3 tileOrigin)
-    {
-        if (!placementPath.EndsWith(MapRegionSuffix, StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        string lightsPath = placementPath[..^MapRegionSuffix.Length] + AuthoredLightsSuffix;
-        if (!FileAccess.FileExists(lightsPath))
-        {
-            return;
-        }
-
-        IReadOnlyList<AuthoredZoneLight>? lights = AuthoredZoneLights.Parse(FileAccess.GetFileAsString(lightsPath));
-        if (lights == null)
-        {
-            GD.PushWarning($"ZoneLoader: authored lights companion is invalid: {lightsPath}");
-            return;
-        }
-
-        AuthoredLightFileCount++;
-        _pendingAuthoredLights.Add(new PendingAuthoredLights(tileOrigin, lights));
-    }
-
-    /// <summary>
-    /// Places the zone's authored point lights. They cull to the runtime-lit
-    /// receiver layer only (dynamic entities and unbaked props): baked statics
-    /// and terrain already carry these same sources inside their bake, so
-    /// letting the runtime lights reach them would double-light the world.
-    /// </summary>
-    private void PlaceAuthoredLights(Color directColor)
-    {
-        if (_authoredLightsPlaced || _pendingAuthoredLights.Count == 0)
-        {
-            return;
-        }
-
-        _authoredLightsPlaced = true;
-        var lightsRoot = new Node3D { Name = "AuthoredLights" };
-        AddChild(lightsRoot);
-        foreach (PendingAuthoredLights pending in _pendingAuthoredLights)
-        {
-            foreach (AuthoredZoneLight light in pending.Lights)
-            {
-                if (light.Intensity <= 0)
-                {
-                    // Authored anti-lights (darkeners) have no additive Godot
-                    // analogue; counted so the report shows what was skipped.
-                    AuthoredAntiLightCount++;
-                    continue;
-                }
-
-                lightsRoot.AddChild(new OmniLight3D
-                {
-                    Name = $"AuthoredLight_{AuthoredLightCount}",
-                    Position = pending.TileOrigin + light.Position,
-                    LightColor = directColor,
-                    // Modulate-2x: authored colors sit at half intensity, the
-                    // same factor the baked combine applies to statics.
-                    LightEnergy = light.Intensity * 2.0f,
-                    OmniRange = Mathf.Max(light.Radius, 0.5f),
-                    OmniAttenuation = Mathf.Clamp(light.AttenuationPower, 0.5f, 3.0f),
-                    LightCullMask = DynamicEntityLighting.ReceiverLayerMask,
-                    ShadowEnabled = false,
-                });
-                AuthoredLightCount++;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Colors the zone with its authored light data: baked per-vertex static
-    /// lighting on placed objects and the two-term lightmap combine on terrain.
-    /// Called once the authored environment is known (the loader itself has no
-    /// zone id); without it the zone keeps the neutral placeholder shading.
-    /// </summary>
+    /// <summary>Activates terrain lightmap sampling for dynamic entities.</summary>
     public void ApplyZoneLighting(ZoneEnvironmentSettings settings)
     {
         Color ambient = settings.BakedAmbientLight;
         Color direct = settings.DirectLightColor;
-        int litObjects = 0;
-        int litSurfaces = 0;
-        foreach (PendingBakedLight pending in _pendingBakedLight)
-        {
-            if (!IsInstanceValid(pending.Instance))
-            {
-                continue;
-            }
-
-            int applied = pending.Baked.Apply(pending.Instance, pending.ObjectIndex, ambient, direct);
-            litSurfaces += applied;
-            if (applied > 0)
-            {
-                litObjects++;
-            }
-        }
-
-        BakedLitObjectCount = litObjects;
-        BakedLitSurfaceCount = litSurfaces;
-        PlaceAuthoredLights(direct);
-        // With the environment known, dynamic entities may sample the bake:
-        // the probe colors its samples with the same authored terms.
         _lightProbe.SetZoneColors(ambient, direct);
         BakedLightProbe.Activate(_lightProbe);
         GD.Print(
-            $"ZoneLoader: baked lighting | files={BakedLightFileCount} lit_objects={litObjects}/"
-            + $"{_pendingBakedLight.Count} lit_surfaces={litSurfaces} ambient={ambient} direct={direct} "
-            + $"probe_tiles={_lightProbe.TileCount} "
-            + $"authored_lights={AuthoredLightCount}/{AuthoredLightFileCount} anti_lights={AuthoredAntiLightCount}");
+            $"ZoneLoader: native lighting | ambient={ambient} direct={direct} "
+            + $"probe_tiles={_lightProbe.TileCount}");
     }
 
     public override void _ExitTree()
@@ -1271,206 +837,18 @@ public partial class ZoneLoader : Node3D
         NativeCharacterVisualCount = 0;
     }
 
-    private StaticObjectResolution ResolveStaticObject(string templateHref)
-    {
-        string staticSource = NormalizeHref(string.Empty, templateHref);
-        if (string.IsNullOrEmpty(staticSource))
-        {
-            return StaticObjectResolution.Unresolved("The placement has no static-object template.");
-        }
-
-        AllodsResource? staticResource = LoadAllodsResource(staticSource);
-        if (staticResource == null)
-        {
-            return StaticObjectResolution.Unresolved($"Static-object resource is missing: {staticSource}");
-        }
-
-        string visualHref = ReadHref(staticResource.raw_xml, "ObjectTemplate");
-        string visualSource = NormalizeHref(staticSource, visualHref);
-        if (string.IsNullOrEmpty(visualSource))
-        {
-            return IsCollisionOnlyStatic(staticResource.raw_xml)
-                ? StaticObjectResolution.NonVisual()
-                : StaticObjectResolution.Unresolved($"Static-object resource has no ObjectTemplate: {staticSource}");
-        }
-
-        AllodsResource? visualResource = LoadAllodsResource(visualSource);
-        if (visualResource != null && IsInvisiblePortalGeometry(visualSource, visualResource.raw_xml))
-        {
-            return StaticObjectResolution.NonVisual();
-        }
-
-        string scenePath = $"{ConvertedRoot.TrimEnd('/')}/assets/{StripXdbSuffix(visualSource)}.scene.tscn";
-        PackedScene? scene = ConvertedSceneLoader.Load(ConvertedRoot, scenePath, out string sceneError);
-        Node? sceneInstance = scene?.Instantiate();
-        if (sceneInstance is Node3D instance)
-        {
-            // Catches textures authored straight onto a scene's materials; the
-            // ImporterMesh route is already covered inside ConvertedSceneLoader.
-            UpscaledTextures.Retexture(instance);
-            instance.SetMeta("allods_resolution", "scene");
-            return StaticObjectResolution.Visual(instance);
-        }
-
-        // A non-Node3D root would otherwise leak as an orphan node.
-        sceneInstance?.Free();
-
-        Node3D? fallback = InstantiateGeometryFallback(visualSource);
-        if (fallback != null)
-        {
-            fallback.SetMeta("allods_resolution", "geometry_fallback");
-            return StaticObjectResolution.Visual(fallback);
-        }
-
-        string detail = string.IsNullOrWhiteSpace(sceneError)
-            ? $"Scene and geometry are not loadable: {scenePath}"
-            : sceneError;
-        return StaticObjectResolution.Unresolved(detail);
-    }
-
-    private static bool IsCollisionOnlyStatic(string xml)
-    {
-        try
-        {
-            XDocument document = XDocument.Parse(xml);
-            return new[] { "aiMesh", "Collision", "aiCollision", "LosData" }
-                .Select(name => document.Descendants()
-                    .FirstOrDefault(element => element.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))
-                    ?.Attribute("href")?.Value)
-                .Any(href => !string.IsNullOrWhiteSpace(href));
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private bool IsInvisiblePortalGeometry(string visualSource, string visualXml)
-    {
-        string geometrySource = NormalizeHref(visualSource, ReadHref(visualXml, "geometry"));
-        AllodsResource? geometry = LoadAllodsResource(geometrySource);
-        if (geometry == null)
-        {
-            return false;
-        }
-
-        try
-        {
-            XDocument document = XDocument.Parse(geometry.raw_xml);
-            bool portalModel = bool.TryParse(
-                document.Descendants()
-                    .FirstOrDefault(element => element.Name.LocalName == "portalModel")
-                    ?.Value,
-                out bool parsedPortal)
-                && parsedPortal;
-            bool[] visibility = document.Descendants()
-                .Where(element => element.Name.LocalName == "material")
-                .Select(material => material.Elements()
-                    .FirstOrDefault(element => element.Name.LocalName == "visible")
-                    ?.Value)
-                .Where(value => !string.IsNullOrWhiteSpace(value))
-                .Select(value => bool.TryParse(value, out bool visible) && visible)
-                .ToArray();
-            return portalModel && visibility.Length > 0 && visibility.All(visible => !visible);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private Node3D? InstantiateGeometryFallback(string visualSource)
-    {
-        AllodsResource? visualResource = LoadAllodsResource(visualSource);
-        if (visualResource == null)
-        {
-            return null;
-        }
-
-        string geometryHref = ReadHref(visualResource.raw_xml, "geometry");
-        string geometrySource = NormalizeHref(visualSource, geometryHref);
-        if (string.IsNullOrEmpty(geometrySource))
-        {
-            return null;
-        }
-
-        string meshPath = $"{ConvertedRoot.TrimEnd('/')}/assets/{StripXdbSuffix(geometrySource)}.obj";
-        if (!ConvertedSceneLoader.IsLoadable(meshPath, "Mesh"))
-        {
-            return null;
-        }
-
-        Mesh? mesh = ResourceLoader.Load<Mesh>(meshPath);
-        if (mesh == null)
-        {
-            return null;
-        }
-
-        var fallback = new MeshInstance3D { Name = "ConvertedMesh", Mesh = mesh };
-        // Geometry fallbacks join the receiver layer like every converted
-        // mesh; the baked pass demotes them when the bake covers them.
-        DynamicEntityLighting.MarkReceiver(fallback);
-        return fallback;
-    }
-
-    private AllodsResource? LoadAllodsResource(string sourcePath) => _tree.Load(sourcePath);
-
-    private static string ReadHref(string xml, string elementName) =>
-        AllodsResourceTree.ReadHref(xml, elementName);
-
-    private static MapPlacementDocument? ReadPlacementDocument(string path)
+    private static CoordinateManifestDocument? ReadCoordinateManifestDocument(string path)
     {
         try
         {
             string json = FileAccess.GetFileAsString(path);
-            return JsonSerializer.Deserialize<MapPlacementDocument>(json, JsonOptions);
+            return JsonSerializer.Deserialize<CoordinateManifestDocument>(json, JsonOptions);
         }
         catch (Exception exception)
         {
             GD.PushWarning($"ZoneLoader could not parse {path}: {exception.Message}");
             return null;
         }
-    }
-
-    private static List<string> EnumerateFiles(string root)
-    {
-        var result = new List<string>();
-        var pending = new Stack<string>();
-        pending.Push(root);
-        while (pending.Count > 0)
-        {
-            string directoryPath = pending.Pop();
-            using DirAccess? directory = DirAccess.Open(directoryPath);
-            if (directory == null)
-            {
-                continue;
-            }
-
-            directory.ListDirBegin();
-            string name = directory.GetNext();
-            while (!string.IsNullOrEmpty(name))
-            {
-                if (!name.StartsWith('.'))
-                {
-                    string path = $"{directoryPath}/{name}";
-                    if (directory.CurrentIsDir())
-                    {
-                        pending.Push(path);
-                    }
-                    else
-                    {
-                        result.Add(path);
-                    }
-                }
-
-                name = directory.GetNext();
-            }
-
-            directory.ListDirEnd();
-        }
-
-        result.Sort(StringComparer.OrdinalIgnoreCase);
-        return result;
     }
 
     private static int CountMeshVertices(Mesh mesh)
@@ -1491,7 +869,7 @@ public partial class ZoneLoader : Node3D
     /// <summary>Reads the declared Godot origin from one tile-local placement cache.</summary>
     internal static Vector3 TileOrigin(string resourcePath)
     {
-        MapPlacementDocument? document = ReadPlacementDocument(resourcePath);
+        CoordinateManifestDocument? document = ReadCoordinateManifestDocument(resourcePath);
         Vector3 origin = Vector3.Zero;
         string error = string.Empty;
         if (document == null
@@ -1543,29 +921,6 @@ public partial class ZoneLoader : Node3D
         error = string.Empty;
         return true;
     }
-
-    private static Vector3 ConvertPosition(float[]? source)
-    {
-        return source is { Length: >= 3 } ? new Vector3(source[0], source[2], -source[1]) : Vector3.Zero;
-    }
-
-    private static Quaternion ConvertRotation(float[]? source)
-    {
-        if (source is not { Length: >= 3 })
-        {
-            return Quaternion.Identity;
-        }
-
-        var yaw = new Quaternion(Vector3.Up, source[0]);
-        var pitch = new Quaternion(Vector3.Right, source[1]);
-        var roll = new Quaternion(new Vector3(0, 0, -1), source[2]);
-        return yaw * pitch * roll;
-    }
-
-    private static string NormalizeHref(string ownerSource, string href) =>
-        AllodsResourceTree.NormalizeHref(ownerSource, href);
-
-    private static string StripXdbSuffix(string path) => AllodsResourceTree.StripXdbSuffix(path);
 
     private static bool IsSafeMapName(string mapName)
     {
@@ -1629,132 +984,28 @@ public partial class ZoneLoader : Node3D
         string ScenePath,
         PackedScene Scene);
 
-    private sealed class NativeStaticsBakeManifest
-    {
-        [JsonPropertyName("format")] public string Format { get; set; } = string.Empty;
-        [JsonPropertyName("schema_version")] public int SchemaVersion { get; set; }
-        [JsonPropertyName("map")] public string Map { get; set; } = string.Empty;
-        [JsonPropertyName("zone")] public string Zone { get; set; } = string.Empty;
-        [JsonPropertyName("frame")] public NativeStaticsBakeFrame? Frame { get; set; }
-        [JsonPropertyName("cell_policy")] public string CellPolicy { get; set; } = string.Empty;
-        [JsonPropertyName("report")] public NativeStaticsReport? Report { get; set; }
-        [JsonPropertyName("cells")] public NativeStaticsBakeCell[]? Cells { get; set; }
-    }
-
-    private sealed class NativeStaticsBakeFrame
-    {
-        [JsonPropertyName("id")] public string Id { get; set; } = string.Empty;
-        [JsonPropertyName("coordinate_scope")] public string CoordinateScope { get; set; } = string.Empty;
-        [JsonPropertyName("origin_applied")] public bool OriginApplied { get; set; }
-    }
-
-    private sealed class NativeStaticsBakeCell
-    {
-        [JsonPropertyName("order")] public int Order { get; set; } = -1;
-        [JsonPropertyName("cell")] public NativeStaticCell? Cell { get; set; }
-        [JsonPropertyName("placements")] public string Placements { get; set; } = string.Empty;
-        [JsonPropertyName("authored_lights")] public string? AuthoredLights { get; set; }
-        [JsonPropertyName("report")] public NativeStaticsReport? Report { get; set; }
-    }
-
-    private sealed class NativeStaticsReport
-    {
-        [JsonPropertyName("cells")] public int Cells { get; set; }
-        [JsonPropertyName("placements")] public int Placements { get; set; }
-        [JsonPropertyName("visual")] public int Visual { get; set; }
-        [JsonPropertyName("non_visual")] public int NonVisual { get; set; }
-        [JsonPropertyName("unresolved")] public int Unresolved { get; set; }
-        [JsonPropertyName("point_lights")] public int PointLights { get; set; }
-        [JsonPropertyName("anti_lights")] public int AntiLights { get; set; }
-    }
-
-    private sealed class NativeStaticsManifest
-    {
-        [JsonPropertyName("format")] public string Format { get; set; } = string.Empty;
-        [JsonPropertyName("map")] public string Map { get; set; } = string.Empty;
-        [JsonPropertyName("zone")] public string Zone { get; set; } = string.Empty;
-        [JsonPropertyName("cell")] public NativeStaticCell? Cell { get; set; }
-        [JsonPropertyName("frame")] public NativeStaticFrame? Frame { get; set; }
-        [JsonPropertyName("placements")] public NativeStaticPlacement[]? Placements { get; set; }
-        [JsonIgnore] public string SourcePath { get; set; } = string.Empty;
-    }
-
-    private sealed class NativeStaticCell
-    {
-        [JsonPropertyName("sector")] public long[]? Sector { get; set; }
-        [JsonPropertyName("tile")] public long[]? Tile { get; set; }
-    }
-
-    private sealed class NativeStaticFrame
-    {
-        [JsonPropertyName("id")] public string Id { get; set; } = string.Empty;
-        [JsonPropertyName("origin_applied")] public bool OriginApplied { get; set; }
-    }
-
-    private sealed class NativeStaticPlacement
-    {
-        [JsonPropertyName("order")] public int Order { get; set; } = -1;
-        [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
-        [JsonPropertyName("scene")] public string? Scene { get; set; }
-        [JsonPropertyName("runtime_scene")] public string? RuntimeScene { get; set; }
-        [JsonPropertyName("position")] public float[]? Position { get; set; }
-        [JsonPropertyName("rotation")] public float[]? Rotation { get; set; }
-        [JsonPropertyName("scale")] public float Scale { get; set; }
-        [JsonPropertyName("collision")] public bool Collision { get; set; }
-        [JsonPropertyName("visual")] public bool Visual { get; set; }
-        [JsonPropertyName("classification")] public string Classification { get; set; } = string.Empty;
-        [JsonPropertyName("nonvisual_reason")] public string? NonVisualReason { get; set; }
-        [JsonIgnore] public string ResolvedScenePath { get; set; } = string.Empty;
-    }
-
-    private readonly record struct NativeStaticCellKey(
-        long SectorX,
-        long SectorY,
-        long TileX,
-        long TileY)
-    {
-        public static NativeStaticCellKey From(TileCoordinateManifest manifest) => new(
-            manifest.SectorIndices.X,
-            manifest.SectorIndices.Y,
-            manifest.TileIndices.X,
-            manifest.TileIndices.Y);
-
-        public static NativeStaticCellKey From(NativeStaticCell cell) => new(
-            cell.Sector![0],
-            cell.Sector[1],
-            cell.Tile![0],
-            cell.Tile[1]);
-
-        public override string ToString() =>
-            $"{SectorX:D3}_{SectorY:D3}/{TileX}_{TileY}";
-    }
-
-    private sealed record NativeStaticsRuntimeCell(NativeStaticsManifest Manifest);
-
     private sealed class NativeStaticsIndex : IDisposable
     {
         public NativeStaticsIndex(
-            IReadOnlyList<NativeStaticsRuntimeCell> cells,
-            IReadOnlyDictionary<string, PackedScene> scenes,
-            NativeStaticsReport report)
+            string staticsRoot,
+            NativeStaticBake bake,
+            IReadOnlyDictionary<string, PackedScene> scenes)
         {
-            Cells = cells;
+            StaticsRoot = staticsRoot;
+            Bake = bake;
             Scenes = scenes;
-            Report = report;
         }
 
-        public IReadOnlyList<NativeStaticsRuntimeCell> Cells { get; }
+        public string StaticsRoot { get; }
+        public NativeStaticBake Bake { get; }
         public IReadOnlyDictionary<string, PackedScene> Scenes { get; }
-        public NativeStaticsReport Report { get; }
 
         public void Dispose() => DisposePackedScenes(Scenes.Values);
     }
 
-    private sealed class MapPlacementDocument
+    private sealed class CoordinateManifestDocument
     {
         [JsonPropertyName("coordinate_manifest")] public TileCoordinateManifest? CoordinateManifest { get; set; }
-        [JsonPropertyName("objects")] public MapObjectPlacement[]? Objects { get; set; }
-        [JsonPropertyName("used_layers")] public int[]? UsedLayers { get; set; }
     }
 
     private sealed class TileCoordinateManifest
@@ -1782,38 +1033,4 @@ public partial class ZoneLoader : Node3D
         [JsonPropertyName("z")] public long Z { get; set; }
     }
 
-    private sealed class MapObjectPlacement
-    {
-        [JsonPropertyName("object_type")] public string ObjectType { get; set; } = string.Empty;
-        [JsonPropertyName("position")] public float[]? Position { get; set; }
-        [JsonPropertyName("rotation_yaw_pitch_roll")] public float[]? RotationYawPitchRoll { get; set; }
-        [JsonPropertyName("scale")] public float Scale { get; set; } = 1.0f;
-        [JsonPropertyName("template_href")] public string TemplateHref { get; set; } = string.Empty;
-        [JsonPropertyName("ai_collision")] public bool AiCollision { get; set; } = true;
-        [JsonPropertyName("hrefs")] public string[] Hrefs { get; set; } = [];
-        [JsonPropertyName("properties")] public Dictionary<string, string> Properties { get; set; } = new();
-    }
-
-    private sealed record PendingBakedLight(BakedStaticLighting Baked, Node3D Instance, int ObjectIndex);
-
-    private sealed record PendingAuthoredLights(Vector3 TileOrigin, IReadOnlyList<AuthoredZoneLight> Lights);
-
-    private enum StaticObjectKind
-    {
-        Visual,
-        NonVisual,
-        Unresolved,
-    }
-
-    private sealed record StaticObjectResolution(StaticObjectKind Kind, Node3D? Instance, string Error)
-    {
-        public static StaticObjectResolution Visual(Node3D instance) =>
-            new(StaticObjectKind.Visual, instance, string.Empty);
-
-        public static StaticObjectResolution NonVisual() =>
-            new(StaticObjectKind.NonVisual, null, string.Empty);
-
-        public static StaticObjectResolution Unresolved(string error) =>
-            new(StaticObjectKind.Unresolved, null, error);
-    }
 }

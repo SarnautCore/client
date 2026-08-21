@@ -52,7 +52,6 @@ public partial class ZonePresentationPixelProbe : Node
                 "Slot_Shield_Hand");
         bool passed = loader.TerrainTileCount == 4
             && loader.VisualObjectCount == 36
-            && loader.UnresolvedObjectCount == 0
             && atAuthoredFloor
             && selectedAppearance
             && darkFraction <= MaximumDarkFraction
