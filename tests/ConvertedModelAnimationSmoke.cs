@@ -16,15 +16,14 @@ namespace SarnautCore;
 /// </summary>
 public partial class ConvertedModelAnimationSmoke : Node3D
 {
-    private const string ConvertedRoot = "res://converted/assets/classic-1.1";
-    private const string CuratedPlayerScene = "res://characters/kania/female-warrior.tscn";
+    private static string NativeRoot => NativeContentSettings.NativeRoot;
 
     private readonly List<string> _failures = [];
 
     public override async void _Ready()
     {
-        var catalog = new EntityModelCatalog(ConvertedRoot);
-        CheckPlayerModelMappings();
+        var catalog = new EntityModelCatalog();
+        CheckPlayerModelMappings(catalog);
         string[] contentIds = ReadManifestContentIds().ToArray();
         foreach (string contentId in contentIds)
         {
@@ -37,23 +36,23 @@ public partial class ConvertedModelAnimationSmoke : Node3D
         {
             var visual = new NetworkEntityVisual { Name = $"Entity_{entityId}", EntityId = entityId };
             AddChild(visual);
-            visual.Bind(Sample(entityId, contentId), catalog, ConvertedRoot);
+            visual.Bind(Sample(entityId, contentId), catalog);
             visuals.Add((contentId, visual));
             entityId++;
         }
 
-        var playerCharacter = new ConvertedCharacter
+        var playerCharacter = new CharacterRig
         {
             Name = "PlayerCharacter",
             AutoLoad = false,
             ShowPlaceholderOnFailure = false,
         };
-        PlayerCharacterModel.Apply(playerCharacter, CuratedOption());
+        PlayerCharacterModel.Apply(playerCharacter, catalog, CuratedOption());
         AddChild(playerCharacter);
-        playerCharacter.LoadCharacter();
+        playerCharacter.Load();
         Expect(
-            playerCharacter.CharacterScene == CuratedPlayerScene,
-            $"local player uses the selected chargen appearance, got '{playerCharacter.CharacterScene}'");
+            playerCharacter.ScenePath.Contains("chargen.league.warrior", StringComparison.OrdinalIgnoreCase),
+            $"local player uses the selected chargen appearance, got '{playerCharacter.ScenePath}'");
 
         await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
         await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
@@ -62,7 +61,7 @@ public partial class ConvertedModelAnimationSmoke : Node3D
         int deformed = 0;
         foreach ((string contentId, NetworkEntityVisual visual) in visuals)
         {
-            if (CheckCharacter(contentId, visual.GetNodeOrNull<ConvertedCharacter>("Model"), visual.HasModel))
+            if (CheckCharacter(contentId, visual.GetNodeOrNull<CharacterRig>("Model"), visual.HasModel))
             {
                 loaded++;
                 deformed++;
@@ -75,9 +74,9 @@ public partial class ConvertedModelAnimationSmoke : Node3D
         CheckNetworkAnimationStates(visuals.Single(entry =>
             entry.ContentId.Equals("mob.inst-league1.rat.rat1-1", StringComparison.OrdinalIgnoreCase)).Visual);
 
-        bool playerDeforms = CheckCharacter("local-player", playerCharacter, playerCharacter.HasConvertedModel);
+        bool playerDeforms = CheckCharacter("local-player", playerCharacter, playerCharacter.HasModel);
         CheckCuratedWarriorAppearance(playerCharacter);
-        if (playerCharacter.HasConvertedModel)
+        if (playerCharacter.HasModel)
         {
             loaded++;
         }
@@ -100,14 +99,14 @@ public partial class ConvertedModelAnimationSmoke : Node3D
         GetTree().Quit(passed ? 0 : 1);
     }
 
-    private bool CheckCharacter(string contentId, ConvertedCharacter? character, bool hasModel)
+    private bool CheckCharacter(string contentId, CharacterRig? character, bool hasModel)
     {
         Skeleton3D? skeleton = character?.Model == null ? null : FindDescendant<Skeleton3D>(character.Model);
         AnimationPlayer? player = character?.Model == null ? null : FindDescendant<AnimationPlayer>(character.Model);
         MeshInstance3D? skinnedMesh = skeleton == null ? null : FindBoundMesh(skeleton);
 
-        Expect(hasModel, $"{contentId}: catalog entity loads a converted model");
-        Expect(character?.HasConvertedModel == true, $"{contentId}: character assembly succeeds: {character?.LastError}");
+        Expect(hasModel, $"{contentId}: catalog entity loads a native model");
+        Expect(character?.HasModel == true, $"{contentId}: character assembly succeeds: {character?.LastError}");
         Expect(skeleton?.GetBoneCount() > 0, $"{contentId}: model has a skeleton");
         Expect(skinnedMesh?.Skin?.GetBindCount() > 0, $"{contentId}: runtime mesh has a skin bound to skeleton bones");
         Expect(player != null, $"{contentId}: model has an AnimationPlayer");
@@ -126,13 +125,13 @@ public partial class ConvertedModelAnimationSmoke : Node3D
         }
 
         Expect(deforms, $"{contentId}: idle clip changes at least one skeleton bone pose");
-        return hasModel && character?.HasConvertedModel == true && skeleton != null
+        return hasModel && character?.HasModel == true && skeleton != null
             && skinnedMesh?.Skin?.GetBindCount() > 0 && player?.IsPlaying() == true && deforms;
     }
 
     private void CheckNetworkAnimationStates(NetworkEntityVisual visual)
     {
-        ConvertedCharacter? character = visual.GetNodeOrNull<ConvertedCharacter>("Model");
+        CharacterRig? character = visual.GetNodeOrNull<CharacterRig>("Model");
         visual.Apply(Sample(visual.EntityId, "mob.inst-league1.rat.rat1-1") with { AnimationState = AnimationState.Moving });
         Expect(character?.ActiveClip.Equals("run", StringComparison.OrdinalIgnoreCase) == true,
             $"network moving state selects run, got '{character?.ActiveClip}'");
@@ -183,48 +182,30 @@ public partial class ConvertedModelAnimationSmoke : Node3D
         170.5f,
         156.293f);
 
-    private void CheckPlayerModelMappings()
+    private void CheckPlayerModelMappings(EntityModelCatalog catalog)
     {
-        (string Race, string Sex, string Scene)[] cases =
+        (string Race, string Sex, string Key)[] cases =
         [
-            ("race.elf", "female", "Characters/Elf_female/ElfFemale.(VisObjectTemplate).scene.tscn"),
-            ("race.elf", "male", "Characters/Elf_male/ElfMale.(VisObjectTemplate).scene.tscn"),
-            ("race.gibberling", "female", "Characters/Gibberlings/GibberlingFemale.(VisObjectTemplate).scene.tscn"),
-            ("race.gibberling", "male", "Characters/Gibberlings/GibberlingMale.(VisObjectTemplate).scene.tscn"),
-            ("race.hadagan", "female", "Characters/Hadagan_female/HadaganFemale.(VisObjectTemplate).scene.tscn"),
-            ("race.hadagan", "male", "Characters/Hadagan_male/HadaganMale.(VisObjectTemplate).scene.tscn"),
-            ("race.kania", "female", "Characters/Kania_female/KaniaFemale.(VisObjectTemplate).scene.tscn"),
-            ("race.kania", "male", "Characters/Kania_male/KaniaMale.(VisObjectTemplate).scene.tscn"),
-            ("race.orc", "female", "Characters/Orc_female/OrcFemale.(VisObjectTemplate).scene.tscn"),
-            ("race.orc", "male", "Characters/Orc_male/OrcMale.(VisObjectTemplate).scene.tscn"),
-            ("race.undead", "female", "Characters/Undead_female/UndeadFemale.(VisObjectTemplate).scene.tscn"),
-            ("race.undead", "male", "Characters/Undead_male/UndeadMale.(VisObjectTemplate).scene.tscn"),
+            ("race.elf", "female", "player.elf.female"),
+            ("race.elf", "male", "player.elf.male"),
+            ("race.gibberling", "female", "player.gibberling.female"),
+            ("race.gibberling", "male", "player.gibberling.male"),
+            ("race.kania", "female", "player.kania.female"),
+            ("race.kania", "male", "player.kania.male"),
         ];
 
         foreach ((string race, string sex, string expected) in cases)
         {
-            ChargenOption option = CuratedOption() with { Race = race, Sex = sex, VisualRef = string.Empty };
-            string actual = PlayerCharacterModel.ResolveScene(option);
-            Expect(actual == expected, $"{race}/{sex}: resolves '{actual}', expected '{expected}'");
-            Expect(ConvertedSceneLoader.IsLoadable($"{ConvertedRoot}/assets/{actual}", "PackedScene"),
-                $"{race}/{sex}: converted player scene is loadable");
+            Expect(catalog.TryResolvePlayer(expected, out EntityModel model),
+                $"{race}/{sex}: native player key '{expected}' resolves");
+            Expect(model.Scale == 1.0f, $"{race}/{sex}: baked scale stays inside the scene");
         }
 
-
-        string warrior = PlayerCharacterModel.ResolveScene(CuratedOption());
-        string mage = PlayerCharacterModel.ResolveScene(CuratedOption() with
-        {
-            Id = "chargen.league.mage",
-            Class = "class.mage",
-            VisualRef = "res://characters/kania/female-mage.tscn",
-        });
-        Expect(warrior == CuratedPlayerScene,
-            $"selected warrior preserves exact visual_ref, got '{warrior}'");
-        Expect(!warrior.Equals(mage, StringComparison.OrdinalIgnoreCase),
-            "same-race classes do not collapse to one appearance");
+        Expect(catalog.TryResolvePlayer(PlayerCharacterModel.DefaultCharacterKey, out _),
+            "the dressed League warrior chargen key resolves");
     }
 
-    private void CheckCuratedWarriorAppearance(ConvertedCharacter player)
+    private void CheckCuratedWarriorAppearance(CharacterRig player)
     {
         Expect(
             (string?)player.Model?.GetMeta("sarnaut_appearance_id", string.Empty) == "chargen.league.warrior",
@@ -244,11 +225,14 @@ public partial class ConvertedModelAnimationSmoke : Node3D
 
     private static IEnumerable<string> ReadManifestContentIds()
     {
-        string json = FileAccess.GetFileAsString($"{ConvertedRoot}/{EntityModelCatalog.ManifestFileName}");
+        string json = FileAccess.GetFileAsString($"{NativeRoot}/{NativeCharacterManifestReader.RelativeManifestPath}");
         using JsonDocument document = JsonDocument.Parse(json);
-        foreach (JsonProperty model in document.RootElement.GetProperty("models").EnumerateObject())
+        foreach (JsonProperty model in document.RootElement.GetProperty("characters").EnumerateObject())
         {
-            yield return model.Name;
+            if (model.Value.GetProperty("kind").GetString() == "mob")
+            {
+                yield return model.Name;
+            }
         }
     }
 

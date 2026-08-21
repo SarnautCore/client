@@ -88,7 +88,7 @@ public partial class CanonicalPlayerGroundingProbe : Node
         var collider = hasFloor ? colliderValue.AsGodotObject() as Node : null;
         float physicalGap = hasFloor ? capsuleBottom - floor.Y : float.PositiveInfinity;
 
-        ConvertedCharacter character = walker.GetNode<ConvertedCharacter>("Character");
+        CharacterRig character = walker.GetNode<CharacterRig>("Character");
         float visualBottom = FindVisualBottom(character);
         float visualGap = hasFloor ? visualBottom - floor.Y : float.PositiveInfinity;
         float drop = CanonicalPosition.Y - walker.GlobalPosition.Y;

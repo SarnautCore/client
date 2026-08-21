@@ -39,7 +39,7 @@ public partial class WalkaboutFrameProbe : Node
         }
 
         await ToSignal(GetTree().CreateTimer(3.0), SceneTreeTimer.SignalName.Timeout);
-        ConvertedCharacter character = zone.GetNode<ConvertedCharacter>("Walker/Character");
+        CharacterRig character = zone.GetNode<CharacterRig>("Walker/Character");
         Image image = GetViewport().GetTexture().GetImage();
         string proofPath = System.Environment.GetEnvironmentVariable("SARNAUT_FRAME_PROOF")
             is { Length: > 0 } custom
@@ -49,14 +49,14 @@ public partial class WalkaboutFrameProbe : Node
 
         GD.Print(
             $"WALKABOUT_FRAME_PROBE spawn={walker.Position} terrain={loader.TerrainTileCount} "
-            + $"visual={loader.VisualObjectCount} appearance=\"{character.CharacterScene}\" "
+            + $"visual={loader.VisualObjectCount} appearance=\"{character.ScenePath}\" "
             + $"active_clip=\"{character.ActiveClip}\" animating={character.IsAnimationPlaying} "
             + $"proof={proofPath} save={saveError}");
         ReportPose(character);
         GetTree().Quit(saveError == Error.Ok ? 0 : 1);
     }
 
-    private static void ReportPose(ConvertedCharacter character)
+    private static void ReportPose(CharacterRig character)
     {
         if (character.Model == null)
         {

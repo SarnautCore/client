@@ -208,9 +208,9 @@ public partial class ZoneOnlineProbe : Node
             $"every replicated tutorial entity has a converted model, {models} of {registry.Count} do");
         Expect(healthBars > 0, "living entities show a health bar");
 
-        ConvertedCharacter localCharacter = zone.GetNode<ConvertedCharacter>("Walker/Character");
-        Expect(localCharacter.HasConvertedModel, "the local player uses a converted character model");
-        bool localAnimated = localCharacter.HasConvertedModel
+        CharacterRig localCharacter = zone.GetNode<CharacterRig>("Walker/Character");
+        Expect(localCharacter.HasModel, "the local player uses a native character model");
+        bool localAnimated = localCharacter.HasModel
             && localCharacter.IsAnimationPlaying
             && localCharacter.ActiveClip.Length > 0;
         Expect(

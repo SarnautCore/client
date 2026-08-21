@@ -39,7 +39,7 @@ public partial class WalkaboutController : CharacterBody3D
     private Node3D _head = null!;
     private SpringArm3D? _cameraBoom;
     private CollisionShape3D _collision = null!;
-    private ConvertedCharacter? _character;
+    private CharacterRig? _character;
     private float _gravity;
 
     public bool IsFlying { get; private set; }
@@ -66,7 +66,7 @@ public partial class WalkaboutController : CharacterBody3D
         _head = GetNode<Node3D>("Head");
         _cameraBoom = _head.GetNodeOrNull<SpringArm3D>("SpringArm3D");
         _collision = GetNode<CollisionShape3D>("CollisionShape3D");
-        _character = GetNodeOrNull<ConvertedCharacter>("Character");
+        _character = GetNodeOrNull<CharacterRig>("Character");
         _gravity = (float)ProjectSettings.GetSetting("physics/3d/default_gravity", 9.8).AsDouble();
     }
 

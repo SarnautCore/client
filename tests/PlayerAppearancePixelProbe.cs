@@ -40,15 +40,16 @@ public partial class PlayerAppearancePixelProbe : Node3D
         };
         AddChild(fill);
 
-        var character = new ConvertedCharacter
+        var character = new CharacterRig
         {
             Name = "PlayerCharacter",
             AutoLoad = false,
             ShowPlaceholderOnFailure = false,
         };
-        PlayerCharacterModel.Apply(character, CuratedOption());
+        var catalog = new EntityModelCatalog();
+        PlayerCharacterModel.Apply(character, catalog, CuratedOption());
         AddChild(character);
-        bool loaded = character.LoadCharacter();
+        bool loaded = character.Load();
 
         var camera = new Camera3D { Current = true, Fov = 34 };
         AddChild(camera);
@@ -70,7 +71,7 @@ public partial class PlayerAppearancePixelProbe : Node3D
             await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
         }
 
-        // The converted rig faces +Z, so the first camera (on -Z) sees the
+        // The baked rig faces +Z, so the first camera (on -Z) sees the
         // model's back and the second (on +Z) its front.
         string prefix = System.Environment.GetEnvironmentVariable("SARNAUT_APPEARANCE_PROBE") ?? string.Empty;
         Error back = prefix.Length == 0
@@ -91,7 +92,7 @@ public partial class PlayerAppearancePixelProbe : Node3D
         bool hasShield = character.Model?.FindChild("Offhand", recursive: true, owned: false) is BoneAttachment3D;
         bool passed = loaded && hasMace && hasShield && front == Error.Ok && back == Error.Ok;
         GD.Print(
-            $"PLAYER_APPEARANCE_PIXEL loaded={loaded} scene=\"{character.CharacterScene}\" "
+            $"PLAYER_APPEARANCE_PIXEL loaded={loaded} scene=\"{character.ScenePath}\" "
             + $"mace={hasMace} shield={hasShield} front={front} back={back} result={(passed ? "PASS" : "FAIL")}");
         GetTree().Quit(passed ? 0 : 1);
     }
@@ -117,4 +118,3 @@ public partial class PlayerAppearancePixelProbe : Node3D
         170.5f,
         156.293f);
 }
-

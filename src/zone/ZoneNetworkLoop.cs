@@ -80,7 +80,6 @@ public partial class ZoneNetworkLoop : Node
         WalkaboutController walker,
         Node3D entityRoot,
         EntityModelCatalog catalog,
-        string convertedRoot,
         string address,
         string zoneId,
         string contentPackId,
@@ -91,7 +90,7 @@ public partial class ZoneNetworkLoop : Node
         Action<string>? onRefused = null)
     {
         _walker = walker;
-        _visuals = new ZoneEntityVisualFactory(entityRoot, catalog, convertedRoot);
+        _visuals = new ZoneEntityVisualFactory(entityRoot, catalog);
         Entities = new EntityRegistry(_visuals);
         _picker = new ZoneEntityPicker();
         AddChild(_picker);

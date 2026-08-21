@@ -3,7 +3,7 @@
 [ext_resource type="Script" path="res://src/zone/ZoneWalkabout.cs" id="1_walkabout"]
 [ext_resource type="Script" path="res://src/zone/ZoneLoader.cs" id="2_loader"]
 [ext_resource type="Script" path="res://src/zone/WalkaboutController.cs" id="3_controller"]
-[ext_resource type="Script" path="res://src/characters/ConvertedCharacter.cs" id="4_character"]
+[ext_resource type="Script" path="res://src/characters/CharacterRig.cs" id="4_character"]
 
 [sub_resource type="Environment" id="Environment_walkabout"]
 background_mode = 1

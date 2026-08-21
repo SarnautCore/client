@@ -36,7 +36,7 @@ public partial class ZoneCameraSpawnSmoke : Node
         }
 
         productionScene.Free();
-        scene.GetNode<ConvertedCharacter>("Walker/Character").AutoLoad = false;
+        scene.GetNode<CharacterRig>("Walker/Character").AutoLoad = false;
         AddChild(scene);
         var loader = scene.GetNode<ZoneLoader>("ZoneLoader");
         Set(loader, nameof(ZoneLoader.TerrainBounds), UnionBounds);
@@ -125,4 +125,3 @@ public partial class ZoneCameraSpawnSmoke : Node
             ?? throw new InvalidOperationException($"ZoneLoader field {fieldName} is null."));
     }
 }
-

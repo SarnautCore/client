@@ -16,6 +16,7 @@
     <Compile Remove="src/SarnautCore.Network/**" />
     <Compile Remove="src/SarnautCore.Gameplay/**" />
     <Compile Remove="src/SarnautCore.Shell/**" />
+    <Compile Remove="src/SarnautCore.Content/**" />
     <Compile Remove="tests/**" />
     <Compile Remove="tools/**" />
     <!-- The headless smoke scenes are Godot scripts and belong to this project;
@@ -26,5 +27,6 @@
     <ProjectReference Include="src/SarnautCore.Network/SarnautCore.Network.csproj" />
     <ProjectReference Include="src/SarnautCore.Gameplay/SarnautCore.Gameplay.csproj" />
     <ProjectReference Include="src/SarnautCore.Shell/SarnautCore.Shell.csproj" />
+    <ProjectReference Include="src/SarnautCore.Content/SarnautCore.Content.csproj" />
   </ItemGroup>
 </Project>

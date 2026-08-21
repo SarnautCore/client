@@ -1,75 +1,89 @@
 using System;
 using System.Collections.Generic;
-using Godot;
 using SarnautCore.Shell;
 
 namespace SarnautCore;
 
-/// <summary>Chooses the local rig named by the selected chargen option.</summary>
+/// <summary>Chooses the native rig named by the selected chargen option.</summary>
 internal static class PlayerCharacterModel
 {
-    private static readonly IReadOnlyDictionary<string, string> ConvertedScenes =
+    public const string DefaultCharacterKey = "chargen.league.warrior";
+
+    private static readonly IReadOnlyDictionary<string, string> RaceKeys =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["elf:female"] = "Characters/Elf_female/ElfFemale.(VisObjectTemplate).scene.tscn",
-            ["elf:male"] = "Characters/Elf_male/ElfMale.(VisObjectTemplate).scene.tscn",
-            ["gibberling:female"] = "Characters/Gibberlings/GibberlingFemale.(VisObjectTemplate).scene.tscn",
-            ["gibberling:male"] = "Characters/Gibberlings/GibberlingMale.(VisObjectTemplate).scene.tscn",
-            ["hadagan:female"] = "Characters/Hadagan_female/HadaganFemale.(VisObjectTemplate).scene.tscn",
-            ["hadagan:male"] = "Characters/Hadagan_male/HadaganMale.(VisObjectTemplate).scene.tscn",
-            ["kania:female"] = "Characters/Kania_female/KaniaFemale.(VisObjectTemplate).scene.tscn",
-            ["kania:male"] = "Characters/Kania_male/KaniaMale.(VisObjectTemplate).scene.tscn",
-            ["orc:female"] = "Characters/Orc_female/OrcFemale.(VisObjectTemplate).scene.tscn",
-            ["orc:male"] = "Characters/Orc_male/OrcMale.(VisObjectTemplate).scene.tscn",
-            ["undead:female"] = "Characters/Undead_female/UndeadFemale.(VisObjectTemplate).scene.tscn",
-            ["undead:male"] = "Characters/Undead_male/UndeadMale.(VisObjectTemplate).scene.tscn",
+            ["kania"] = "kania",
+            ["kanian"] = "kania",
+            ["elf"] = "elf",
+            ["elven"] = "elf",
+            ["gibberling"] = "gibberling",
+            ["gibberlings"] = "gibberling",
         };
 
-    /// <summary>
-    /// Applies an authored Godot scene when it exists. The M2 option still
-    /// names a planned public scene, so its race and sex select the equivalent
-    /// converted base rig until that scene is authored.
-    /// </summary>
-    public static void Apply(ConvertedCharacter character, ChargenOption? option)
+    public static bool Apply(
+        CharacterRig character,
+        EntityModelCatalog catalog,
+        ChargenOption? option)
     {
         ArgumentNullException.ThrowIfNull(character);
-        character.CharacterScene = ResolveScene(option);
-    }
-
-    /// <summary>
-    /// The equipped League warrior the online probe player uses. The offline
-    /// walkabout has no authenticated character to read an appearance from, so
-    /// it gets this curated rig rather than an undressed base body.
-    /// </summary>
-    public const string CuratedOfflineScene = "res://characters/kania/female-warrior.tscn";
-
-    public static string ResolveScene(ChargenOption? option)
-    {
-        if (option == null)
+        ArgumentNullException.ThrowIfNull(catalog);
+        if (!TryResolve(catalog, option, out EntityModel model))
         {
-            return ConvertedSceneLoader.IsLoadable(CuratedOfflineScene, "PackedScene")
-                ? CuratedOfflineScene
-                : ConvertedCharacter.DefaultPlayerScene;
+            character.ScenePath = string.Empty;
+            return false;
         }
 
-        string visualRef = option.VisualRef.Trim();
-        if (visualRef.EndsWith(".tscn", StringComparison.OrdinalIgnoreCase)
-            && ConvertedSceneLoader.IsLoadable(visualRef, "PackedScene"))
+        character.ScenePath = model.ScenePath;
+        return true;
+    }
+
+    public static bool TryResolve(
+        EntityModelCatalog catalog,
+        ChargenOption? option,
+        out EntityModel model)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        if (option is null)
         {
-            return visualRef;
+            return catalog.TryResolvePlayer(DefaultCharacterKey, out model);
+        }
+
+        foreach (string candidate in CandidateKeys(option))
+        {
+            if (catalog.TryResolvePlayer(candidate, out model))
+            {
+                return true;
+            }
+        }
+
+        model = default;
+        return false;
+    }
+
+    private static IEnumerable<string> CandidateKeys(ChargenOption option)
+    {
+        if (!string.IsNullOrWhiteSpace(option.Id))
+        {
+            yield return option.Id.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(option.VisualRef))
+        {
+            yield return option.VisualRef.Trim();
         }
 
         string race = CanonicalToken(option.Race);
         string sex = CanonicalToken(option.Sex);
-        return ConvertedScenes.TryGetValue($"{race}:{sex}", out string? scene)
-            ? scene
-            : ConvertedCharacter.DefaultPlayerScene;
+        if (RaceKeys.TryGetValue(race, out string? raceKey) && sex.Length > 0)
+        {
+            yield return $"player.{raceKey}.{sex}";
+        }
     }
 
     private static string CanonicalToken(string value)
     {
         string token = (value ?? string.Empty).Trim();
         int separator = token.LastIndexOf('.');
-        return separator < 0 ? token : token[(separator + 1)..];
+        return (separator < 0 ? token : token[(separator + 1)..]).ToLowerInvariant();
     }
 }

@@ -164,7 +164,7 @@ public partial class CharacterCreateScreen : Control
             if (_previewedOptionId != selected.Id)
             {
                 _previewedOptionId = selected.Id;
-                _preview.ShowOption(selected.VisualRef, selected.Title);
+                _preview.ShowOption(_model.Selected!, selected.Title);
             }
         }
 
