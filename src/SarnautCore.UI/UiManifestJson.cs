@@ -118,6 +118,17 @@ internal static class UiManifestJson
         return element.GetBoolean();
     }
 
+    public static int Int32(JsonElement parent, string property, string context)
+    {
+        JsonElement element = Required(parent, property, JsonValueKind.Number, context);
+        if (!element.TryGetInt32(out int value))
+        {
+            throw new InvalidDataException($"{context}.{property} must be a 32-bit integer");
+        }
+
+        return value;
+    }
+
     public static NativeContentPath Path(
         JsonElement parent,
         string property,

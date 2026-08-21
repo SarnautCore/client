@@ -5,7 +5,18 @@ public sealed record UiProductManifest(
     NativeContentPath SoundCatalog,
     NativeContentPath Theme,
     UiProductResourceEncoding ResourceEncoding,
-    IReadOnlyList<UiScreenDefinition> Screens);
+    IReadOnlyList<UiScreenDefinition> Screens)
+{
+    /// <summary>
+    /// Screens in authored draw order. Equal-priority forms retain their product order.
+    /// </summary>
+    public IReadOnlyList<UiScreenDefinition> ScreensInAuthoredOrder => Screens
+        .Select((screen, productIndex) => (screen, productIndex))
+        .OrderBy(item => item.screen.Priority)
+        .ThenBy(item => item.productIndex)
+        .Select(item => item.screen)
+        .ToArray();
+}
 
 public enum UiProductResourceEncoding
 {
@@ -16,6 +27,7 @@ public enum UiProductResourceEncoding
 public sealed record UiScreenDefinition(
     string Id,
     NativeContentPath Scene,
+    int Priority,
     bool InitiallyVisible,
     IReadOnlyList<UiDocumentReference> Documents,
     NativeContentPath? Timeline,
@@ -44,32 +56,58 @@ public sealed record UiScreenDefinition(
     public IReadOnlyList<UiActionInvocation> ActionsFor(
         string roleId,
         UiActionEvent actionEvent,
-        UiCollectionItemContext? itemContext = null) =>
+        UiCollectionItemContext? itemContext = null,
+        Func<string, string?>? selectedCollectionItem = null) =>
         Actions
             .Where(action => action.Triggers.Any(
                 trigger => trigger.Role == roleId && trigger.Event == actionEvent))
-            .Select(action => ResolveAction(action, itemContext))
+            .Select(action => ResolveAction(
+                action,
+                roleId,
+                itemContext,
+                selectedCollectionItem))
+            .Where(invocation => invocation is not null)
+            .Select(invocation => invocation!)
             .ToArray();
 
-    private static UiActionInvocation ResolveAction(
+    private UiActionInvocation? ResolveAction(
         UiActionDefinition action,
-        UiCollectionItemContext? itemContext)
+        string roleId,
+        UiCollectionItemContext? itemContext,
+        Func<string, string?>? selectedCollectionItem)
     {
-        UiResolvedActionArgument[] arguments = action.Arguments.Select(argument =>
+        var arguments = new List<UiResolvedActionArgument>(action.Arguments.Count);
+        foreach (UiActionArgument argument in action.Arguments)
         {
-            string value = argument.Kind switch
+            string? value = argument.Kind switch
             {
                 UiActionArgumentKind.ProductId => argument.Value!,
                 UiActionArgumentKind.CollectionItemId
                     when itemContext is { } context
                         && context.CollectionId == argument.Collection => context.ProductItemId,
-                UiActionArgumentKind.CollectionItemId => throw new InvalidOperationException(
-                    $"Action '{action.Id}' requires item identity from collection '{argument.Collection}'"),
+                UiActionArgumentKind.CollectionItemId
+                    when selectedCollectionItem is not null =>
+                        selectedCollectionItem(argument.Collection!),
                 _ => throw new InvalidOperationException(
                     $"Action '{action.Id}' has unsupported argument kind '{argument.Kind}'"),
             };
-            return new UiResolvedActionArgument(argument.Name, argument.Kind, value);
-        }).ToArray();
+
+            if (value is null)
+            {
+                UiCollectionBinding collection = Collections.Single(
+                    candidate => candidate.Id == argument.Collection);
+                if (collection.ItemRole == roleId)
+                {
+                    throw new InvalidOperationException(
+                        $"Action '{action.Id}' requires item identity from collection '{argument.Collection}'");
+                }
+
+                return null;
+            }
+
+            arguments.Add(new UiResolvedActionArgument(argument.Name, argument.Kind, value));
+        }
+
         return new UiActionInvocation(action, arguments);
     }
 }

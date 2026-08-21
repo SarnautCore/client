@@ -26,17 +26,20 @@ public sealed class UiCollectionState
     private readonly UiButtonDefinition? _itemButton;
     private readonly UiRoleDefinition _itemRole;
     private readonly Func<bool> _canReceiveInput;
+    private readonly Func<string, string?> _selectedCollectionItem;
 
     internal UiCollectionState(
         UiScreenDefinition screen,
         UiCollectionBinding definition,
-        Func<bool> canReceiveInput)
+        Func<bool> canReceiveInput,
+        Func<string, string?> selectedCollectionItem)
     {
         _screen = screen;
         Definition = definition;
         _itemButton = screen.FindButton(definition.ItemRole);
         _itemRole = screen.GetRole(definition.ItemRole);
         _canReceiveInput = canReceiveInput;
+        _selectedCollectionItem = selectedCollectionItem;
     }
 
     public UiCollectionBinding Definition { get; }
@@ -50,6 +53,18 @@ public sealed class UiCollectionState
 
     public string VisualStateFor(string productItemId) =>
         VariantFor(ValidateProductItemId(productItemId))?.VisualState ?? "default";
+
+    public void ReconcileAvailableItems(IEnumerable<string> productItemIds)
+    {
+        ArgumentNullException.ThrowIfNull(productItemIds);
+        HashSet<string> available = productItemIds
+            .Select(ValidateProductItemId)
+            .ToHashSet(StringComparer.Ordinal);
+        if (SelectedProductItemId is { } selected && !available.Contains(selected))
+        {
+            SelectedProductItemId = null;
+        }
+    }
 
     public UiCollectionActionDispatch RouteInput(
         string productItemId,
@@ -90,7 +105,8 @@ public sealed class UiCollectionState
                 _screen.ActionsFor(
                     Definition.ItemRole,
                     mapped,
-                    new UiCollectionItemContext(Definition.Id, itemId))),
+                    new UiCollectionItemContext(Definition.Id, itemId),
+                    _selectedCollectionItem)),
         };
     }
 
@@ -120,7 +136,8 @@ public sealed class UiCollectionState
             _screen.ActionsFor(
                 Definition.ItemRole,
                 UiActionEvent.Toggled,
-                new UiCollectionItemContext(Definition.Id, itemId)));
+                new UiCollectionItemContext(Definition.Id, itemId),
+                _selectedCollectionItem));
     }
 
     private UiCollectionActionDispatch DoublePressItem(string productItemId, string? cue)
@@ -135,7 +152,8 @@ public sealed class UiCollectionState
             _screen.ActionsFor(
                 Definition.ItemRole,
                 UiActionEvent.DoublePressed,
-                new UiCollectionItemContext(Definition.Id, itemId)));
+                new UiCollectionItemContext(Definition.Id, itemId),
+                _selectedCollectionItem));
     }
 
     private void EnsureSingleSelection()
@@ -182,17 +200,22 @@ public sealed class UiRoleState
     private readonly UiScreenDefinition _screen;
     private readonly UiButtonDefinition? _button;
     private readonly UiCollectionBinding? _itemCollection;
+    private readonly Func<string, string?> _selectedCollectionItem;
     private int _variantIndex;
     private bool _screenVisible;
     private bool _showCuePending;
     private Func<UiRoleState, bool>? _toggleSelection;
 
-    internal UiRoleState(UiScreenDefinition screen, string roleId)
+    internal UiRoleState(
+        UiScreenDefinition screen,
+        string roleId,
+        Func<string, string?> selectedCollectionItem)
     {
         _screen = screen ?? throw new ArgumentNullException(nameof(screen));
         Definition = screen.GetRole(roleId);
         _button = screen.FindButton(roleId);
         _itemCollection = screen.FindCollectionByItemRole(roleId);
+        _selectedCollectionItem = selectedCollectionItem;
         _variantIndex = _button?.InitialVariantIndex ?? 0;
         _screenVisible = screen.InitiallyVisible;
         IsVisible = Definition.InitiallyVisible;
@@ -355,7 +378,11 @@ public sealed class UiRoleState
         }
 
         return CanReceiveInput
-            ? _screen.ActionsFor(Definition.Id, actionEvent, itemContext)
+            ? _screen.ActionsFor(
+                Definition.Id,
+                actionEvent,
+                itemContext,
+                _selectedCollectionItem)
             : [];
     }
 
@@ -429,7 +456,11 @@ public sealed class UiRoleState
             true,
             VisualState,
             cue,
-            _screen.ActionsFor(Definition.Id, actionEvent.Value, itemContext));
+            _screen.ActionsFor(
+                Definition.Id,
+                actionEvent.Value,
+                itemContext,
+                _selectedCollectionItem));
 
     }
 
@@ -458,7 +489,7 @@ public sealed class UiScreenState
         IsVisible = definition.InitiallyVisible;
         Roles = definition.Roles.ToDictionary(
             role => role.Id,
-            role => new UiRoleState(definition, role.Id),
+            role => new UiRoleState(definition, role.Id, SelectedCollectionItem),
             StringComparer.Ordinal);
         Collections = definition.Collections.ToDictionary(
             collection => collection.Id,
@@ -466,7 +497,8 @@ public sealed class UiScreenState
                 definition,
                 collection,
                 () => Roles[collection.Role].CanReceiveInput
-                    && Roles[collection.ItemRole].CanReceiveInput),
+                    && Roles[collection.ItemRole].CanReceiveInput,
+                SelectedCollectionItem),
             StringComparer.Ordinal);
         foreach (UiSelectionGroupDefinition group in definition.SelectionGroups)
         {
@@ -493,6 +525,11 @@ public sealed class UiScreenState
         _selectedRoles.TryGetValue(groupId, out string? selected)
             ? selected
             : throw new KeyNotFoundException($"Screen '{Definition.Id}' has no selection group '{groupId}'");
+
+    private string? SelectedCollectionItem(string collectionId) =>
+        Collections.TryGetValue(collectionId, out UiCollectionState? collection)
+            ? collection.SelectedProductItemId
+            : null;
 
     public IReadOnlyList<string> Show()
     {

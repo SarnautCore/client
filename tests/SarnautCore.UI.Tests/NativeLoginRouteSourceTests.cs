@@ -63,6 +63,32 @@ public sealed class NativeLoginRouteSourceTests
         Assert.Contains("Input.SetCustomMouseCursor", host, StringComparison.Ordinal);
         Assert.Contains("AudioStreamPlayer", host, StringComparison.Ordinal);
         Assert.Contains("ReplaceCollection", host, StringComparison.Ordinal);
+        Assert.Contains("ReconcileAvailableItems", host, StringComparison.Ordinal);
+        Assert.Contains("items.Where(item => item.Enabled)", host, StringComparison.Ordinal);
+        Assert.Contains("IsAuthoredProgressControl", host, StringComparison.Ordinal);
+        Assert.Contains("Manifest.ScreensInAuthoredOrder", host, StringComparison.Ordinal);
+        Assert.Contains("SetScreenSiblingOrder", host, StringComparison.Ordinal);
+        Assert.Contains("BindEulaPresentation", host, StringComparison.Ordinal);
+        Assert.Contains("PresentEula", host, StringComparison.Ordinal);
+        Assert.Contains("BindCreditsPresentation", host, StringComparison.Ordinal);
+        Assert.Contains("PresentCredits", host, StringComparison.Ordinal);
+        Assert.Contains("ResourcePreloader", host, StringComparison.Ordinal);
+        Assert.Contains("media.GetResource(presentation.TextureId)", host, StringComparison.Ordinal);
+        Assert.Contains("CanvasItemMaterial.BlendModeEnum.Mul", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("MainTitle", host, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LoginSceneOwnsTheOutOfGameProductLifetime()
+    {
+        string login = ReadSource("LoginScreen.cs");
+        string session = ReadSource("SessionHost.cs");
+        string scene = ReadSource("login.tscn");
+
+        Assert.Contains("NativeUiProductHost.TryMount( this", CollapseWhitespace(login));
+        Assert.Contains("script = ExtResource(\"1_login\")", scene, StringComparison.Ordinal);
+        Assert.DoesNotContain("NativeUiProductHost", session, StringComparison.Ordinal);
+        Assert.DoesNotContain("ui-product", session, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -88,4 +114,7 @@ public sealed class NativeLoginRouteSourceTests
             : "contract-source";
         return File.ReadAllText(Path.Combine(AppContext.BaseDirectory, directory, name));
     }
+
+    private static string CollapseWhitespace(string value) =>
+        string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }

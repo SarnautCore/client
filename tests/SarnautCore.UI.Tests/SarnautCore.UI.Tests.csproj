@@ -22,6 +22,9 @@
     <None Include="../../src/ui/NativeUiProductHost.cs"
           Link="contract-source/NativeUiProductHost.cs"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/session/SessionHost.cs"
+          Link="contract-source/SessionHost.cs"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../scenes/ui/login.tscn"
           Link="contract-scenes/login.tscn"
           CopyToOutputDirectory="PreserveNewest" />

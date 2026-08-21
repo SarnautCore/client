@@ -14,6 +14,7 @@ namespace SarnautCore;
 /// </summary>
 public partial class NativeUiProductHost : Control
 {
+    private const string CreditsMediaNode = "CreditsMedia";
     private const string VisualStateMetadata = "sarnaut_ui_visual_state";
     private static WeakReference<NativeUiProductHost>? s_cursorOwner;
 
@@ -23,6 +24,7 @@ public partial class NativeUiProductHost : Control
     private UiSoundCatalog<AudioStream> _sounds = null!;
     private Theme _productTheme = null!;
     private AudioStreamPlayer _audio = null!;
+    private AudioStreamPlayer _music = null!;
     private bool _renderingValue;
 
     public string ManifestPath { get; private set; } = string.Empty;
@@ -82,6 +84,15 @@ public partial class NativeUiProductHost : Control
         return Resolve(resource);
     }
 
+    public void PlayMusic(string productCue)
+    {
+        UiPresentationPolicy.RequireMusicCue(productCue);
+        _music.Stream = _sounds.GetRequired(productCue).Sound;
+        _music.Play();
+    }
+
+    public void StopMusic() => _music.Stop();
+
     /// <summary>
     /// Registers a controller against the exact screen definition parsed by this host.
     /// The callback receives the complete invocation, including resolved typed arguments.
@@ -117,6 +128,41 @@ public partial class NativeUiProductHost : Control
         else if (!visible)
         {
             ResetCursor();
+        }
+    }
+
+    /// <summary>
+    /// Applies an exact bottom-to-top order using definitions owned by this host.
+    /// Flow may temporarily lift a product screen, such as a tooltip over a modal.
+    /// </summary>
+    public void SetScreenSiblingOrder(IReadOnlyList<UiScreenDefinition> bottomToTop)
+    {
+        ArgumentNullException.ThrowIfNull(bottomToTop);
+        if (bottomToTop.Count != _screens.Count)
+        {
+            throw new ArgumentException(
+                $"Screen order has {bottomToTop.Count} entries, expected {_screens.Count}",
+                nameof(bottomToTop));
+        }
+
+        var bindings = new ScreenBinding[bottomToTop.Count];
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (int index = 0; index < bottomToTop.Count; index++)
+        {
+            UiScreenDefinition screen = bottomToTop[index];
+            ScreenBinding binding = RequireScreen(screen);
+            if (!seen.Add(screen.Id))
+            {
+                throw new ArgumentException(
+                    $"Screen order repeats '{screen.Id}'",
+                    nameof(bottomToTop));
+            }
+            bindings[index] = binding;
+        }
+
+        foreach (ScreenBinding binding in bindings)
+        {
+            binding.Root.MoveToFront();
         }
     }
 
@@ -158,6 +204,11 @@ public partial class NativeUiProductHost : Control
             {
                 SetControlInteractive(item.Control, interactive && item.Enabled);
             }
+        }
+
+        if (binding.Eula is { } eula)
+        {
+            eula.Accept.Disabled = !interactive || !eula.State.CanAccept;
         }
     }
 
@@ -244,11 +295,12 @@ public partial class NativeUiProductHost : Control
             return;
         }
 
-        if (control is not Control progress)
+        if (!IsAuthoredProgressControl(control))
         {
             throw ValueControlError(binding, value, "number");
         }
 
+        Control progress = control;
         float width = binding.NumberWidths.TryGetValue(value.Id, out float originalWidth)
             ? originalWidth
             : progress.Size.X;
@@ -295,6 +347,9 @@ public partial class NativeUiProductHost : Control
             }
         }
 
+        binding.State.Collections[collection.Id].ReconcileAvailableItems(
+            items.Where(item => item.Enabled).Select(item => item.ProductItemId));
+
         foreach (CollectionItemBinding old in mounted.Items.Values)
         {
             mounted.ItemsRoot.RemoveChild(old.Control);
@@ -333,6 +388,165 @@ public partial class NativeUiProductHost : Control
 
         mounted.ItemsRoot.Visible = binding.State.Roles[collection.ItemRole].IsVisible;
         ApplyFocusOrder(binding, grabFirst: false);
+    }
+
+    public void BindEulaPresentation(
+        UiScreenDefinition screen,
+        UiRoleDefinition scrollRole,
+        UiRoleDefinition documentRole,
+        UiRoleDefinition acceptRole,
+        Action<bool> scrollAtEndChanged)
+    {
+        ArgumentNullException.ThrowIfNull(scrollAtEndChanged);
+        ScreenBinding binding = RequireScreen(screen);
+        if (binding.Eula is not null)
+        {
+            throw new InvalidOperationException(
+                $"Screen '{screen.Id}' already has an EULA presentation binding");
+        }
+
+        if (RequireControl(binding, scrollRole) is not ScrollContainer scroll)
+        {
+            throw new InvalidDataException(
+                $"Native UI role '{screen.Id}.{scrollRole.Id}' must be a ScrollContainer");
+        }
+        if (RequireControl(binding, documentRole) is not Label document)
+        {
+            throw new InvalidDataException(
+                $"Native UI role '{screen.Id}.{documentRole.Id}' must be a Label");
+        }
+        if (RequireControl(binding, acceptRole) is not BaseButton accept)
+        {
+            throw new InvalidDataException(
+                $"Native UI role '{screen.Id}.{acceptRole.Id}' must be a BaseButton");
+        }
+
+        float authoredDocumentWidth = document.Size.X;
+        if (!ReferenceEquals(document.GetParent(), scroll))
+        {
+            document.Reparent(scroll, keepGlobalTransform: false);
+        }
+        document.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        document.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        document.SizeFlagsVertical = SizeFlags.ShrinkBegin;
+        document.ClipText = false;
+        scroll.HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled;
+
+        var eula = new EulaBinding(
+            scroll,
+            document,
+            authoredDocumentWidth,
+            accept,
+            scrollAtEndChanged);
+        binding.Eula = eula;
+        eula.ScrollBar.ValueChanged += _ => PublishEulaScroll(eula);
+    }
+
+    public void PresentEula(
+        UiScreenDefinition screen,
+        NativeUiEulaPresentation presentation)
+    {
+        ArgumentNullException.ThrowIfNull(presentation);
+        if (string.IsNullOrWhiteSpace(presentation.DocumentId)
+            || string.IsNullOrWhiteSpace(presentation.Body))
+        {
+            throw new ArgumentException(
+                "EULA presentation requires a document id and body",
+                nameof(presentation));
+        }
+        ScreenBinding binding = RequireScreen(screen);
+        EulaBinding eula = binding.Eula
+            ?? throw new InvalidOperationException(
+                $"Screen '{screen.Id}' has no EULA presentation binding");
+        bool documentChanged = eula.State.Apply(
+            presentation.DocumentId,
+            presentation.Body,
+            presentation.CanAccept);
+        if (documentChanged)
+        {
+            eula.Document.SetMeta("sarnaut_ui_document_id", eula.State.DocumentId!);
+            eula.Document.Text = eula.State.Body;
+            eula.Document.CustomMinimumSize = new Vector2(
+                Math.Max(eula.AuthoredDocumentWidth, eula.Scroll.Size.X),
+                0);
+            eula.Document.ResetSize();
+            eula.Scroll.ScrollVertical = 0;
+            eula.LastScrollAtEnd = null;
+        }
+        eula.Accept.Disabled = !binding.Interactive || !eula.State.CanAccept;
+        if (documentChanged)
+        {
+            Callable.From(() => PublishEulaScroll(eula)).CallDeferred();
+        }
+    }
+
+    public void BindCreditsPresentation(
+        UiScreenDefinition screen,
+        UiRoleDefinition textRole,
+        UiRoleDefinition pictureRole,
+        UiRoleDefinition backgroundRole)
+    {
+        ScreenBinding binding = RequireScreen(screen);
+        if (binding.Credits is not null)
+        {
+            throw new InvalidOperationException(
+                $"Screen '{screen.Id}' already has a Credits presentation binding");
+        }
+        if (RequireControl(binding, textRole) is not Label text)
+        {
+            throw new InvalidDataException(
+                $"Native UI role '{screen.Id}.{textRole.Id}' must be a Label");
+        }
+
+        Control picture = RequireControl(binding, pictureRole);
+        Control background = RequireControl(binding, backgroundRole);
+        ResourcePreloader media = binding.Root.GetNodeOrNull<ResourcePreloader>(CreditsMediaNode)
+            ?? throw new InvalidDataException(
+                $"Native UI Credits screen '{screen.Id}' has no scene-owned '{CreditsMediaNode}' ResourcePreloader");
+        binding.Credits = new CreditsBinding(
+            text,
+            BindCreditsLayer(screen, pictureRole, picture),
+            BindCreditsLayer(screen, backgroundRole, background),
+            media);
+    }
+
+    public void PresentCredits(
+        UiScreenDefinition screen,
+        NativeUiCreditsPresentation presentation)
+    {
+        ArgumentNullException.ThrowIfNull(presentation);
+        ScreenBinding binding = RequireScreen(screen);
+        CreditsBinding credits = binding.Credits
+            ?? throw new InvalidOperationException(
+                $"Screen '{screen.Id}' has no Credits presentation binding");
+
+        binding.Root.SelfModulate = WithOpacity(
+            binding.Root.SelfModulate,
+            UiPresentationPolicy.RequireOpacity(
+                presentation.FormOpacity,
+                nameof(presentation.FormOpacity)));
+        if (presentation.Text is { } text)
+        {
+            if (string.IsNullOrWhiteSpace(text.Body))
+            {
+                throw new ArgumentException(
+                    "Credits text presentation has no body",
+                    nameof(presentation));
+            }
+
+            credits.Text.Text = UiPresentationPolicy.ProductMarkupToPlainText(text.Body);
+            credits.Text.SelfModulate = WithOpacity(
+                credits.Text.SelfModulate,
+                UiPresentationPolicy.RequireOpacity(text.Opacity, nameof(text.Opacity)));
+            credits.Text.Visible = true;
+        }
+        else
+        {
+            credits.Text.Visible = false;
+        }
+
+        ApplyCreditsLayer(credits.Picture, credits.Media, presentation.Picture);
+        ApplyCreditsLayer(credits.Background, credits.Media, presentation.Background);
     }
 
     public override void _ExitTree()
@@ -378,8 +592,10 @@ public partial class NativeUiProductHost : Control
 
             _audio = new AudioStreamPlayer { Name = "CuePlayer" };
             AddChild(_audio);
+            _music = new AudioStreamPlayer { Name = "MusicPlayer" };
+            AddChild(_music);
 
-            foreach (UiScreenDefinition screen in Manifest.Screens)
+            foreach (UiScreenDefinition screen in Manifest.ScreensInAuthoredOrder)
             {
                 BindScreen(screen);
             }
@@ -804,7 +1020,7 @@ public partial class NativeUiProductHost : Control
             bool valid = value.Kind switch
             {
                 UiValueKind.Text => control is LineEdit or Label or Button,
-                UiValueKind.Number => control is Godot.Range or Control,
+                UiValueKind.Number => control is Godot.Range || IsAuthoredProgressControl(control),
                 UiValueKind.Boolean => control is BaseButton,
                 _ => false,
             };
@@ -926,6 +1142,117 @@ public partial class NativeUiProductHost : Control
             input.Editable = interactive;
         }
     }
+
+    private static bool IsAuthoredProgressControl(Control control)
+    {
+        if (!control.ClipContents
+            || control.Size.X <= 0
+            || control.Size.Y <= 0
+            || control.GetChildCount() != 1
+            || control.GetChild(0) is not Control fill
+            || !Mathf.IsZeroApprox(fill.Position.X)
+            || !Mathf.IsZeroApprox(fill.Position.Y)
+            || !Mathf.IsEqualApprox(fill.Size.Y, control.Size.Y))
+        {
+            return false;
+        }
+
+        return fill switch
+        {
+            TextureRect texture => texture.Texture is not null,
+            NinePatchRect ninePatch => ninePatch.Texture is not null,
+            _ => false,
+        };
+    }
+
+    private static void PublishEulaScroll(EulaBinding eula)
+    {
+        double end = Math.Max(eula.ScrollBar.MinValue, eula.ScrollBar.MaxValue - eula.ScrollBar.Page);
+        bool atEnd = eula.ScrollBar.Value >= end - 0.5;
+        if (eula.LastScrollAtEnd == atEnd)
+        {
+            return;
+        }
+
+        eula.LastScrollAtEnd = atEnd;
+        eula.ScrollAtEndChanged(atEnd);
+    }
+
+    private static CreditsLayerBinding BindCreditsLayer(
+        UiScreenDefinition screen,
+        UiRoleDefinition role,
+        Control root)
+    {
+        TextureRect[] textures = DescendantsAndSelf<TextureRect>(root).ToArray();
+        if (textures.Length != 1)
+        {
+            throw new InvalidDataException(
+                $"Native UI Credits role '{screen.Id}.{role.Id}' must contain exactly one TextureRect");
+        }
+
+        var material = new CanvasItemMaterial();
+        textures[0].Material = material;
+        textures[0].ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize;
+        return new CreditsLayerBinding(root, textures[0], material);
+    }
+
+    private static void ApplyCreditsLayer(
+        CreditsLayerBinding binding,
+        ResourcePreloader media,
+        NativeUiCreditsVisualPresentation? presentation)
+    {
+        if (presentation is null)
+        {
+            binding.Root.Visible = false;
+            return;
+        }
+
+        UiPresentationPolicy.RequireProductId(presentation.TextureId, "Credits texture");
+        if (!media.HasResource(presentation.TextureId)
+            || media.GetResource(presentation.TextureId) is not Texture2D texture)
+        {
+            throw new InvalidDataException(
+                $"Credits media catalog has no Texture2D '{presentation.TextureId}'");
+        }
+
+        binding.Texture.Texture = texture;
+        binding.Material.BlendMode = presentation.Blend switch
+        {
+            NativeUiCreditsBlend.Alpha => CanvasItemMaterial.BlendModeEnum.Mix,
+            NativeUiCreditsBlend.Multiply => CanvasItemMaterial.BlendModeEnum.Mul,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(presentation),
+                presentation.Blend,
+                "Unsupported Credits blend"),
+        };
+        binding.Root.SelfModulate = WithOpacity(
+            binding.Root.SelfModulate,
+            UiPresentationPolicy.RequireOpacity(
+                presentation.Opacity,
+                nameof(presentation.Opacity)));
+        binding.Root.SetMeta("sarnaut_ui_texture_id", presentation.TextureId);
+        binding.Root.Visible = true;
+    }
+
+    private static IEnumerable<TNode> DescendantsAndSelf<TNode>(Node root)
+        where TNode : Node
+    {
+        if (root is TNode typed)
+        {
+            yield return typed;
+        }
+
+        foreach (Node child in root.GetChildren())
+        {
+            foreach (TNode descendant in DescendantsAndSelf<TNode>(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
+
+    private static Color WithOpacity(Color color, float opacity) =>
+        new(color.R, color.G, color.B, opacity);
 
     private void PlayCue(string? cue)
     {
@@ -1115,8 +1442,48 @@ public partial class NativeUiProductHost : Control
         public HashSet<string> CollectionItemRoles { get; } = new(StringComparer.Ordinal);
         public List<Func<UiActionInvocation, bool>> Controllers { get; } = [];
         public Dictionary<string, float> NumberWidths { get; } = new(StringComparer.Ordinal);
+        public EulaBinding? Eula { get; set; }
+        public CreditsBinding? Credits { get; set; }
         public bool Interactive { get; set; } = true;
     }
+
+    private sealed class EulaBinding
+    {
+        public EulaBinding(
+            ScrollContainer scroll,
+            Label document,
+            float authoredDocumentWidth,
+            BaseButton accept,
+            Action<bool> scrollAtEndChanged)
+        {
+            Scroll = scroll;
+            ScrollBar = scroll.GetVScrollBar();
+            Document = document;
+            AuthoredDocumentWidth = authoredDocumentWidth;
+            Accept = accept;
+            ScrollAtEndChanged = scrollAtEndChanged;
+        }
+
+        public ScrollContainer Scroll { get; }
+        public VScrollBar ScrollBar { get; }
+        public Label Document { get; }
+        public float AuthoredDocumentWidth { get; }
+        public BaseButton Accept { get; }
+        public Action<bool> ScrollAtEndChanged { get; }
+        public UiEulaPresentationState State { get; } = new();
+        public bool? LastScrollAtEnd { get; set; }
+    }
+
+    private sealed record CreditsBinding(
+        Label Text,
+        CreditsLayerBinding Picture,
+        CreditsLayerBinding Background,
+        ResourcePreloader Media);
+
+    private sealed record CreditsLayerBinding(
+        Control Root,
+        TextureRect Texture,
+        CanvasItemMaterial Material);
 
     private sealed class CollectionBinding
     {
@@ -1146,3 +1513,29 @@ public sealed record NativeUiCollectionItem(
     string ProductItemId,
     string Text,
     bool Enabled = true);
+
+public sealed record NativeUiEulaPresentation(
+    string DocumentId,
+    string Body,
+    bool CanAccept);
+
+public sealed record NativeUiCreditsPresentation(
+    double FormOpacity,
+    NativeUiCreditsTextPresentation? Text,
+    NativeUiCreditsVisualPresentation? Picture,
+    NativeUiCreditsVisualPresentation? Background);
+
+public sealed record NativeUiCreditsTextPresentation(
+    string Body,
+    double Opacity);
+
+public sealed record NativeUiCreditsVisualPresentation(
+    string TextureId,
+    NativeUiCreditsBlend Blend,
+    double Opacity);
+
+public enum NativeUiCreditsBlend
+{
+    Alpha,
+    Multiply,
+}

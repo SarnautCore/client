@@ -16,6 +16,7 @@ internal static class UiProductFixture
             {
               "id": "login",
               "scene": "ui/LoginAccount.ui.tscn",
+              "priority": 700,
               "initially_visible": false,
               "cues": { "show": "ui_menu_open", "hide": "ui_menu_close" },
               "roles": [
@@ -113,6 +114,7 @@ internal static class UiProductFixture
             {
               "id": "selector",
               "scene": "screens/selector.tscn",
+              "priority": 500,
               "initially_visible": true,
               "roles": [
                 { "id": "screen-input", "node": ".", "initially_visible": true },

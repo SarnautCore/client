@@ -268,6 +268,143 @@ public sealed class UiWidgetStateTests
     }
 
     [Fact]
+    public void CollectionReconciliationClearsOnlyASelectionThatNoLongerExists()
+    {
+        UiCollectionState collection = InteractionScreen().Collections["characters"];
+        collection.RouteInput("character-one", UiPhysicalInput.PrimaryReleased);
+
+        collection.ReconcileAvailableItems(["character-one", "character-two"]);
+        Assert.Equal("character-one", collection.SelectedProductItemId);
+
+        collection.ReconcileAvailableItems(["character-two"]);
+        Assert.Null(collection.SelectedProductItemId);
+    }
+
+    [Fact]
+    public void ExternalCollectionActionUsesSelectionAndSuppressesMissingSelection()
+    {
+        string json = UiProductFixture.InteractionJson
+            .Replace(
+                "{ \"id\": \"open\", \"node\": \"Open\", \"initially_visible\": true, \"cues\": { \"hover\": \"row_hover\", \"press\": \"row_press\" } }",
+                "{ \"id\": \"open\", \"node\": \"Open\", \"initially_visible\": true, \"cues\": { \"hover\": \"row_hover\", \"press\": \"row_press\" } }, { \"id\": \"activate\", \"node\": \"Activate\", \"initially_visible\": true }",
+                StringComparison.Ordinal)
+            .Replace(
+                "{ \"id\": \"open\", \"arguments\": [{ \"name\": \"character\", \"kind\": \"collection-item-id\", \"collection\": \"characters\" }], \"triggers\": [{ \"role\": \"open\", \"event\": \"double-pressed\" }] }",
+                "{ \"id\": \"open\", \"arguments\": [{ \"name\": \"character\", \"kind\": \"collection-item-id\", \"collection\": \"characters\" }], \"triggers\": [{ \"role\": \"activate\", \"event\": \"pressed\" }] }",
+                StringComparison.Ordinal)
+            .Replace(
+                "{ \"role\": \"open\", \"toggle\": true, \"initial_variant\": \"clear\", \"variants\": [{ \"id\": \"clear\", \"visual_state\": \"clear\", \"inputs\": [{ \"input\": \"primary-released\", \"event\": \"toggled\" }, { \"input\": \"double-pressed\", \"event\": \"double-pressed\" }, { \"input\": \"hover-entered\", \"event\": \"hover-entered\" }] }, { \"id\": \"selected\", \"visual_state\": \"selected\", \"inputs\": [{ \"input\": \"double-pressed\", \"event\": \"double-pressed\" }, { \"input\": \"hover-entered\", \"event\": \"hover-entered\" }] }] }",
+                "{ \"role\": \"open\", \"toggle\": true, \"initial_variant\": \"clear\", \"variants\": [{ \"id\": \"clear\", \"visual_state\": \"clear\", \"inputs\": [{ \"input\": \"primary-released\", \"event\": \"toggled\" }, { \"input\": \"hover-entered\", \"event\": \"hover-entered\" }] }, { \"id\": \"selected\", \"visual_state\": \"selected\", \"inputs\": [{ \"input\": \"hover-entered\", \"event\": \"hover-entered\" }] }] }, { \"role\": \"activate\", \"toggle\": false, \"initial_variant\": \"default\", \"variants\": [{ \"id\": \"default\", \"visual_state\": \"default\", \"inputs\": [{ \"input\": \"primary-released\", \"event\": \"pressed\" }] }] }",
+                StringComparison.Ordinal);
+        UiScreenDefinition definition = Assert.Single(UiProductFixture.Parse(json).Screens);
+        var screen = new UiScreenState(definition);
+
+        screen.Roles["activate"].RouteInput(UiPhysicalInput.PrimaryPressed);
+        UiActionDispatch beforeSelection = screen.Roles["activate"].RouteInput(
+            UiPhysicalInput.PrimaryReleased);
+        Assert.DoesNotContain(beforeSelection.Invocations, invocation => invocation.Id == "open");
+
+        screen.Collections["characters"].RouteInput(
+            "character-one",
+            UiPhysicalInput.PrimaryReleased);
+        screen.Roles["activate"].RouteInput(UiPhysicalInput.PrimaryPressed);
+        UiActionDispatch afterSelection = screen.Roles["activate"].RouteInput(
+            UiPhysicalInput.PrimaryReleased);
+
+        UiActionInvocation invocation = Assert.Single(
+            afterSelection.Invocations,
+            candidate => candidate.Id == "open");
+        Assert.Equal("character-one", Assert.Single(invocation.Arguments).Value);
+    }
+
+    [Fact]
+    public void MultiCollectionActionResolvesTriggerItemAndOtherSelectionInBothDirections()
+    {
+        const string json = """
+            {
+              "schema_id": "sarnaut.ui-product/v2",
+              "catalogs": {
+                "cursors": "catalogs/cursors.tres",
+                "sounds": "catalogs/sounds.tres",
+                "theme": "ui_theme.tres"
+              },
+              "screens": [{
+                "id": "selector",
+                "scene": "screens/selector.tscn",
+                "priority": 500,
+                "initially_visible": true,
+                "roles": [
+                  { "id": "characters", "node": "Characters", "initially_visible": true },
+                  { "id": "character-row", "node": "CharacterRow", "initially_visible": true },
+                  { "id": "shards", "node": "Shards", "initially_visible": true },
+                  { "id": "shard-row", "node": "ShardRow", "initially_visible": true }
+                ],
+                "actions": [
+                {
+                  "id": "select-character",
+                  "arguments": [{ "name": "character", "kind": "collection-item-id", "collection": "characters" }],
+                  "triggers": [{ "role": "character-row", "event": "toggled" }]
+                },
+                {
+                  "id": "select-shard",
+                  "arguments": [{ "name": "shard", "kind": "collection-item-id", "collection": "shards" }],
+                  "triggers": [{ "role": "shard-row", "event": "toggled" }]
+                },
+                {
+                  "id": "launch",
+                  "arguments": [
+                    { "name": "character", "kind": "collection-item-id", "collection": "characters" },
+                    { "name": "shard", "kind": "collection-item-id", "collection": "shards" }
+                  ],
+                  "triggers": [
+                    { "role": "character-row", "event": "double-pressed" },
+                    { "role": "shard-row", "event": "double-pressed" }
+                  ]
+                }],
+                "values": [],
+                "collections": [
+                  { "id": "characters", "role": "characters", "item_role": "character-row", "item_scene": "items/character.tscn", "selection": "single" },
+                  { "id": "shards", "role": "shards", "item_role": "shard-row", "item_scene": "items/shard.tscn", "selection": "single" }
+                ],
+                "buttons": [
+                  { "role": "character-row", "toggle": true, "initial_variant": "clear", "variants": [
+                    { "id": "clear", "visual_state": "clear", "inputs": [{ "input": "primary-released", "event": "toggled" }, { "input": "double-pressed", "event": "double-pressed" }] },
+                    { "id": "selected", "visual_state": "selected", "inputs": [{ "input": "double-pressed", "event": "double-pressed" }] }
+                  ] },
+                  { "role": "shard-row", "toggle": true, "initial_variant": "clear", "variants": [
+                    { "id": "clear", "visual_state": "clear", "inputs": [{ "input": "primary-released", "event": "toggled" }, { "input": "double-pressed", "event": "double-pressed" }] },
+                    { "id": "selected", "visual_state": "selected", "inputs": [{ "input": "double-pressed", "event": "double-pressed" }] }
+                  ] }
+                ],
+                "selection_groups": [],
+                "focus_order": []
+              }]
+            }
+            """;
+        var screen = new UiScreenState(Assert.Single(UiProductFixture.Parse(json).Screens));
+        UiCollectionState characters = screen.Collections["characters"];
+        UiCollectionState shards = screen.Collections["shards"];
+        characters.RouteInput("character-one", UiPhysicalInput.PrimaryReleased);
+        shards.RouteInput("shard-one", UiPhysicalInput.PrimaryReleased);
+
+        UiActionInvocation fromCharacter = Assert.Single(
+            characters.RouteInput("character-one", UiPhysicalInput.DoublePressed).Invocations);
+        Assert.Equal(
+            ["character-one", "shard-one"],
+            fromCharacter.Arguments.Select(argument => argument.Value));
+
+        UiActionInvocation fromShard = Assert.Single(
+            shards.RouteInput("shard-one", UiPhysicalInput.DoublePressed).Invocations);
+        Assert.Equal(
+            ["character-one", "shard-one"],
+            fromShard.Arguments.Select(argument => argument.Value));
+
+        shards.ReconcileAvailableItems([]);
+        Assert.Empty(
+            characters.RouteInput("character-one", UiPhysicalInput.DoublePressed).Invocations);
+    }
+
+    [Fact]
     public void CollectionHoverReturnsRoleCueWithoutChangingSelection()
     {
         UiCollectionState collection = InteractionScreen().Collections["characters"];
@@ -341,6 +478,7 @@ public sealed class UiWidgetStateTests
               "screens": [{
                 "id": "inventory",
                 "scene": "screens/inventory.tscn",
+                "priority": 0,
                 "initially_visible": true,
                 "roles": [
                   { "id": "items", "node": "Items", "initially_visible": true },

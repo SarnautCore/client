@@ -76,6 +76,7 @@ public static class NativeUiProductManifestParser
             "screen",
             "id",
             "scene",
+            "priority",
             "initially_visible",
             "documents",
             "timeline",
@@ -108,9 +109,6 @@ public static class NativeUiProductManifestParser
             "actions",
             item => ReadAction(item, context),
             context);
-        UiManifestJson.Unique(
-            actions.Select(ActionSignature),
-            $"{context} action signature");
         UiManifestJson.Unique(
             actions.SelectMany(action => action.Triggers)
                 .Select(trigger => $"{trigger.Role}.{trigger.Event}"),
@@ -159,12 +157,16 @@ public static class NativeUiProductManifestParser
         var collectionsById = collections.ToDictionary(
             collection => collection.Id,
             StringComparer.Ordinal);
+        var actionRoutes = new List<(string Signature, bool ItemRoute)>();
         foreach (UiActionDefinition action in actions)
         {
-            foreach (string collectionId in action.Arguments
+            string[] collectionIds = action.Arguments
                 .Where(argument => argument.Kind == UiActionArgumentKind.CollectionItemId)
                 .Select(argument => argument.Collection!)
-                .Distinct(StringComparer.Ordinal))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var itemRoles = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string collectionId in collectionIds)
             {
                 if (!collectionsById.TryGetValue(collectionId, out UiCollectionBinding? collection))
                 {
@@ -178,11 +180,46 @@ public static class NativeUiProductManifestParser
                         $"{context} action '{action.Id}' collection '{collectionId}' is not single-selection");
                 }
 
-                if (!action.Triggers.Any(trigger => trigger.Role == collection.ItemRole))
+                itemRoles.Add(collection.ItemRole);
+            }
+
+            bool hasItemTrigger = action.Triggers.Any(trigger => itemRoles.Contains(trigger.Role));
+            bool hasUnrelatedTrigger = action.Triggers.Any(trigger => !itemRoles.Contains(trigger.Role));
+            if (hasItemTrigger && hasUnrelatedTrigger)
+            {
+                throw new InvalidDataException(
+                    $"{context} action '{action.Id}' mixes collection-item and unrelated triggers");
+            }
+
+            if (hasItemTrigger)
+            {
+                foreach (string collectionId in collectionIds)
                 {
-                    throw new InvalidDataException(
-                        $"{context} action '{action.Id}' has no trigger on collection '{collectionId}' item role '{collection.ItemRole}'");
+                    UiCollectionBinding collection = collectionsById[collectionId];
+                    if (!action.Triggers.Any(trigger => trigger.Role == collection.ItemRole))
+                    {
+                        throw new InvalidDataException(
+                            $"{context} action '{action.Id}' has no trigger on collection '{collectionId}' item role '{collection.ItemRole}'");
+                    }
                 }
+            }
+            actionRoutes.Add((ActionSignature(action), hasItemTrigger));
+        }
+
+        foreach (IGrouping<string, (string Signature, bool ItemRoute)> routes
+                 in actionRoutes.GroupBy(route => route.Signature, StringComparer.Ordinal))
+        {
+            if (routes.Count() == 1)
+            {
+                continue;
+            }
+
+            bool validSplit = routes.Count() == 2
+                && routes.Count(route => route.ItemRoute) == 1;
+            if (!validSplit)
+            {
+                throw new InvalidDataException(
+                    $"Duplicate {context} action signature '{routes.Key}'");
             }
         }
 
@@ -307,6 +344,7 @@ public static class NativeUiProductManifestParser
                 "scene",
                 resourceEncoding == UiProductResourceEncoding.Compiled ? ".scn" : ".tscn",
                 context),
+            UiManifestJson.Int32(element, "priority", context),
             UiManifestJson.Bool(element, "initially_visible", context),
             documents,
             timeline,

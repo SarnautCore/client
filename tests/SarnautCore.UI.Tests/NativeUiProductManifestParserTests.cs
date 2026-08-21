@@ -3,6 +3,33 @@ namespace SarnautCore.UI.Tests;
 public sealed class NativeUiProductManifestParserTests
 {
     [Fact]
+    public void ParsesRequiredPriorityAndOrdersEqualPriorityScreensStably()
+    {
+        string json = UiProductFixture.Json.Replace(
+                "}\n  ]\n}",
+                "}, {\n      \"id\": \"overlay\",\n      \"scene\": \"ui/Overlay.ui.tscn\",\n      \"priority\": 700,\n      \"initially_visible\": false,\n      \"roles\": [],\n      \"actions\": [],\n      \"values\": [],\n      \"collections\": [],\n      \"buttons\": [],\n      \"selection_groups\": [],\n      \"focus_order\": []\n    }, {\n      \"id\": \"backdrop\",\n      \"scene\": \"ui/Backdrop.ui.tscn\",\n      \"priority\": -128,\n      \"initially_visible\": true,\n      \"roles\": [],\n      \"actions\": [],\n      \"values\": [],\n      \"collections\": [],\n      \"buttons\": [],\n      \"selection_groups\": [],\n      \"focus_order\": []\n    }\n  ]\n}",
+                StringComparison.Ordinal);
+
+        UiProductManifest manifest = UiProductFixture.Parse(json);
+
+        Assert.Equal(700, manifest.Screens[0].Priority);
+        Assert.Equal(
+            ["backdrop", "login", "overlay"],
+            manifest.ScreensInAuthoredOrder.Select(screen => screen.Id));
+    }
+
+    [Theory]
+    [InlineData("\"priority\": 700,", "")]
+    [InlineData("\"priority\": 700,", "\"priority\": 1.5,")]
+    [InlineData("\"priority\": 700,", "\"priority\": 2147483648,")]
+    public void RejectsMissingOrNonInt32ScreenPriority(string oldValue, string newValue)
+    {
+        string json = UiProductFixture.Json.Replace(oldValue, newValue, StringComparison.Ordinal);
+
+        Assert.Throws<InvalidDataException>(() => UiProductFixture.Parse(json));
+    }
+
+    [Fact]
     public void ParsesTheOwnedProductContractWithoutBakeProvenance()
     {
         UiProductManifest manifest = UiProductFixture.Parse();
@@ -206,6 +233,7 @@ public sealed class NativeUiProductManifestParserTests
                 {
                   "id": "splash",
                   "scene": "screens/splash.tscn",
+                  "priority": 0,
                   "initially_visible": true,
                   "roles": [],
                   "actions": [],
@@ -395,7 +423,6 @@ public sealed class NativeUiProductManifestParserTests
     [Theory]
     [InlineData("\"collection\": \"characters\"", "\"collection\": \"missing\"")]
     [InlineData("\"kind\": \"collection-item-id\", \"collection\": \"characters\"", "\"kind\": \"collection-item-id\", \"value\": \"character-one\"")]
-    [InlineData("\"item_role\": \"open\"", "\"item_role\": \"choice-a\"")]
     [InlineData("\"selection\": \"single\"", "\"selection\": \"multiple\"")]
     public void RejectsUnresolvableCollectionItemIdentity(string oldValue, string newValue)
     {
@@ -434,7 +461,7 @@ public sealed class NativeUiProductManifestParserTests
     }
 
     [Fact]
-    public void AcceptsConverterValidDynamicArgumentsFromMultipleCollections()
+    public void AcceptsDynamicActionTriggersFromMultipleCollectionContexts()
     {
         string json = UiProductFixture.InteractionJson
             .Replace(
@@ -460,5 +487,40 @@ public sealed class NativeUiProductManifestParserTests
             manifest.Screens[0].Actions,
             candidate => candidate.Id == "open");
         Assert.Equal(2, action.Arguments.Count);
+    }
+
+    [Fact]
+    public void RejectsActionThatMixesCollectionItemAndUnrelatedTriggers()
+    {
+        string json = UiProductFixture.InteractionJson.Replace(
+            "{ \"role\": \"open\", \"event\": \"double-pressed\" }",
+            "{ \"role\": \"open\", \"event\": \"double-pressed\" }, { \"role\": \"preview\", \"event\": \"zoom-in\" }",
+            StringComparison.Ordinal);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(
+            () => UiProductFixture.Parse(json));
+        Assert.Contains("mixes collection-item and unrelated triggers", error.Message);
+    }
+
+    [Fact]
+    public void AcceptsSameActionSignatureSplitBetweenItemAndExternalRoutes()
+    {
+        string json = UiProductFixture.InteractionJson
+            .Replace(
+                "{ \"id\": \"open\", \"node\": \"Open\", \"initially_visible\": true, \"cues\": { \"hover\": \"row_hover\", \"press\": \"row_press\" } }",
+                "{ \"id\": \"open\", \"node\": \"Open\", \"initially_visible\": true, \"cues\": { \"hover\": \"row_hover\", \"press\": \"row_press\" } }, { \"id\": \"activate\", \"node\": \"Activate\", \"initially_visible\": true }",
+                StringComparison.Ordinal)
+            .Replace(
+                "{ \"id\": \"open\", \"arguments\": [{ \"name\": \"character\", \"kind\": \"collection-item-id\", \"collection\": \"characters\" }], \"triggers\": [{ \"role\": \"open\", \"event\": \"double-pressed\" }] }",
+                "{ \"id\": \"open\", \"arguments\": [{ \"name\": \"character\", \"kind\": \"collection-item-id\", \"collection\": \"characters\" }], \"triggers\": [{ \"role\": \"open\", \"event\": \"double-pressed\" }] }, { \"id\": \"open\", \"arguments\": [{ \"name\": \"character\", \"kind\": \"collection-item-id\", \"collection\": \"characters\" }], \"triggers\": [{ \"role\": \"activate\", \"event\": \"pressed\" }] }",
+                StringComparison.Ordinal)
+            .Replace(
+                "{ \"role\": \"open\", \"toggle\": true, \"initial_variant\": \"clear\", \"variants\": [{ \"id\": \"clear\", \"visual_state\": \"clear\", \"inputs\": [{ \"input\": \"primary-released\", \"event\": \"toggled\" }, { \"input\": \"double-pressed\", \"event\": \"double-pressed\" }, { \"input\": \"hover-entered\", \"event\": \"hover-entered\" }] }, { \"id\": \"selected\", \"visual_state\": \"selected\", \"inputs\": [{ \"input\": \"double-pressed\", \"event\": \"double-pressed\" }, { \"input\": \"hover-entered\", \"event\": \"hover-entered\" }] }] }",
+                "{ \"role\": \"open\", \"toggle\": true, \"initial_variant\": \"clear\", \"variants\": [{ \"id\": \"clear\", \"visual_state\": \"clear\", \"inputs\": [{ \"input\": \"primary-released\", \"event\": \"toggled\" }, { \"input\": \"double-pressed\", \"event\": \"double-pressed\" }, { \"input\": \"hover-entered\", \"event\": \"hover-entered\" }] }, { \"id\": \"selected\", \"visual_state\": \"selected\", \"inputs\": [{ \"input\": \"double-pressed\", \"event\": \"double-pressed\" }, { \"input\": \"hover-entered\", \"event\": \"hover-entered\" }] }] }, { \"role\": \"activate\", \"toggle\": false, \"initial_variant\": \"default\", \"variants\": [{ \"id\": \"default\", \"visual_state\": \"default\", \"inputs\": [{ \"input\": \"primary-released\", \"event\": \"pressed\" }] }] }",
+                StringComparison.Ordinal);
+
+        UiScreenDefinition screen = Assert.Single(UiProductFixture.Parse(json).Screens);
+
+        Assert.Equal(2, screen.Actions.Count(action => action.Id == "open"));
     }
 }
