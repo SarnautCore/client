@@ -86,6 +86,63 @@ public sealed class LoginAccountProductTests
     }
 
     [Fact]
+    public void RejectsExtraValueCollectionAndButtonSemantics()
+    {
+        using FileStream stream = File.OpenRead(FixturePath());
+        UiProductManifest parsed = NativeUiProductManifestParser.Parse(stream);
+        UiScreenDefinition screen = Assert.Single(parsed.Screens);
+
+        Assert.Throws<InvalidDataException>(() => LoginAccountProduct.Bind(parsed with
+        {
+            Screens =
+            [
+                screen with
+                {
+                    Values =
+                    [
+                        .. screen.Values,
+                        new UiValueBinding(
+                            "unexpected-value",
+                            LoginAccountProduct.EnterRole,
+                            UiValueKind.Boolean,
+                            UiValueAccess.Read,
+                            Secret: false),
+                    ],
+                },
+            ],
+        }));
+
+        Assert.Throws<InvalidDataException>(() => LoginAccountProduct.Bind(parsed with
+        {
+            Screens =
+            [
+                screen with
+                {
+                    Collections =
+                    [
+                        new UiCollectionBinding(
+                            "unexpected-collection",
+                            LoginAccountProduct.EnterRole,
+                            screen.Scene,
+                            UiCollectionSelection.None),
+                    ],
+                },
+            ],
+        }));
+
+        Assert.Throws<InvalidDataException>(() => LoginAccountProduct.Bind(parsed with
+        {
+            Screens =
+            [
+                screen with
+                {
+                    Buttons = screen.Buttons.Take(screen.Buttons.Count - 1).ToArray(),
+                },
+            ],
+        }));
+    }
+
+    [Fact]
     public void ResolvesProductResourcesFromBothSupportedMountLayouts()
     {
         Assert.Equal(
@@ -105,11 +162,26 @@ public sealed class LoginAccountProductTests
 
     [Theory]
     [InlineData("res://content/../private")]
+    [InlineData("res://content/C:/private")]
     [InlineData("C:\\content")]
     [InlineData("user://content")]
     public void RejectsRootsOutsideTheMountedNativeProduct(string root)
     {
         Assert.Throws<ArgumentException>(() => NativeUiProductLocation.ManifestCandidates(root));
+    }
+
+    [Theory]
+    [InlineData("res://content/../private/ui-product.json")]
+    [InlineData("res://content/C:/ui-product.json")]
+    [InlineData("res://content/product/other.json")]
+    [InlineData("C:\\content\\ui-product.json")]
+    public void RejectsManifestLocationsOutsideAConfinedProduct(string manifestPath)
+    {
+        UiProductManifest manifest = UiProductFixture.Parse();
+
+        Assert.Throws<ArgumentException>(() => NativeUiProductLocation.Resolve(
+            manifestPath,
+            manifest.Screens[0].Scene));
     }
 
     private static string FixturePath() => Path.Combine(

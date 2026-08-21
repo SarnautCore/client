@@ -8,14 +8,16 @@ public sealed class NativeLoginRouteSourceTests
         string login = ReadSource("LoginScreen.cs");
 
         Assert.Contains("NativeLoginUiHost.TryMount", login, StringComparison.Ordinal);
-        Assert.Contains(
-            "GetNode<CanvasLayer>(\"Content\").Visible = false",
-            login,
-            StringComparison.Ordinal);
         Assert.Contains("ShowFailure(nativeStatus)", login, StringComparison.Ordinal);
         Assert.DoesNotContain("ConvertedChrome", login, StringComparison.Ordinal);
         Assert.DoesNotContain("converted", login, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("DevelopmentFallback", login, StringComparison.Ordinal);
+
+        string scene = ReadSource("login.tscn");
+        Assert.DoesNotContain("node name=\"Content\"", scene, StringComparison.Ordinal);
+        Assert.DoesNotContain("node name=\"SignIn\"", scene, StringComparison.Ordinal);
+        Assert.DoesNotContain("node name=\"Register\"", scene, StringComparison.Ordinal);
+        Assert.DoesNotContain("node name=\"Back\"", scene, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -43,8 +45,27 @@ public sealed class NativeLoginRouteSourceTests
         Assert.Contains("if (_interactive\n                && inputEvent", host, StringComparison.Ordinal);
     }
 
-    private static string ReadSource(string name) => File.ReadAllText(Path.Combine(
-        AppContext.BaseDirectory,
-        "contract-source",
-        name));
+    [Fact]
+    public void LoginTeardownCancelsNavigationAndForgetsThePassword()
+    {
+        string login = ReadSource("LoginScreen.cs");
+
+        Assert.Contains(
+            "if (cancellation.IsCancellationRequested || !IsInsideTree())",
+            login,
+            StringComparison.Ordinal);
+        Assert.Contains("_model.Password = Secret.None", login, StringComparison.Ordinal);
+        Assert.Contains(
+            "ForgetPassword();\n        _session.Flow.CancelSignIn()",
+            login,
+            StringComparison.Ordinal);
+    }
+
+    private static string ReadSource(string name)
+    {
+        string directory = name.EndsWith(".tscn", StringComparison.Ordinal)
+            ? "contract-scenes"
+            : "contract-source";
+        return File.ReadAllText(Path.Combine(AppContext.BaseDirectory, directory, name));
+    }
 }

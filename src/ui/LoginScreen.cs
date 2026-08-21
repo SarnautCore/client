@@ -30,7 +30,6 @@ public partial class LoginScreen : Control
         _session = SessionHost.Of(this);
         _model = new LoginViewModel(_session.Auth, _session.Player);
 
-        GetNode<CanvasLayer>("Content").Visible = false;
         _failure = GetNode<CenterContainer>("%NativeFailure");
         _failureMessage = GetNode<Label>("%NativeFailureMessage");
 
@@ -53,6 +52,10 @@ public partial class LoginScreen : Control
     public override void _ExitTree()
     {
         _submitCancellation?.Cancel();
+        if (_model is not null)
+        {
+            _model.Password = Secret.None;
+        }
     }
 
     private async void Submit()
@@ -71,15 +74,20 @@ public partial class LoginScreen : Control
             Task<bool> signIn = _model.SignInAsync(cancellation.Token);
             Render();
             bool signedIn = await signIn;
+            if (cancellation.IsCancellationRequested || !IsInsideTree())
+            {
+                return;
+            }
+
             Render();
             if (!signedIn)
             {
-                _native?.ClearPassword();
+                ForgetPassword();
                 _native?.FocusPassword();
                 return;
             }
 
-            _native?.ClearPassword();
+            ForgetPassword();
             _session.Flow.SignedIn();
             _session.Show(Screen.CharacterSelect);
         }
@@ -93,6 +101,7 @@ public partial class LoginScreen : Control
             // is a bug in this build, and it is reported without the form's
             // contents.
             GD.PushError($"Login screen failed unexpectedly: {exception.GetType().Name}");
+            ForgetPassword();
             ShowFailure("Something went wrong in the client. See the log.");
         }
         finally
@@ -158,8 +167,15 @@ public partial class LoginScreen : Control
 
     private void Cancel()
     {
+        ForgetPassword();
         _session.Flow.CancelSignIn();
         _session.Show(Screen.Start);
+    }
+
+    private void ForgetPassword()
+    {
+        _model.Password = Secret.None;
+        _native?.ClearPassword();
     }
 
     private void ShowFailure(string message)

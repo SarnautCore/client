@@ -12,6 +12,7 @@ namespace SarnautCore;
 public partial class NativeLoginUiHost : Control
 {
     private const string VisualStateMetadata = "sarnaut_ui_visual_state";
+    private static WeakReference<NativeLoginUiHost>? s_cursorOwner;
 
     private readonly Dictionary<string, Control> _controls = new(StringComparer.Ordinal);
     private LoginViewModel _model = null!;
@@ -52,7 +53,7 @@ public partial class NativeLoginUiHost : Control
         }
 
         owner.RemoveChild(candidate);
-        candidate.QueueFree();
+        candidate.Free();
         host = null;
         return false;
     }
@@ -87,7 +88,12 @@ public partial class NativeLoginUiHost : Control
 
     public override void _ExitTree()
     {
-        Input.SetCustomMouseCursor(null, Input.CursorShape.Arrow);
+        if (s_cursorOwner?.TryGetTarget(out NativeLoginUiHost? owner) == true
+            && ReferenceEquals(owner, this))
+        {
+            Input.SetCustomMouseCursor(null, Input.CursorShape.Arrow);
+            s_cursorOwner = null;
+        }
     }
 
     private bool TryInitialize(
@@ -119,8 +125,10 @@ public partial class NativeLoginUiHost : Control
 
             using PackedScene scene = ResourceLoader.Load<PackedScene>(scenePath)
                 ?? throw new FileNotFoundException($"Native login scene is missing: {scenePath}");
-            if (scene.Instantiate() is not Control screenRoot)
+            Node instance = scene.Instantiate();
+            if (instance is not Control screenRoot)
             {
+                instance.Free();
                 throw new InvalidDataException(
                     $"Native login scene root must be Control: {scenePath}");
             }
@@ -341,6 +349,7 @@ public partial class NativeLoginUiHost : Control
             cursor.Texture,
             Input.CursorShape.Arrow,
             new Vector2(cursor.Hotspot.X, cursor.Hotspot.Y));
+        s_cursorOwner = new WeakReference<NativeLoginUiHost>(this);
     }
 
     private void ResetCursor()
@@ -352,10 +361,12 @@ public partial class NativeLoginUiHost : Control
                 cursor.Texture,
                 Input.CursorShape.Arrow,
                 new Vector2(cursor.Hotspot.X, cursor.Hotspot.Y));
+            s_cursorOwner = new WeakReference<NativeLoginUiHost>(this);
             return;
         }
 
         Input.SetCustomMouseCursor(null, Input.CursorShape.Arrow);
+        s_cursorOwner = new WeakReference<NativeLoginUiHost>(this);
     }
 
     private static void ApplyVisualState(Button button, UiRoleState state)
@@ -374,19 +385,58 @@ public partial class NativeLoginUiHost : Control
         var cursors = new List<UiCursorAsset<Texture2D>>(entries.Count);
         foreach (Variant rawKey in entries.Keys)
         {
+            if (rawKey.VariantType != Variant.Type.String)
+            {
+                throw new InvalidDataException(
+                    $"Native cursor catalog contains a non-string key: {path}");
+            }
+
             string key = rawKey.AsString();
-            Godot.Collections.Dictionary entry = entries[rawKey].AsGodotDictionary();
-            Texture2D texture = entry["texture"].AsGodotObject() as Texture2D
-                ?? throw new InvalidDataException(
+            Variant rawEntry = entries[rawKey];
+            if (rawEntry.VariantType != Variant.Type.Dictionary)
+            {
+                throw new InvalidDataException(
+                    $"Native cursor '{key}' is not a dictionary in {path}");
+            }
+
+            Godot.Collections.Dictionary entry = rawEntry.AsGodotDictionary();
+            RequireExactCursorFields(entry, path, key);
+            Variant rawTexture = entry["texture"];
+            Texture2D? texture = rawTexture.VariantType == Variant.Type.Object
+                ? rawTexture.AsGodotObject() as Texture2D
+                : null;
+            if (texture is null)
+            {
+                throw new InvalidDataException(
                     $"Native cursor '{key}' has no Texture2D in {path}");
-            Vector2I hotspot = entry["hotspot"].AsVector2I();
+            }
+
+            Variant rawHotspot = entry["hotspot"];
+            if (rawHotspot.VariantType != Variant.Type.Vector2I)
+            {
+                throw new InvalidDataException(
+                    $"Native cursor '{key}' has no Vector2I hotspot in {path}");
+            }
+
+            Vector2I hotspot = rawHotspot.AsVector2I();
+            if (hotspot.X < 0
+                || hotspot.Y < 0
+                || hotspot.X >= texture.GetWidth()
+                || hotspot.Y >= texture.GetHeight())
+            {
+                throw new InvalidDataException(
+                    $"Native cursor '{key}' hotspot is outside its texture in {path}");
+            }
+
             cursors.Add(new UiCursorAsset<Texture2D>(
                 key,
                 new UiCursorHotspot(hotspot.X, hotspot.Y),
                 texture));
         }
 
-        return new UiCursorCatalog<Texture2D>(cursors);
+        var catalog = new UiCursorCatalog<Texture2D>(cursors);
+        catalog.GetRequired("default");
+        return catalog;
     }
 
     private static UiSoundCatalog<AudioStream> LoadSoundCatalog(string path)
@@ -400,10 +450,23 @@ public partial class NativeLoginUiHost : Control
         var sounds = new List<UiSoundAsset<AudioStream>>(entries.Count);
         foreach (Variant rawKey in entries.Keys)
         {
+            if (rawKey.VariantType != Variant.Type.String)
+            {
+                throw new InvalidDataException(
+                    $"Native sound catalog contains a non-string key: {path}");
+            }
+
             string key = rawKey.AsString();
-            AudioStream sound = entries[rawKey].AsGodotObject() as AudioStream
-                ?? throw new InvalidDataException(
+            Variant rawSound = entries[rawKey];
+            AudioStream? sound = rawSound.VariantType == Variant.Type.Object
+                ? rawSound.AsGodotObject() as AudioStream
+                : null;
+            if (sound is null)
+            {
+                throw new InvalidDataException(
                     $"Native sound '{key}' has no AudioStream in {path}");
+            }
+
             sounds.Add(new UiSoundAsset<AudioStream>(key, sound));
         }
 
@@ -429,5 +492,26 @@ public partial class NativeLoginUiHost : Control
         }
 
         return metadata.AsGodotDictionary();
+    }
+
+    private static void RequireExactCursorFields(
+        Godot.Collections.Dictionary dictionary,
+        string path,
+        string cursor)
+    {
+        if (dictionary.Keys.Any(key => key.VariantType != Variant.Type.String))
+        {
+            throw new InvalidDataException(
+                $"Native cursor '{cursor}' has a non-string field in {path}");
+        }
+
+        var fields = dictionary.Keys
+            .Select(key => key.AsString())
+            .ToHashSet(StringComparer.Ordinal);
+        if (fields.Count != 2 || !fields.SetEquals(["texture", "hotspot"]))
+        {
+            throw new InvalidDataException(
+                $"Native cursor '{cursor}' has incompatible fields in {path}");
+        }
     }
 }

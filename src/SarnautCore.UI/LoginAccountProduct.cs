@@ -41,6 +41,21 @@ public sealed class LoginAccountProduct
         QuitAction,
     ];
 
+    private static readonly string[] RequiredValues =
+    [
+        AccountValue,
+        PasswordValue,
+    ];
+
+    private static readonly string[] RequiredButtons =
+    [
+        EnterRole,
+        OptionsRole,
+        LocalRole,
+        CreditsRole,
+        ExitRole,
+    ];
+
     private LoginAccountProduct(
         UiScreenDefinition screen,
         UiValueBinding account,
@@ -64,6 +79,14 @@ public sealed class LoginAccountProduct
 
         RequireExactSet(screen.Roles.Select(role => role.Id), RequiredRoles, "role");
         RequireExactSet(screen.Actions.Select(action => action.Id), RequiredActions, "action");
+        RequireExactSet(screen.Values.Select(value => value.Id), RequiredValues, "value");
+        RequireExactSet(screen.Buttons.Select(button => button.Role), RequiredButtons, "button");
+        if (screen.Collections.Count != 0)
+        {
+            throw new InvalidDataException(
+                $"Screen '{ScreenId}' has an incompatible collection set");
+        }
+
         if (!screen.FocusOrder.SequenceEqual(RequiredRoles, StringComparer.Ordinal))
         {
             throw new InvalidDataException(

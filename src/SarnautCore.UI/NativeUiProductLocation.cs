@@ -19,6 +19,20 @@ public static class NativeUiProductLocation
     public static string Resolve(string manifestPath, NativeContentPath relativePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(manifestPath);
+        string resourcePath = manifestPath.StartsWith("res://", StringComparison.Ordinal)
+            ? manifestPath["res://".Length..]
+            : string.Empty;
+        if (!manifestPath.StartsWith("res://", StringComparison.Ordinal)
+            || manifestPath.Contains('\\')
+            || resourcePath.Contains(':')
+            || resourcePath.Split('/').Any(part => part is "" or "." or "..")
+            || !manifestPath.EndsWith($"/{ManifestFile}", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"UI manifest must be a confined res:// path ending in {ManifestFile}",
+                nameof(manifestPath));
+        }
+
         int separator = manifestPath.LastIndexOf('/');
         if (separator <= "res://".Length)
         {
@@ -34,6 +48,7 @@ public static class NativeUiProductLocation
         string root = nativeRoot.TrimEnd('/');
         if (!root.StartsWith("res://", StringComparison.Ordinal)
             || root.Contains('\\')
+            || root["res://".Length..].Contains(':')
             || root["res://".Length..].Split('/').Any(part => part is "" or "." or ".."))
         {
             throw new ArgumentException(

@@ -26,6 +26,9 @@
     <None Include="../../src/ui/NativeLoginUiHost.cs"
           Link="contract-source/NativeLoginUiHost.cs"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../scenes/ui/login.tscn"
+          Link="contract-scenes/login.tscn"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../src/SarnautCore.UI/UiRuntimeKey.cs"
           Link="contract-source/UiRuntimeKey.cs"
           CopyToOutputDirectory="PreserveNewest" />
