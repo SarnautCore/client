@@ -3,14 +3,15 @@ namespace SarnautCore.UI.Tests;
 public sealed class NativeLoginRouteSourceTests
 {
     [Fact]
-    public void LoginProductRouteCannotCallLegacyChrome()
+    public void LoginUsesTheTypedProductHost()
     {
         string login = ReadSource("LoginScreen.cs");
 
-        Assert.Contains("NativeLoginUiHost.TryMount", login, StringComparison.Ordinal);
-        Assert.Contains("ShowFailure(nativeStatus)", login, StringComparison.Ordinal);
+        Assert.Contains("NativeUiProductHost.TryMount", login, StringComparison.Ordinal);
+        Assert.Contains("RegisterController(_loginScreen, HandleNativeAction)", login, StringComparison.Ordinal);
+        Assert.Contains("HandleNativeAction(UiActionInvocation invocation)", login, StringComparison.Ordinal);
+        Assert.DoesNotContain("LoginAccountProduct", login, StringComparison.Ordinal);
         Assert.DoesNotContain("ConvertedChrome", login, StringComparison.Ordinal);
-        Assert.DoesNotContain("converted", login, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("DevelopmentFallback", login, StringComparison.Ordinal);
 
         string scene = ReadSource("login.tscn");
@@ -20,29 +21,46 @@ public sealed class NativeLoginRouteSourceTests
         Assert.DoesNotContain("node name=\"Back\"", scene, StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData("ConvertedChrome")]
-    [InlineData("converted/")]
-    [InlineData(".ui.json")]
-    [InlineData(".xdb")]
-    public void NativeHostHasNoInputOrConversionVocabulary(string forbidden)
+    [Fact]
+    public void ProductHostAcceptsOnlyCompiledNativeResources()
     {
-        string runtime = string.Join(
-            '\n',
-            ReadSource("NativeLoginUiHost.cs"),
-            ReadSource("UiRuntimeKey.cs"),
-            ReadSource("UiManifestJson.cs"));
+        string host = ReadSource("NativeUiProductHost.cs");
 
-        Assert.DoesNotContain(forbidden, runtime, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("UiProductResourceEncoding.Compiled", host, StringComparison.Ordinal);
+        Assert.Contains("LoadRequired<Theme>(Manifest.Theme", host, StringComparison.Ordinal);
+        Assert.Contains("LoadRequired<PackedScene>", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConvertedSceneLoader", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("Allods.ttf", host, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(".godot", host, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(".import", host, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void DisabledNativeInputsCannotDispatchKeyboardActions()
+    public void ProductHostKeepsTypedRuntimeSemantics()
     {
-        string host = ReadSource("NativeLoginUiHost.cs");
+        string host = ReadSource("NativeUiProductHost.cs");
 
-        Assert.Contains("if (_interactive)", host, StringComparison.Ordinal);
-        Assert.Contains("if (_interactive\n                && inputEvent", host, StringComparison.Ordinal);
+        Assert.Contains("state.RouteInput(input)", host, StringComparison.Ordinal);
+        Assert.Contains("dispatch.Cue", host, StringComparison.Ordinal);
+        Assert.Contains("dispatch.Invocations", host, StringComparison.Ordinal);
+        Assert.Contains("UiCollectionItemContext", ReadSource("UiWidgetState.cs"), StringComparison.Ordinal);
+        Assert.Contains("screen.State.Collections", host, StringComparison.Ordinal);
+        Assert.Contains("state.IsSelected", host, StringComparison.Ordinal);
+        Assert.Contains("Func<UiActionInvocation, bool>", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("ActionIds", host, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProductHostOwnsVisibilityFocusCursorAndSound()
+    {
+        string host = ReadSource("NativeUiProductHost.cs");
+
+        Assert.Contains("SetScreenVisible", host, StringComparison.Ordinal);
+        Assert.Contains("SetRoleVisible", host, StringComparison.Ordinal);
+        Assert.Contains("ApplyFocusOrder", host, StringComparison.Ordinal);
+        Assert.Contains("Input.SetCustomMouseCursor", host, StringComparison.Ordinal);
+        Assert.Contains("AudioStreamPlayer", host, StringComparison.Ordinal);
+        Assert.Contains("ReplaceCollection", host, StringComparison.Ordinal);
     }
 
     [Fact]

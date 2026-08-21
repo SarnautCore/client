@@ -18,11 +18,28 @@ namespace SarnautCore;
 /// </remarks>
 public partial class LoginScreen : Control
 {
+    private const string LoginScreenId = "login-account";
+    private const string AccountValueId = "account-name";
+    private const string PasswordValueId = "account-password";
+    private const string EnterRoleId = "enter-button";
+    private const string PasswordRoleId = "password-input";
+    private const string SubmitActionId = "submit-login";
+    private const string CancelActionId = "cancel-login";
+    private const string QuitActionId = "quit";
+    private const string UpdateAccountActionId = "update-account-name";
+    private const string UpdatePasswordActionId = "update-account-password";
+    private const string FocusNextActionId = "focus-next";
+
     private SessionHost _session = null!;
     private LoginViewModel _model = null!;
     private CenterContainer _failure = null!;
     private Label _failureMessage = null!;
-    private NativeLoginUiHost? _native;
+    private NativeUiProductHost? _native;
+    private UiScreenDefinition _loginScreen = null!;
+    private UiValueBinding _accountValue = null!;
+    private UiValueBinding _passwordValue = null!;
+    private UiRoleDefinition _enterRole = null!;
+    private UiRoleDefinition _passwordRole = null!;
     private CancellationTokenSource? _submitCancellation;
 
     public override void _Ready()
@@ -33,10 +50,8 @@ public partial class LoginScreen : Control
         _failure = GetNode<CenterContainer>("%NativeFailure");
         _failureMessage = GetNode<Label>("%NativeFailureMessage");
 
-        bool nativeMounted = NativeLoginUiHost.TryMount(
+        bool nativeMounted = NativeUiProductHost.TryMount(
             this,
-            _model,
-            HandleNativeAction,
             out _native,
             out string nativeStatus);
         if (!nativeMounted)
@@ -44,6 +59,20 @@ public partial class LoginScreen : Control
             ShowFailure(nativeStatus);
             return;
         }
+
+        _loginScreen = _native!.GetScreen(LoginScreenId);
+        _accountValue = _native.GetValue(_loginScreen, AccountValueId);
+        _passwordValue = _native.GetValue(_loginScreen, PasswordValueId);
+        _enterRole = _native.GetRole(_loginScreen, EnterRoleId);
+        _passwordRole = _native.GetRole(_loginScreen, PasswordRoleId);
+        _native.RegisterController(_loginScreen, HandleNativeAction);
+        foreach (UiScreenDefinition screen in _native.Manifest.Screens)
+        {
+            _native.SetScreenVisible(screen, visible: false, focusFirst: false);
+        }
+        _native.SetText(_loginScreen, _accountValue, _model.Email);
+        _native.SetText(_loginScreen, _passwordValue, string.Empty);
+        _native.SetScreenVisible(_loginScreen, visible: true);
 
         GD.Print($"Login screen: {nativeStatus}");
         Render();
@@ -83,7 +112,10 @@ public partial class LoginScreen : Control
             if (!signedIn)
             {
                 ForgetPassword();
-                _native?.FocusPassword();
+                if (_native is not null)
+                {
+                    _native.Focus(_loginScreen, _passwordRole);
+                }
                 return;
             }
 
@@ -121,7 +153,10 @@ public partial class LoginScreen : Control
 
     private void SetInteractive(bool interactive)
     {
-        _native?.SetInteractive(interactive);
+        if (_native is not null)
+        {
+            _native.SetInteractive(_loginScreen, interactive);
+        }
     }
 
     private void Render()
@@ -131,37 +166,38 @@ public partial class LoginScreen : Control
         _failureMessage.AddThemeColorOverride(
             "font_color",
             _model.MessageIsError ? UiTheme.ErrorInk : UiTheme.MutedInk);
-        _native?.RenderModelState();
+        if (_native is not null)
+        {
+            _native.SetRoleEnabled(_loginScreen, _enterRole, _model.CanSubmit);
+        }
     }
 
-    private void HandleNativeAction(string action)
+    private bool HandleNativeAction(UiActionInvocation invocation)
     {
-        switch (action)
+        switch (invocation.Id)
         {
-            case LoginAccountProduct.SubmitAction:
+            case SubmitActionId:
                 Submit();
-                break;
-            case LoginAccountProduct.CancelAction:
+                return true;
+            case CancelActionId:
                 Cancel();
-                break;
-            case LoginAccountProduct.ToggleOptionsAction:
-                // The native host applies the product-owned toggle variant.
-                break;
-            case LoginAccountProduct.LocalSessionAction:
-                _session.Zone = ZoneRequest.Offline(
-                    _session.Zone.MapName,
-                    _session.Zone.ZoneId);
-                GetTree().ChangeSceneToFile("res://scenes/zone_walkabout.tscn");
-                break;
-            case LoginAccountProduct.CreditsAction:
-                ShowFailure("Credits are not available in this build.");
-                break;
-            case LoginAccountProduct.QuitAction:
+                return true;
+            case QuitActionId:
                 GetTree().Quit();
-                break;
+                return true;
+            case UpdateAccountActionId:
+                _model.Email = _native!.ReadText(_loginScreen, _accountValue);
+                Render();
+                return true;
+            case UpdatePasswordActionId:
+                _model.Password = new Secret(
+                    _native!.ReadText(_loginScreen, _passwordValue));
+                Render();
+                return true;
+            case FocusNextActionId:
+                return true;
             default:
-                GD.PushError($"Native login dispatched unknown action '{action}'.");
-                break;
+                return false;
         }
     }
 
@@ -175,7 +211,10 @@ public partial class LoginScreen : Control
     private void ForgetPassword()
     {
         _model.Password = Secret.None;
-        _native?.ClearPassword();
+        if (_native is not null)
+        {
+            _native.SetText(_loginScreen, _passwordValue, string.Empty);
+        }
     }
 
     private void ShowFailure(string message)
