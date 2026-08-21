@@ -15,6 +15,8 @@ public readonly record struct EntityHudSnapshot(
 /// <summary>Selected-target state for the target frame and addon event source.</summary>
 public sealed class TargetViewModel
 {
+    private int? _reliableCombatHealth;
+
     public ulong EntityId { get; private set; }
 
     public string NameKey { get; private set; } = string.Empty;
@@ -38,6 +40,41 @@ public sealed class TargetViewModel
     public event Action<ulong>? TargetDied;
 
     public void Select(EntityHudSnapshot snapshot)
+    {
+        _reliableCombatHealth = null;
+        ApplySnapshot(snapshot);
+    }
+
+    /// <summary>
+    /// Applies a replicated observation without allowing an older snapshot to
+    /// undo health already delivered by the reliable combat stream.
+    /// Implements specs/protocol/session.md rule 5.5.9.
+    /// </summary>
+    public void Observe(EntityHudSnapshot snapshot)
+    {
+        if (snapshot.EntityId != EntityId)
+        {
+            return;
+        }
+
+        if (_reliableCombatHealth is int reliableHealth
+            && snapshot.Alive
+            && snapshot.Health > reliableHealth)
+        {
+            // Snapshots arrive on an ordered QUIC stream, so a later snapshot always
+            // carries newer information. The latch release on snapshot.Health <= latch
+            // is sound because any newer snapshot will have at least as much health.
+            snapshot = snapshot with { Health = Health, MaxHealth = MaxHealth, Alive = Alive };
+        }
+        else
+        {
+            _reliableCombatHealth = null;
+        }
+
+        ApplySnapshot(snapshot);
+    }
+
+    private void ApplySnapshot(EntityHudSnapshot snapshot)
     {
         int level = Math.Max(0, snapshot.Level);
         int health = Math.Max(0, snapshot.Health);
@@ -72,6 +109,7 @@ public sealed class TargetViewModel
         }
 
         EntityId = 0;
+        _reliableCombatHealth = null;
         NameKey = string.Empty;
         ContentId = string.Empty;
         Level = 0;
@@ -93,6 +131,7 @@ public sealed class TargetViewModel
         Health = Math.Max(0, combatEvent.TargetHealth);
         MaxHealth = Math.Max(0, combatEvent.TargetMaxHealth);
         Alive = Health > 0 && !combatEvent.KillingBlow;
+        _reliableCombatHealth = Health;
         Changed?.Invoke();
         if (wasAlive && !Alive)
         {
@@ -110,6 +149,7 @@ public sealed class TargetViewModel
 
         Health = 0;
         Alive = false;
+        _reliableCombatHealth = 0;
         Changed?.Invoke();
         TargetDied?.Invoke(EntityId);
     }

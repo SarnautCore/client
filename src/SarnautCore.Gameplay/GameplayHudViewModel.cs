@@ -8,7 +8,6 @@ public interface IQuestStateUpdateAdapter
 {
     bool TryMap(QuestStateUpdate message, out QuestUpdate update);
 }
-
 /// <summary>
 /// The plain-C# gameplay HUD. It is the single dispatch destination for server
 /// events and the shared model tree for thin Godot controls.
@@ -112,7 +111,7 @@ public sealed class GameplayHudViewModel
         DeathFeedback.Observe(snapshot);
         if (Target.EntityId == snapshot.EntityId)
         {
-            Target.Select(snapshot);
+            Target.Observe(snapshot);
         }
     }
 

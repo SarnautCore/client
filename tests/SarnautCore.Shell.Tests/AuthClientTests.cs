@@ -196,4 +196,20 @@ public sealed class AuthClientTests
         Assert.Equal(-3.25f, option.SpawnY);
         Assert.Equal(40f, option.SpawnZ);
     }
+
+    [Fact]
+    public async Task Canonical_content_zone_id_becomes_the_session_zone_slug()
+    {
+        AuthClient auth = FakeAuthTransport.Always(
+            HttpStatusCode.OK,
+            """
+            {"options":[{"id":"chargen.league.warrior","race":"kanian","class":"warrior","sex":"female",
+            "faction":"league","name_key":"name","description_key":"description","visual_ref":"visual",
+            "spawn_zone_id":"zone.inst-league1","starting_level":1,"spawn_x":0,"spawn_y":0,"spawn_z":0}]}
+            """).Auth();
+
+        ChargenOption option = Assert.Single(await auth.ListChargenOptionsAsync());
+
+        Assert.Equal("inst-league1", option.SpawnZoneId);
+    }
 }

@@ -120,6 +120,100 @@ public sealed class GameplayHudViewModelTests
         Assert.Equal((ulong)0, hud.Target.EntityId);
     }
 
+    [Fact]
+    public void Reliable_death_waits_for_authoritative_despawn()
+    {
+        var hud = new GameplayHudViewModel(7, []);
+        hud.SelectTarget(new EntityHudSnapshot(42, "mob.name", "mob.earth", 2, 20, 20, true));
+
+        hud.Route(new ServerMessage
+        {
+            DeathEvent = new DeathEvent { VictimEntityId = 42, KillerEntityId = 7 },
+        });
+        hud.ObserveEntity(new EntityHudSnapshot(42, "mob.name", "mob.earth", 2, 20, 20, true));
+
+        Assert.Equal((ulong)42, hud.Target.EntityId);
+        Assert.False(hud.Target.Alive);
+        Assert.Equal(0, hud.Target.Health);
+
+        hud.Route(new ServerMessage { DespawnEvent = new DespawnEvent { EntityId = 42 } });
+
+        Assert.Equal((ulong)0, hud.Target.EntityId);
+    }
+
+    [Fact]
+    public void Stale_snapshot_does_not_overwrite_reliable_combat_health()
+    {
+        var hud = new GameplayHudViewModel(7, []);
+        var stale = new EntityHudSnapshot(42, "mob.name", "mob.earth", 2, 32, 32, true);
+        hud.SelectTarget(stale);
+
+        hud.Route(new ServerMessage
+        {
+            CombatEvent = new CombatEvent
+            {
+                CasterId = 7,
+                TargetId = 42,
+                Damage = 20,
+                TargetHealth = 12,
+                TargetMaxHealth = 32,
+                Rejection = AbilityRejection.None,
+            },
+        });
+        hud.ObserveEntity(stale);
+
+        Assert.Equal(12, hud.Target.Health);
+        Assert.Equal(32, hud.Target.MaxHealth);
+        Assert.True(hud.Target.Alive);
+    }
+
+    [Fact]
+    public void Caught_up_snapshot_releases_reliable_health_latch()
+    {
+        var hud = new GameplayHudViewModel(7, []);
+        hud.SelectTarget(new EntityHudSnapshot(42, "mob.name", "mob.earth", 2, 32, 32, true));
+        hud.Route(new ServerMessage
+        {
+            CombatEvent = new CombatEvent
+            {
+                CasterId = 7,
+                TargetId = 42,
+                Damage = 20,
+                TargetHealth = 12,
+                TargetMaxHealth = 32,
+            },
+        });
+
+        hud.ObserveEntity(new EntityHudSnapshot(42, "mob.name", "mob.earth", 2, 12, 32, true));
+        hud.ObserveEntity(new EntityHudSnapshot(42, "mob.name", "mob.earth", 2, 20, 32, true));
+
+        Assert.Equal(20, hud.Target.Health);
+    }
+
+    [Fact]
+    public void Selecting_new_target_clears_reliable_health_latch()
+    {
+        var hud = new GameplayHudViewModel(7, []);
+        hud.SelectTarget(new EntityHudSnapshot(42, "mob.first", "mob.earth", 2, 32, 32, true));
+        hud.Route(new ServerMessage
+        {
+            CombatEvent = new CombatEvent
+            {
+                CasterId = 7,
+                TargetId = 42,
+                Damage = 20,
+                TargetHealth = 12,
+                TargetMaxHealth = 32,
+            },
+        });
+
+        hud.SelectTarget(new EntityHudSnapshot(43, "mob.second", "mob.air", 3, 50, 60, true));
+        hud.ObserveEntity(new EntityHudSnapshot(43, "mob.second", "mob.air", 3, 60, 60, true));
+
+        Assert.Equal((ulong)43, hud.Target.EntityId);
+        Assert.Equal(60, hud.Target.Health);
+    }
+
     private static QuestStateUpdate Quest(QuestState state, int current = 0)
     {
         var update = new QuestStateUpdate

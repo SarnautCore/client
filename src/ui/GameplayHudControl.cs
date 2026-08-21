@@ -17,7 +17,10 @@ public partial class GameplayHudControl : Control
     private QuestDialogueControl _dialogue = null!;
     private DamageNumbersControl _damageNumbers = null!;
 
-    public void Initialize(GameplayHudViewModel model, ZoneNetworkLoop network)
+    public void Initialize(
+        GameplayHudViewModel model,
+        ZoneNetworkLoop network,
+        Control? bottomReservedControl = null)
     {
         _model = model ?? throw new ArgumentNullException(nameof(model));
         _network = network ?? throw new ArgumentNullException(nameof(network));
@@ -35,7 +38,7 @@ public partial class GameplayHudControl : Control
         AddChild(target);
 
         var abilities = new AbilityBarControl();
-        abilities.Bind(model.Abilities, model.Target);
+        abilities.Bind(model.Abilities, model.Target, bottomReservedControl);
         AddChild(abilities);
 
         var death = new DeathFeedbackControl();
@@ -195,24 +198,188 @@ public partial class GameplayHudControl : Control
 
 public partial class TargetFrameControl : Control
 {
+    private static readonly Color HealthFill = new(0.36f, 0.68f, 0.22f);
+    private const string PortraitClipMask = ConvertedCharacter.DefaultConvertedRoot
+        + "/assets/Interface/Ingame/ContextPlates/Common/GenericPortrait/PortraitClipMask.(UITexture).png";
+
     private TargetViewModel _model = null!;
     private Label _title = null!;
     private Label _healthText = null!;
-    private ProgressBar _health = null!;
+    private Label? _level;
+    private Control? _gauge;
+    private CanvasItem? _deathSplash;
+    private ProgressBar? _health;
 
     public void Bind(TargetViewModel model)
     {
         _model = model;
-        HudLayout.Place(this, 0.5f, 0, -190, 88, 190, 174);
+        // The authored plate is a 348x110 composition; the host must keep that
+        // aspect because Mount stretches the chrome to fill it.
+        HudLayout.Place(this, 0.5f, 0, -174, 88, 174, 198);
         ClipContents = true;
-        bool converted = ConvertedHudChrome.Mount(this, ConvertedHudChrome.TargetSelection);
-        VBoxContainer body = HudLayout.Panel(this, "Target", converted);
-        _title = HudLayout.Label(body, string.Empty, 18);
-        _health = new ProgressBar { MinValue = 0, MaxValue = 100, ShowPercentage = false, CustomMinimumSize = new Vector2(330, 14) };
-        body.AddChild(_health);
-        _healthText = HudLayout.Label(body, string.Empty, 13);
+        bool converted = ConvertedHudChrome.Mount(this, ConvertedHudChrome.TargetPlate);
+        if (converted && GetNodeOrNull<Control>("ConvertedChrome") is { } chrome)
+        {
+            BindPlate(chrome);
+        }
+
+        // Fall back to code-built panel if the converted plate is absent or missing core slots.
+        if (_title == null || _healthText == null)
+        {
+            VBoxContainer body = HudLayout.Panel(this, "Target", false);
+            _title = HudLayout.Label(body, string.Empty, 18);
+            _health = new ProgressBar { MinValue = 0, MaxValue = 100, ShowPercentage = false, CustomMinimumSize = new Vector2(330, 14) };
+            body.AddChild(_health);
+            _healthText = HudLayout.Label(body, string.Empty, 13);
+        }
+
         model.Changed += Refresh;
         Refresh();
+    }
+
+    /// <summary>Drives the authored unit plate's own slots instead of overlaying a fallback panel.</summary>
+    private void BindPlate(Control chrome)
+    {
+        // Conditional gameplay decorations stay hidden until a target model
+        // carries them: PvP flag, leader crown, cult halo, elite-quality
+        // ornament, combat status, wound ticks, and the mana gauge (creature
+        // targets have no mana pool yet).
+        foreach (string conditional in (string[])
+            [
+                "PvPFlag",
+                "Crown",
+                "HaloSign",
+                "Bars/Mana",
+                "Bars/Health/Wounds",
+                "Frame/UnitQuality",
+                "Frame/Portrait/Combat",
+            ])
+        {
+            if (chrome.GetNodeOrNull<CanvasItem>(conditional) is { } decoration)
+            {
+                decoration.Visible = false;
+            }
+        }
+
+        Label? title = chrome.GetNodeOrNull<Label>("Label");
+        if (title is not null)
+        {
+            _title = title;
+            _title.VerticalAlignment = VerticalAlignment.Center;
+        }
+        else
+        {
+            GD.PushWarning("Target plate missing core slot: Label");
+        }
+
+        _level = chrome.GetNodeOrNull<Label>("Level/Label");
+        if (_level is not null)
+        {
+            FillSlot(_level, 14);
+        }
+
+        Label? healthText = chrome.GetNodeOrNull<Label>("Bars/Health/Text");
+        if (healthText is not null)
+        {
+            _healthText = healthText;
+            FillSlot(_healthText, 13);
+        }
+        else
+        {
+            GD.PushWarning("Target plate missing core slot: Bars/Health/Text");
+        }
+
+        _gauge = chrome.GetNodeOrNull<Control>("Bars/Health/Gauge");
+        if (_gauge is not null)
+        {
+            _gauge.Modulate = HealthFill;
+        }
+
+        _deathSplash = chrome.GetNodeOrNull<CanvasItem>("Frame/Portrait/Splash");
+
+        // The portrait is a converted Button with no authored "normal" style,
+        // so Godot's default gray panel peeks out square behind the round
+        // frame; the original engine never draws a button background there.
+        if (chrome.GetNodeOrNull<Button>("Frame/Portrait") is { } portrait)
+        {
+            portrait.AddThemeStyleboxOverride("normal", new StyleBoxEmpty());
+            portrait.AddThemeStyleboxOverride("disabled", new StyleBoxEmpty());
+            portrait.AddThemeStyleboxOverride("focus", new StyleBoxEmpty());
+        }
+
+        ClipPortraitToAuthoredMask(chrome);
+    }
+
+    /// <summary>
+    /// The portrait art is square; the original engine clips it to the round
+    /// frame with PortraitClipMask, which plain TextureRects cannot do, so the
+    /// mask's alpha is applied through a shared canvas shader instead.
+    /// </summary>
+    private static void ClipPortraitToAuthoredMask(Control chrome)
+    {
+        if (chrome.GetNodeOrNull<Control>("Frame/Portrait/Image") is not { } image)
+        {
+            return;
+        }
+
+        Texture2D? mask = UpscaledTextures.Load(PortraitClipMask)
+            ?? (ConvertedSceneLoader.IsLoadable(PortraitClipMask)
+                ? ResourceLoader.Load<Texture2D>(PortraitClipMask)
+                : null);
+        if (mask is null)
+        {
+            return;
+        }
+
+        ShaderMaterial masked = MaskMaterial(mask, """
+            shader_type canvas_item;
+            uniform sampler2D clip_mask;
+            void fragment() {
+                COLOR.a *= texture(clip_mask, UV).a;
+            }
+            """);
+        // Multiplying by white is a no-op, so the multiply-blend shade fades
+        // to white outside the mask instead of fading to transparent.
+        ShaderMaterial maskedMultiply = MaskMaterial(mask, """
+            shader_type canvas_item;
+            render_mode blend_mul;
+            uniform sampler2D clip_mask;
+            void fragment() {
+                COLOR.rgb = mix(vec3(1.0), COLOR.rgb, COLOR.a * texture(clip_mask, UV).a);
+                COLOR.a = 1.0;
+            }
+            """);
+        foreach (Node child in image.GetChildren())
+        {
+            if (child is TextureRect layer)
+            {
+                layer.Material = layer.Material is CanvasItemMaterial
+                {
+                    BlendMode: CanvasItemMaterial.BlendModeEnum.Mul,
+                }
+                    ? maskedMultiply
+                    : masked;
+            }
+        }
+    }
+
+    private static ShaderMaterial MaskMaterial(Texture2D mask, string shaderCode)
+    {
+        var material = new ShaderMaterial { Shader = new Shader { Code = shaderCode } };
+        material.SetShaderParameter("clip_mask", mask);
+        return material;
+    }
+
+    /// <summary>
+    /// The converter emits text-view labels autosized by the original engine,
+    /// so they arrive zero-width; stretch them over their authored slot.
+    /// </summary>
+    private static void FillSlot(Label label, int fontSize)
+    {
+        label.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+        label.HorizontalAlignment = HorizontalAlignment.Center;
+        label.VerticalAlignment = VerticalAlignment.Center;
+        label.AddThemeFontSizeOverride("font_size", fontSize);
     }
 
     public override void _ExitTree()
@@ -237,25 +404,56 @@ public partial class TargetFrameControl : Control
             name = CanonicalText.Fallback(_model.ContentId);
         }
 
-        _title.Text = _model.Level > 0 ? $"{name}  ·  {_model.Level}" : name;
-        _health.Value = _model.HealthFraction * 100;
+        bool plate = _gauge is not null || _level is not null;
+        _title.Text = plate || _model.Level <= 0 ? name : $"{name}  ·  {_model.Level}";
+        if (_level is not null)
+        {
+            _level.Text = _model.Level > 0 ? _model.Level.ToString() : string.Empty;
+        }
+
+        if (_gauge is not null)
+        {
+            _gauge.AnchorRight = Mathf.Clamp((float)_model.HealthFraction, 0f, 1f);
+        }
+
+        if (_health is not null)
+        {
+            _health.Value = _model.HealthFraction * 100;
+        }
+
+        if (_deathSplash is not null)
+        {
+            _deathSplash.Visible = !_model.Alive;
+        }
+
         _healthText.Text = _model.Alive ? $"{_model.Health:N0} / {_model.MaxHealth:N0}" : "Defeated";
     }
 }
 
 public partial class AbilityBarControl : Control
 {
+    private const float HalfWidth = 250;
+    private const float Height = 86;
+    private const float BottomGap = 8;
+
     private AbilityBarViewModel _model = null!;
     private TargetViewModel _target = null!;
     private readonly List<Button> _buttons = [];
+    private Control? _bottomReservedControl;
+    private Rect2 _lastReservedRect;
+    private Rect2 _lastParentRect;
 
-    public void Bind(AbilityBarViewModel model, TargetViewModel target)
+    public void Bind(
+        AbilityBarViewModel model,
+        TargetViewModel target,
+        Control? bottomReservedControl = null)
     {
         _model = model;
         _target = target;
-        HudLayout.Place(this, 0.5f, 1, -250, -108, 250, -22);
+        _bottomReservedControl = bottomReservedControl;
+        HudLayout.Place(this, 0.5f, 1, -HalfWidth, -108, HalfWidth, -22);
         ClipContents = true;
-        bool converted = ConvertedHudChrome.Mount(this, ConvertedHudChrome.Character);
+        bool converted = ConvertedHudChrome.Mount(this, ConvertedHudChrome.AbilityBar);
         VBoxContainer body = HudLayout.Panel(this, "Abilities", converted);
         var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
         body.AddChild(row);
@@ -276,6 +474,26 @@ public partial class AbilityBarControl : Control
 
         model.Changed += Refresh;
         Refresh();
+    }
+
+    public override void _Process(double delta)
+    {
+        if (_bottomReservedControl is null || GetParent() is not Control parent)
+        {
+            return;
+        }
+
+        Rect2 reservedRect = _bottomReservedControl.GetGlobalRect();
+        Rect2 parentRect = parent.GetGlobalRect();
+        if (reservedRect.IsEqualApprox(_lastReservedRect) && parentRect.IsEqualApprox(_lastParentRect))
+        {
+            return;
+        }
+
+        _lastReservedRect = reservedRect;
+        _lastParentRect = parentRect;
+        float bottom = reservedRect.Position.Y - parentRect.Position.Y - BottomGap;
+        HudLayout.Place(this, 0.5f, 0, -HalfWidth, bottom - Height, HalfWidth, bottom);
     }
 
     public override void _ExitTree()
@@ -478,7 +696,7 @@ public partial class InventoryControl : Control
     {
         _model = model;
         HudLayout.Place(this, 1, 0.5f, -430, -288, -22, 288);
-        bool converted = ConvertedHudChrome.Mount(this, ConvertedHudChrome.Multibag);
+        bool converted = ConvertedHudChrome.Mount(this, ConvertedHudChrome.Inventory);
         VBoxContainer body = HudLayout.Panel(this, "Bags", converted);
         _grid = new GridContainer { Columns = 4 };
         body.AddChild(_grid);
