@@ -311,7 +311,7 @@ public sealed class UiWidgetStateTests
         const string json = """
             {
               "schema_id": "sarnaut.ui-product/v2",
-              "catalogs": { "cursors": "catalogs/cursors.tres", "sounds": "catalogs/sounds.tres" },
+              "catalogs": { "cursors": "catalogs/cursors.tres", "sounds": "catalogs/sounds.tres", "theme": "ui_theme.tres" },
               "screens": [{
                 "id": "inventory",
                 "scene": "screens/inventory.tscn",

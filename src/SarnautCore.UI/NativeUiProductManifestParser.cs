@@ -30,7 +30,7 @@ public static class NativeUiProductManifestParser
             "catalogs",
             JsonValueKind.Object,
             "manifest");
-        UiManifestJson.Only(catalogs, "catalogs", "cursors", "sounds");
+        UiManifestJson.Only(catalogs, "catalogs", "cursors", "sounds", "theme");
         string cursorCatalogValue = UiManifestJson.String(catalogs, "cursors", "catalogs");
         UiProductResourceEncoding resourceEncoding = CatalogEncoding(cursorCatalogValue);
         string catalogExtension = resourceEncoding == UiProductResourceEncoding.Compiled
@@ -46,6 +46,11 @@ public static class NativeUiProductManifestParser
             "sounds",
             catalogExtension,
             "catalogs");
+        NativeContentPath theme = UiManifestJson.Path(
+            catalogs,
+            "theme",
+            catalogExtension,
+            "catalogs");
 
         UiScreenDefinition[] screens = UiManifestJson.Array(
             root,
@@ -58,7 +63,7 @@ public static class NativeUiProductManifestParser
         }
 
         UiManifestJson.Unique(screens.Select(screen => screen.Id), "screen id");
-        return new UiProductManifest(cursorCatalog, soundCatalog, resourceEncoding, screens);
+        return new UiProductManifest(cursorCatalog, soundCatalog, theme, resourceEncoding, screens);
     }
 
     private static UiScreenDefinition ReadScreen(
@@ -72,6 +77,8 @@ public static class NativeUiProductManifestParser
             "id",
             "scene",
             "initially_visible",
+            "documents",
+            "timeline",
             "cues",
             "roles",
             "actions",
@@ -83,6 +90,10 @@ public static class NativeUiProductManifestParser
 
         string id = UiManifestJson.Key(element, "id", "screen");
         string context = $"screen '{id}'";
+        UiDocumentReference[] documents = ReadDocuments(element, context);
+        NativeContentPath? timeline = element.TryGetProperty("timeline", out _)
+            ? UiManifestJson.Path(element, "timeline", ".json", context)
+            : null;
         UiRoleDefinition[] roles = UiManifestJson.Array(
             element,
             "roles",
@@ -297,6 +308,8 @@ public static class NativeUiProductManifestParser
                 resourceEncoding == UiProductResourceEncoding.Compiled ? ".scn" : ".tscn",
                 context),
             UiManifestJson.Bool(element, "initially_visible", context),
+            documents,
+            timeline,
             ReadCues(element, context),
             roles,
             actions,
@@ -305,6 +318,43 @@ public static class NativeUiProductManifestParser
             buttons,
             selectionGroups,
             focusOrder);
+    }
+
+    private static UiDocumentReference[] ReadDocuments(JsonElement element, string screenContext)
+    {
+        if (!element.TryGetProperty("documents", out JsonElement documentsElement))
+        {
+            return [];
+        }
+
+        if (documentsElement.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidDataException($"{screenContext}.documents must be Array");
+        }
+
+        UiDocumentReference[] documents = documentsElement.EnumerateArray()
+            .Select(item => ReadDocument(item, screenContext))
+            .ToArray();
+        if (documents.Length == 0)
+        {
+            throw new InvalidDataException($"{screenContext}.documents must not be empty");
+        }
+
+        UiManifestJson.Unique(documents.Select(document => document.Id), $"{screenContext} document id");
+        UiManifestJson.Unique(
+            documents.Select(document => document.Path.Value),
+            $"{screenContext} document path");
+        return documents;
+    }
+
+    private static UiDocumentReference ReadDocument(JsonElement element, string screenContext)
+    {
+        string context = $"{screenContext} document";
+        UiManifestJson.Object(element, context);
+        UiManifestJson.Only(element, context, "id", "path");
+        return new UiDocumentReference(
+            UiManifestJson.Key(element, "id", context),
+            UiManifestJson.Path(element, "path", ".json", context));
     }
 
     private static UiRoleDefinition ReadRole(JsonElement element, string screenContext)

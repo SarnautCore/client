@@ -9,7 +9,8 @@ internal static class UiProductFixture
           "schema_id": "sarnaut.ui-product/v2",
           "catalogs": {
             "cursors": "ui/cursor_catalog.tres",
-            "sounds": "ui/sound_catalog.tres"
+            "sounds": "ui/sound_catalog.tres",
+            "theme": "ui/ui_theme.tres"
           },
           "screens": [
             {
@@ -105,7 +106,8 @@ internal static class UiProductFixture
           "schema_id": "sarnaut.ui-product/v2",
           "catalogs": {
             "cursors": "catalogs/cursors.tres",
-            "sounds": "catalogs/sounds.tres"
+            "sounds": "catalogs/sounds.tres",
+            "theme": "ui_theme.tres"
           },
           "screens": [
             {

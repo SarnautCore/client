@@ -9,6 +9,7 @@ public sealed class NativeUiProductManifestParserTests
 
         Assert.Equal("ui/cursor_catalog.tres", manifest.CursorCatalog.Value);
         Assert.Equal("ui/sound_catalog.tres", manifest.SoundCatalog.Value);
+        Assert.Equal("ui/ui_theme.tres", manifest.Theme.Value);
         Assert.Equal(UiProductResourceEncoding.Plain, manifest.ResourceEncoding);
         UiScreenDefinition screen = Assert.Single(manifest.Screens);
         Assert.Equal("login", screen.Id);
@@ -30,6 +31,38 @@ public sealed class NativeUiProductManifestParserTests
         Assert.DoesNotContain("Source", runtimeProperties);
         Assert.DoesNotContain("Class", runtimeProperties);
         Assert.DoesNotContain("Reactions", runtimeProperties);
+    }
+
+    [Fact]
+    public void ParsesConfinedDocumentAndTimelineReferences()
+    {
+        string json = UiProductFixture.Json.Replace(
+            "\"cues\": { \"show\": \"ui_menu_open\", \"hide\": \"ui_menu_close\" },",
+            "\"documents\": [{ \"id\": \"legal-01\", \"path\": \"documents/legal-01.json\" }],\n              \"timeline\": \"timelines/credits.json\",\n              \"cues\": { \"show\": \"ui_menu_open\", \"hide\": \"ui_menu_close\" },",
+            StringComparison.Ordinal);
+
+        UiScreenDefinition screen = Assert.Single(UiProductFixture.Parse(json).Screens);
+
+        UiDocumentReference document = Assert.Single(screen.Documents);
+        Assert.Equal("legal-01", document.Id);
+        Assert.Equal("documents/legal-01.json", document.Path.Value);
+        Assert.Equal("timelines/credits.json", screen.Timeline?.Value);
+    }
+
+    [Theory]
+    [InlineData("\"documents\": [{ \"id\": \"legal-01\", \"path\": \"documents/legal-01.json\" }]", "\"documents\": []")]
+    [InlineData("documents/legal-01.json", "../legal-01.json")]
+    [InlineData("timelines/credits.json", "timelines/credits.xdb")]
+    public void RejectsInvalidDocumentAndTimelineReferences(string oldValue, string newValue)
+    {
+        string json = UiProductFixture.Json
+            .Replace(
+                "\"cues\": { \"show\": \"ui_menu_open\", \"hide\": \"ui_menu_close\" },",
+                "\"documents\": [{ \"id\": \"legal-01\", \"path\": \"documents/legal-01.json\" }],\n              \"timeline\": \"timelines/credits.json\",\n              \"cues\": { \"show\": \"ui_menu_open\", \"hide\": \"ui_menu_close\" },",
+                StringComparison.Ordinal)
+            .Replace(oldValue, newValue, StringComparison.Ordinal);
+
+        Assert.Throws<InvalidDataException>(() => UiProductFixture.Parse(json));
     }
 
     [Fact]
@@ -166,7 +199,8 @@ public sealed class NativeUiProductManifestParserTests
               "schema_id": "sarnaut.ui-product/v2",
               "catalogs": {
                 "cursors": "catalogs/cursors.tres",
-                "sounds": "catalogs/sounds.tres"
+                "sounds": "catalogs/sounds.tres",
+                "theme": "ui_theme.tres"
               },
               "screens": [
                 {
@@ -321,6 +355,7 @@ public sealed class NativeUiProductManifestParserTests
         Assert.Equal(UiProductResourceEncoding.Compiled, manifest.ResourceEncoding);
         Assert.EndsWith(".res", manifest.CursorCatalog.Value, StringComparison.Ordinal);
         Assert.EndsWith(".res", manifest.SoundCatalog.Value, StringComparison.Ordinal);
+        Assert.EndsWith(".res", manifest.Theme.Value, StringComparison.Ordinal);
         Assert.All(manifest.Screens, screen =>
             Assert.EndsWith(".scn", screen.Scene.Value, StringComparison.Ordinal));
         Assert.All(manifest.Screens.SelectMany(screen => screen.Collections), collection =>
@@ -329,10 +364,12 @@ public sealed class NativeUiProductManifestParserTests
 
     [Theory]
     [InlineData("ui/sound_catalog.tres", "ui/sound_catalog.res")]
+    [InlineData("ui/ui_theme.tres", "ui/ui_theme.res")]
     [InlineData("ui/LoginAccount.ui.tscn", "ui/LoginAccount.ui.scn")]
     [InlineData("ui/SavedAccountRow.tscn", "ui/SavedAccountRow.scn")]
     [InlineData("ui/cursor_catalog.tres", "ui/cursor.png")]
     [InlineData("ui/sound_catalog.tres", "ui/click.wav")]
+    [InlineData("ui/ui_theme.tres", "ui/theme.png")]
     public void RejectsMixedOrImporterBackedProductPaths(string oldValue, string newValue)
     {
         string json = UiProductFixture.Json.Replace(oldValue, newValue, StringComparison.Ordinal);

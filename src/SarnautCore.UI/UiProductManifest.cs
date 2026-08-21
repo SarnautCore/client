@@ -3,6 +3,7 @@ namespace SarnautCore.UI;
 public sealed record UiProductManifest(
     NativeContentPath CursorCatalog,
     NativeContentPath SoundCatalog,
+    NativeContentPath Theme,
     UiProductResourceEncoding ResourceEncoding,
     IReadOnlyList<UiScreenDefinition> Screens);
 
@@ -16,6 +17,8 @@ public sealed record UiScreenDefinition(
     string Id,
     NativeContentPath Scene,
     bool InitiallyVisible,
+    IReadOnlyList<UiDocumentReference> Documents,
+    NativeContentPath? Timeline,
     UiCueSet Cues,
     IReadOnlyList<UiRoleDefinition> Roles,
     IReadOnlyList<UiActionDefinition> Actions,
@@ -70,6 +73,8 @@ public sealed record UiScreenDefinition(
         return new UiActionInvocation(action, arguments);
     }
 }
+
+public sealed record UiDocumentReference(string Id, NativeContentPath Path);
 
 public sealed record UiRoleDefinition(
     string Id,
