@@ -19,6 +19,7 @@ public sealed class SessionHudAdapterTests
             HudEventFamilies.Units |
             HudEventFamilies.CombatFeedback |
             HudEventFamilies.QuestTracker |
+            HudEventFamilies.Chat |
             HudEventFamilies.Inventory |
             HudEventFamilies.Loot |
             HudEventFamilies.QuestLog |
@@ -26,7 +27,7 @@ public sealed class SessionHudAdapterTests
             HudEventFamilies.Character,
             adapter.Capabilities.Events);
         Assert.Equal(HudCommandFamilies.All, adapter.Capabilities.Commands);
-        Assert.False(adapter.Capabilities.Events.HasFlag(HudEventFamilies.Chat));
+        Assert.True(adapter.Capabilities.Events.HasFlag(HudEventFamilies.Chat));
         Assert.True(adapter.Capabilities.Commands.HasFlag(HudCommandFamilies.SubmitChat));
     }
 
@@ -618,7 +619,7 @@ public sealed class SessionHudAdapterTests
         [
             HudCommand.ActivateAction(35, revision),
             HudCommand.SelectWorldEntity(0),
-            HudCommand.SubmitChat(new HudId("hello")),
+            HudCommand.SubmitChat(new HudChatSubmission(HudChatChannel.Say, "hello")),
             HudCommand.InteractWorldEntity(3),
             HudCommand.MoveInventoryItem(1, 2, false, revision),
             HudCommand.DropInventoryItem(3, 2, revision),
@@ -645,6 +646,108 @@ public sealed class SessionHudAdapterTests
         }
 
         Assert.Equal(commands, queued);
+    }
+
+    [Fact]
+    public void ChatOutboundAllocatesRequestAndQueuesImmediateWhitespaceLocalProjection()
+    {
+        SessionHudAdapter adapter = ChatAdapter();
+        var submission = new HudChatSubmission(HudChatChannel.Say, "   ");
+
+        Assert.True(adapter.TryCreateChatOutbound(submission, 1234, out ChatOutbound outbound));
+
+        Assert.Equal((ulong)1, outbound.Request.RequestId);
+        Assert.Equal("   ", outbound.Request.Text);
+        HudEvent local = Assert.Single(Read(adapter, 4, out _));
+        Assert.Equal(HudEventKind.ChatReceived, local.Kind);
+        Assert.True(local.Chat?.Local);
+        Assert.Equal("   ", Assert.IsType<HudChatBody.UserText>(local.Chat?.Body).Value);
+    }
+
+    [Fact]
+    public void RemoteChatObservationIsByteExactAndProjectsLocalSpamScore()
+    {
+        SessionHudAdapter adapter = ChatAdapter();
+        Assert.Equal(SessionHudObservation.Projected, adapter.Observe(Spawn(20, Entity(2, kind: EntityKind.Player))));
+        Read(adapter, 4, out _);
+        var envelope = new ServerMessage { ChatDelivery = Delivery(11, 2, "Other", ChatChannel.Say, "SELL") };
+        byte[] before = envelope.ToByteArray();
+
+        Assert.Equal(SessionHudObservation.Projected, adapter.Observe(envelope));
+
+        Assert.Equal(before, envelope.ToByteArray());
+        HudEvent chat = Assert.Single(Read(adapter, 4, out _));
+        Assert.Equal(250, chat.Chat?.SpamWeight);
+        Assert.True(chat.Chat?.SenderIsPlayer);
+        Assert.False(chat.Chat?.Local);
+    }
+
+    [Fact]
+    public void OwnSenderBounceIsSuppressedExceptOneAuthoredSelfWhisper()
+    {
+        SessionHudAdapter adapter = ChatAdapter();
+        Assert.Equal(
+            SessionHudObservation.Observed,
+            adapter.Observe(new ServerMessage { ChatDelivery = Delivery(1, 1, "Ayla", ChatChannel.Say, "hello") }));
+        Assert.Empty(Read(adapter, 4, out _));
+
+        var whisper = new HudChatSubmission(
+            HudChatChannel.Whisper,
+            "hello",
+            new HudChatTarget.WhisperCharacterName("Ayla"));
+        Assert.True(adapter.TryCreateChatOutbound(whisper, 1, out _));
+        Read(adapter, 4, out _);
+        ChatDelivery self = Delivery(2, 1, "Ayla", ChatChannel.Whisper, "hello");
+        self.WhisperPeerName = "Ayla";
+
+        Assert.Equal(SessionHudObservation.Projected, adapter.Observe(new ServerMessage { ChatDelivery = self }));
+        Assert.Single(Read(adapter, 4, out _));
+        Assert.Equal(SessionHudObservation.Observed, adapter.Observe(new ServerMessage { ChatDelivery = self }));
+        Assert.Empty(Read(adapter, 4, out _));
+    }
+
+    [Fact]
+    public void ChatRejectionMustCorrelateAndRemainsTyped()
+    {
+        SessionHudAdapter adapter = ChatAdapter();
+        Assert.True(adapter.TryCreateChatOutbound(
+            new HudChatSubmission(HudChatChannel.World, "hello"), 1, out ChatOutbound outbound));
+        Read(adapter, 4, out _);
+        var rejection = new ChatRejection
+        {
+            RequestId = outbound.Request.RequestId,
+            Channel = ChatChannel.World,
+            Reason = ChatRejectionReason.RateLimited,
+            RetryAfterMilliseconds = 1000,
+        };
+
+        Assert.Equal(
+            SessionHudObservation.Projected,
+            adapter.Observe(new ServerMessage { ChatRejection = rejection }));
+
+        HudEvent item = Assert.Single(Read(adapter, 4, out _));
+        Assert.Equal(HudEventKind.ChatRejected, item.Kind);
+        Assert.Equal(HudChatRejectionReason.RateLimited, item.ChatRejection?.Reason);
+    }
+
+    [Fact]
+    public void FriendExemptionStaysDisabledUntilAnAuthoritativeOrdinalReplacement()
+    {
+        SessionHudAdapter adapter = ChatAdapter();
+        var submission = new HudChatSubmission(HudChatChannel.Say, "SELL");
+
+        Assert.True(adapter.TryCreateChatOutbound(submission, 1, out ChatOutbound unavailable));
+        Assert.Equal(250, unavailable.LocalProjection.SpamWeight);
+        Read(adapter, 4, out _);
+
+        adapter.ReplaceFriendNames(new HashSet<string>(["ayla"], StringComparer.Ordinal));
+        Assert.True(adapter.TryCreateChatOutbound(submission, 2, out ChatOutbound wrongCase));
+        Assert.Equal(250, wrongCase.LocalProjection.SpamWeight);
+        Read(adapter, 4, out _);
+
+        adapter.ReplaceFriendNames(new HashSet<string>(["Ayla"], StringComparer.Ordinal));
+        Assert.True(adapter.TryCreateChatOutbound(submission, 3, out ChatOutbound exact));
+        Assert.Equal(0, exact.LocalProjection.SpamWeight);
     }
 
     [Fact]
@@ -746,6 +849,42 @@ public sealed class SessionHudAdapterTests
         ulong ownEntityId = 1,
         SessionHudAdapterOptions? options = null) => new(epoch, ownEntityId, options);
 
+    private static SessionHudAdapter ChatAdapter()
+    {
+        var adapter = new SessionHudAdapter(1, 1);
+        adapter.ConfigureChat(TestAntiSpam());
+        Assert.Equal(
+            SessionHudObservation.Projected,
+            adapter.Observe(new ServerMessage { CharacterStateReplacement = Character(1, 1, 900) }));
+        Read(adapter, 4, out _);
+        return adapter;
+    }
+
+    private static HudChatAntiSpamCatalog TestAntiSpam() => new(
+        "en-US",
+        [
+            new HudChatAntiSpamCategory(
+                "test",
+                100,
+                [new HudChatAntiSpamFilter.CapsLock(250)]),
+        ]);
+
+    private static ChatDelivery Delivery(
+        ulong messageId,
+        ulong senderEntityId,
+        string senderName,
+        ChatChannel channel,
+        string text) => new()
+    {
+        MessageId = messageId,
+        Channel = channel,
+        SentAtUnixMilliseconds = 10,
+        SenderEntityId = senderEntityId,
+        SenderName = senderName,
+        SenderAlive = true,
+        Body = new ChatBody { UserText = text },
+    };
+
     private static ServerMessage Snapshot(ulong tick, params EntitySnapshot[] entities)
     {
         var batch = new SnapshotBatch { ServerTick = tick, ChunkCount = 1 };
@@ -759,10 +898,10 @@ public sealed class SessionHudAdapterTests
         SpawnEvent = new SpawnEvent { Entity = entity },
     };
 
-    private static EntitySnapshot Entity(ulong id, int health = 100) => new()
+    private static EntitySnapshot Entity(ulong id, int health = 100, EntityKind kind = EntityKind.Npc) => new()
     {
         EntityId = id,
-        Kind = EntityKind.Npc,
+        Kind = kind,
         ContentId = $"mob.{id}",
         NameKey = $"mob.{id}.name",
         Level = 2,

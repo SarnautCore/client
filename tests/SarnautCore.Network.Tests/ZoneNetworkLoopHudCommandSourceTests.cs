@@ -73,6 +73,19 @@ public sealed class ZoneNetworkLoopHudCommandSourceTests
         Assert.Contains("RewardIndex = rewardIndex", source, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ChatUsesTheSessionLedgerAndIncomingObservationDoesNotConsumeTheSharedEnvelope()
+    {
+        string source = ReadZoneNetworkLoop();
+        string chat = Case(source, "SubmitChat", "ActivateAction");
+
+        Assert.Contains("_hudSession.TryCreateChatOutbound", chat, StringComparison.Ordinal);
+        Assert.Contains("ChatSendRequest = chat.Request", chat, StringComparison.Ordinal);
+        Assert.DoesNotContain("TryNextHudRequestId", chat, StringComparison.Ordinal);
+        Assert.Contains("_hudSession?.Observe(message)", source, StringComparison.Ordinal);
+        Assert.Contains("_receivedMessages.Enqueue(message)", source, StringComparison.Ordinal);
+    }
+
     private static string Case(string source, string kind, string nextKind)
     {
         int start = source.IndexOf($"case HudCommandKind.{kind}:", StringComparison.Ordinal);

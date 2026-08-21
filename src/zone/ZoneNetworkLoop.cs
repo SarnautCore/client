@@ -10,6 +10,7 @@ using Godot;
 using Sarnaut.Protocol.V1;
 using SarnautCore.Gameplay;
 using SarnautCore.NativeHud;
+using SarnautCore.Network;
 using SarnautCore.Networking;
 using SarnautCore.Shell;
 
@@ -618,6 +619,24 @@ public partial class ZoneNetworkLoop : Node
                     break;
                 case HudCommandKind.InteractWorldEntity:
                     RequestInteract(command.EntityId);
+                    break;
+                case HudCommandKind.SubmitChat:
+                    if (command.ChatSubmission is null)
+                    {
+                        RejectHudCommand(command, "chat submission is missing its typed payload");
+                        return;
+                    }
+
+                    if (!_hudSession.TryCreateChatOutbound(
+                            command.ChatSubmission,
+                            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                            out ChatOutbound chat))
+                    {
+                        RejectHudCommand(command, "chat identity or product configuration is unavailable");
+                        return;
+                    }
+
+                    EnqueueCommand(new ClientMessage { ChatSendRequest = chat.Request });
                     break;
                 case HudCommandKind.ActivateAction:
                     if (!TryExpectedRevision(command, out ulong actionRevision)

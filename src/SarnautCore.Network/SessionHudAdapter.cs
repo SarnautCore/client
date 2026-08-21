@@ -1,6 +1,7 @@
 using System.Globalization;
 using Sarnaut.Protocol.V1;
 using SarnautCore.NativeHud;
+using SarnautCore.Network;
 
 namespace SarnautCore.Networking;
 
@@ -81,6 +82,7 @@ public sealed class SessionHudAdapter : IHudSession
         HudEventFamilies.Units |
         HudEventFamilies.CombatFeedback |
         HudEventFamilies.QuestTracker |
+        HudEventFamilies.Chat |
         HudEventFamilies.Inventory |
         HudEventFamilies.Loot |
         HudEventFamilies.QuestLog |
@@ -95,6 +97,7 @@ public sealed class SessionHudAdapter : IHudSession
     private readonly Queue<HudEvent> _reliableEvents = new();
     private readonly Dictionary<ulong, HudEvent> _snapshotEvents = [];
     private readonly Dictionary<ulong, UnitAuthority> _unitAuthorities = [];
+    private readonly HashSet<ulong> _playerEntityIds = [];
     private readonly Queue<HudCommand> _commands = new();
     private ulong _selectedTargetEntityId;
     private ulong _targetRevision;
@@ -105,6 +108,11 @@ public sealed class SessionHudAdapter : IHudSession
     private ulong _questInfoRevision;
     private ulong _characterRevision;
     private HudItemReference _equippedBag;
+    private HudChatAntiSpamCatalog? _chatAntiSpam;
+    private ChatRequestLedger? _chatLedger;
+    private readonly HashSet<string> _friendNames = new(StringComparer.Ordinal);
+    private bool _friendNamesHaveAuthority;
+    private string? _ownName;
     private ulong[] _inventoryItemInstances = [];
     private HudId[] _inventoryCooldownSpells = [];
     private ulong _nextOrdinal;
@@ -141,6 +149,42 @@ public sealed class SessionHudAdapter : IHudSession
 
     public ulong OwnEntityId => _ownEntityId;
 
+    public void ConfigureChat(HudChatAntiSpamCatalog antiSpam)
+    {
+        ArgumentNullException.ThrowIfNull(antiSpam);
+        lock (_gate)
+        {
+            if (_state != HudSessionState.Open || _nextOrdinal != 0 || _commands.Count != 0 || _chatAntiSpam is not null)
+            {
+                throw new InvalidOperationException("Chat must be configured exactly once before session traffic starts.");
+            }
+
+            _chatAntiSpam = antiSpam;
+            TryInitializeChatLedger();
+        }
+    }
+
+    public void ReplaceFriendNames(IReadOnlySet<string> names)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+        lock (_gate)
+        {
+            if (_state != HudSessionState.Open)
+            {
+                throw new InvalidOperationException("A closed HUD session cannot accept friend authority.");
+            }
+
+            if (names.Any(name => string.IsNullOrEmpty(name) || !HudChatText.IsWellFormedUtf16(name)))
+            {
+                throw new ArgumentException("Friend names must be nonempty valid UTF-16 strings.", nameof(names));
+            }
+
+            _friendNames.Clear();
+            _friendNames.UnionWith(names);
+            _friendNamesHaveAuthority = true;
+        }
+    }
+
     /// <summary>Binds the entity admitted by EnterZoneResponse before the receive loop starts.</summary>
     public void BindOwnEntity(ulong ownEntityId)
     {
@@ -162,6 +206,7 @@ public sealed class SessionHudAdapter : IHudSession
             }
 
             _ownEntityId = ownEntityId;
+            TryInitializeChatLedger();
         }
     }
 
@@ -228,6 +273,8 @@ public sealed class SessionHudAdapter : IHudSession
                     ServerMessage.PayloadOneofCase.QuestInfoReplacement => ObserveQuestInfo(message.QuestInfoReplacement),
                     ServerMessage.PayloadOneofCase.CharacterStateReplacement =>
                         ObserveCharacter(message.CharacterStateReplacement),
+                    ServerMessage.PayloadOneofCase.ChatDelivery => ObserveChatDelivery(message.ChatDelivery),
+                    ServerMessage.PayloadOneofCase.ChatRejection => ObserveChatRejection(message.ChatRejection),
                     _ => SessionHudObservation.NotSubscribed,
                 };
             }
@@ -299,6 +346,40 @@ public sealed class SessionHudAdapter : IHudSession
         }
     }
 
+    public bool TryCreateChatOutbound(
+        HudChatSubmission submission,
+        long sentAtUnixMilliseconds,
+        out ChatOutbound outbound)
+    {
+        ArgumentNullException.ThrowIfNull(submission);
+        lock (_gate)
+        {
+            if (_state != HudSessionState.Open || _chatLedger is null || _chatAntiSpam is null)
+            {
+                outbound = default;
+                return false;
+            }
+
+            IReadOnlyCollection<string> friends = _friendNamesHaveAuthority ? _friendNames : Array.Empty<string>();
+            bool senderAlive = !_unitAuthorities.TryGetValue(_ownEntityId, out UnitAuthority own) ||
+                (!own.Removed && own.Health > 0);
+            outbound = _chatLedger.CreateOutbound(
+                submission,
+                sentAtUnixMilliseconds,
+                senderAlive,
+                _chatAntiSpam,
+                friends);
+            if (!TryNextStamp(outbound.Request.RequestId, out HudStamp stamp) ||
+                !TryEnqueueReliable(HudEvent.ChatReceived(stamp, outbound.LocalProjection)))
+            {
+                outbound = default;
+                return false;
+            }
+
+            return true;
+        }
+    }
+
     public void Close()
     {
         lock (_gate)
@@ -332,6 +413,7 @@ public sealed class SessionHudAdapter : IHudSession
         foreach (EntitySnapshot entity in batch.Entities)
         {
             ValidateEntity(entity);
+            TrackEntityKind(entity);
             if (!ids.Add(entity.EntityId))
             {
                 throw new ArgumentException($"Snapshot {revision} repeats entity {entity.EntityId}.");
@@ -394,6 +476,7 @@ public sealed class SessionHudAdapter : IHudSession
         }
 
         ValidateEntity(entity);
+        TrackEntityKind(entity);
         if (!EnsureAuthorityCapacity(entity.EntityId))
         {
             return SessionHudObservation.Terminal;
@@ -428,6 +511,7 @@ public sealed class SessionHudAdapter : IHudSession
         }
 
         HudEvent item = HudEvent.UnitRemoved(stamp, entityId);
+        _playerEntityIds.Remove(entityId);
         if (!TryEnqueueReliable(item))
         {
             return SessionHudObservation.Terminal;
@@ -1166,6 +1250,8 @@ public sealed class SessionHudAdapter : IHudSession
             checked((int)replacement.Level),
             equipment,
             stats);
+        _ownName = replacement.Name;
+        TryInitializeChatLedger();
         if (!TryNextStamp(replacement.Revision, out HudStamp stamp) ||
             !TryEnqueueReliable(HudEvent.CharacterReplaced(stamp, snapshot)))
         {
@@ -1175,6 +1261,60 @@ public sealed class SessionHudAdapter : IHudSession
         _characterRevision = replacement.Revision;
         _equippedBag = new HudItemReference(bag.ItemId, bag.InstanceId);
         return SessionHudObservation.Projected;
+    }
+
+    private SessionHudObservation ObserveChatDelivery(ChatDelivery delivery)
+    {
+        if (_chatLedger is null || _chatAntiSpam is null)
+        {
+            throw new ArgumentException("Chat delivery arrived before native chat identity and product configuration.");
+        }
+
+        if (!_chatLedger.AcceptRemoteDelivery(delivery))
+        {
+            return SessionHudObservation.Observed;
+        }
+
+        bool senderIsPlayer = _playerEntityIds.Contains(delivery.SenderEntityId) &&
+            _unitAuthorities.TryGetValue(delivery.SenderEntityId, out UnitAuthority sender) && !sender.Removed;
+        IReadOnlyCollection<string> friends = _friendNamesHaveAuthority ? _friendNames : Array.Empty<string>();
+        HudChatMessage mapped = ChatProtocolMapper.FromDelivery(delivery, senderIsPlayer, _chatAntiSpam, friends);
+        if (!TryNextStamp(checked((ulong)delivery.SentAtUnixMilliseconds), out HudStamp stamp) ||
+            !TryEnqueueReliable(HudEvent.ChatReceived(stamp, mapped)))
+        {
+            return SessionHudObservation.Terminal;
+        }
+
+        return SessionHudObservation.Projected;
+    }
+
+    private SessionHudObservation ObserveChatRejection(ChatRejection rejection)
+    {
+        if (_chatLedger is null)
+        {
+            throw new ArgumentException("Chat rejection arrived before native chat identity and product configuration.");
+        }
+
+        if (!_chatLedger.TryCorrelateRejection(rejection, out HudChatRejection mapped))
+        {
+            throw new ArgumentException("Chat rejection does not correlate to an outstanding authored request.");
+        }
+
+        if (!TryNextStamp(rejection.RequestId, out HudStamp stamp) ||
+            !TryEnqueueReliable(HudEvent.ChatRejected(stamp, mapped)))
+        {
+            return SessionHudObservation.Terminal;
+        }
+
+        return SessionHudObservation.Projected;
+    }
+
+    private void TryInitializeChatLedger()
+    {
+        if (_chatLedger is null && _chatAntiSpam is not null && _ownEntityId != 0 && !string.IsNullOrEmpty(_ownName))
+        {
+            _chatLedger = new ChatRequestLedger(_ownEntityId, _ownName, _options.CommandCapacity);
+        }
     }
 
     private void AddPresentationChange(
@@ -1643,7 +1783,7 @@ public sealed class SessionHudAdapter : IHudSession
     {
         HudCommandKind.ActivateAction => (uint)command.Slot < ActionSlotCount && ValidExpectedRevision(command),
         HudCommandKind.SelectWorldEntity => true,
-        HudCommandKind.SubmitChat => !command.Value.IsEmpty,
+        HudCommandKind.SubmitChat => command.ChatSubmission is not null,
         HudCommandKind.InteractWorldEntity => command.EntityId != 0,
         HudCommandKind.MoveInventoryItem =>
             (uint)command.Slot < HudProduct.InventorySlotCount &&
@@ -1697,6 +1837,18 @@ public sealed class SessionHudAdapter : IHudSession
         if (string.IsNullOrWhiteSpace(entity.NameKey) && string.IsNullOrWhiteSpace(entity.ContentId))
         {
             throw new ArgumentException($"Entity {entity.EntityId} has neither a name key nor content identifier.");
+        }
+    }
+
+    private void TrackEntityKind(EntitySnapshot entity)
+    {
+        if (entity.Kind == EntityKind.Player)
+        {
+            _playerEntityIds.Add(entity.EntityId);
+        }
+        else
+        {
+            _playerEntityIds.Remove(entity.EntityId);
         }
     }
 
