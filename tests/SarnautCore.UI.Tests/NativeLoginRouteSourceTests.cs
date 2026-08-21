@@ -45,6 +45,8 @@ public sealed class NativeLoginRouteSourceTests
         Assert.Contains("dispatch.Invocations", host, StringComparison.Ordinal);
         Assert.Contains("UiCollectionItemContext", ReadSource("UiWidgetState.cs"), StringComparison.Ordinal);
         Assert.Contains("screen.State.Collections", host, StringComparison.Ordinal);
+        Assert.Contains("item.Control.SetMeta(VisualStateMetadata, dispatch.VisualState)", host, StringComparison.Ordinal);
+        Assert.Contains("PlayCue(dispatch.Cue)", host, StringComparison.Ordinal);
         Assert.Contains("state.IsSelected", host, StringComparison.Ordinal);
         Assert.Contains("Func<UiActionInvocation, bool>", host, StringComparison.Ordinal);
         Assert.DoesNotContain("ActionIds", host, StringComparison.Ordinal);

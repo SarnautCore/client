@@ -156,6 +156,10 @@ public partial class LoginScreen : Control
         if (_native is not null)
         {
             _native.SetInteractive(_loginScreen, interactive);
+            _native.SetRoleEnabled(
+                _loginScreen,
+                _enterRole,
+                interactive && _model.CanSubmit);
         }
     }
 

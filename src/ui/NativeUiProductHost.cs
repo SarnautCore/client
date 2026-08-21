@@ -71,6 +71,17 @@ public partial class NativeUiProductHost : Control
         ?? throw new KeyNotFoundException(
             $"Screen '{screen.Id}' has no collection '{collectionId}'");
 
+    /// <summary>Resolves a typed product resource such as a document or timeline.</summary>
+    public string ResolveResource(NativeContentPath resource)
+    {
+        if (string.IsNullOrWhiteSpace(resource.Value))
+        {
+            throw new ArgumentException("Product resource path must not be empty", nameof(resource));
+        }
+
+        return Resolve(resource);
+    }
+
     /// <summary>
     /// Registers a controller against the exact screen definition parsed by this host.
     /// The callback receives the complete invocation, including resolved typed arguments.
@@ -679,6 +690,8 @@ public partial class NativeUiProductHost : Control
         {
             ApplyCollectionVisualState(screen, collection, candidate);
         }
+        item.Control.SetMeta(VisualStateMetadata, dispatch.VisualState);
+        PlayCue(dispatch.Cue);
         DispatchInvocations(screen, dispatch.Invocations);
     }
 
