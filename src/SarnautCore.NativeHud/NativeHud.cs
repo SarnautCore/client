@@ -12,6 +12,8 @@ public sealed class NativeHud : IDisposable
     private readonly ActionState[] _actions;
     private readonly FeedbackState[] _feedback;
     private readonly EntityState[] _entities;
+    private readonly UnitPlateState[] _unitPlates;
+    private readonly OvertipState[] _overtips;
     private readonly QuestState[] _quests;
     private readonly QuestTombstone[] _questTombstones;
     private readonly ChatState[] _chat;
@@ -22,6 +24,9 @@ public sealed class NativeHud : IDisposable
     private readonly HudFeedbackView[] _feedbackViews;
     private readonly HudQuestView[] _questViews;
     private readonly HudChatView[] _chatViews;
+    private readonly HudUnitView[] _unitViews;
+    private readonly HudUnitPlateView[] _unitPlateViews;
+    private readonly HudOvertipView[] _overtipViews;
     private readonly HudDiff _diff;
     private int _inputHead;
     private int _inputCount;
@@ -30,6 +35,7 @@ public sealed class NativeHud : IDisposable
     private int _questTombstoneCursor;
     private int _pendingInputOverflows;
     private long _lastNow;
+    private long _frameRevision;
     private HudFocus _focus;
     private HudFocus _focusBeforeDrag;
     private HudId _hoverElement;
@@ -48,6 +54,8 @@ public sealed class NativeHud : IDisposable
         _actions = new ActionState[HudProduct.ActionSlotCount];
         _feedback = new FeedbackState[3 * HudProduct.FeedbackPoolCount];
         _entities = new EntityState[product.MaxEntities];
+        _unitPlates = new UnitPlateState[product.UnitPlates.Length];
+        _overtips = new OvertipState[product.MaxOvertips];
         _quests = new QuestState[HudProduct.QuestTrackerRowCount];
         _questTombstones = new QuestTombstone[64];
         _chat = new ChatState[product.MaxChatEntries];
@@ -58,6 +66,29 @@ public sealed class NativeHud : IDisposable
         _feedbackViews = new HudFeedbackView[_feedback.Length];
         _questViews = new HudQuestView[_quests.Length];
         _chatViews = new HudChatView[_chat.Length];
+        _unitViews = new HudUnitView[_entities.Length];
+        _unitPlateViews = new HudUnitPlateView[_unitPlates.Length];
+        _overtipViews = new HudOvertipView[_overtips.Length];
+
+        for (int index = 0; index < _entities.Length; index++)
+        {
+            _entities[index].PlateIndex = -1;
+            _entities[index].OvertipIndex = -1;
+            UpdateUnitView(index);
+        }
+
+        for (int index = 0; index < _unitPlates.Length; index++)
+        {
+            _unitPlates[index].Assignment = product.UnitPlates[index].Assignment;
+            _unitPlates[index].Element = product.UnitPlates[index].Element;
+            UpdateUnitPlateView(index);
+        }
+
+        for (int index = 0; index < _overtips.Length; index++)
+        {
+            _overtips[index].Element = product.OvertipPrototype;
+            UpdateOvertipView(index);
+        }
 
         for (int index = 0; index < _quests.Length; index++)
         {
@@ -85,7 +116,14 @@ public sealed class NativeHud : IDisposable
             }
         }
 
-        var readModel = new HudReadModel(_actionViews, _feedbackViews, _questViews, _chatViews)
+        var readModel = new HudReadModel(
+            _actionViews,
+            _feedbackViews,
+            _questViews,
+            _chatViews,
+            _unitViews,
+            _unitPlateViews,
+            _overtipViews)
         {
             Focus = HudFocus.World,
             CursorId = product.Cursors.Resolve(HudCursor.Default),
@@ -162,7 +200,12 @@ public sealed class NativeHud : IDisposable
         DrainInput();
         AdvanceFeedback(now, frame.Viewport);
         AdvanceWorldChat(frame.Viewport);
+        AdvanceOvertips(frame.Viewport);
         UpdateCursor();
+        _frameRevision++;
+        _diff.FrameRevision = _frameRevision;
+        _diff.ReadModel.FrameRevision = _frameRevision;
+        _diff.ReadModel.Viewport = frame.Viewport;
         return _diff;
     }
 
@@ -312,6 +355,12 @@ public sealed class NativeHud : IDisposable
             return;
         }
 
+        bool wasActive = state.HasAuthority && !state.Removed;
+        HudId previousName = state.Name;
+        int previousHealth = state.Health;
+        int previousMaximumHealth = state.MaximumHealth;
+        HudPlateAssignment previousPlate = state.Presentation.Plate;
+        bool previousOvertip = state.Presentation.OvertipCandidate;
         state.HasAuthority = true;
         state.Stamp = item.Stamp;
         state.LastEvent = item;
@@ -319,10 +368,188 @@ public sealed class NativeHud : IDisposable
         state.Name = state.Removed ? HudId.Empty : item.ContentId;
         state.Health = state.Removed ? 0 : item.Value;
         state.MaximumHealth = state.Removed ? 0 : item.Auxiliary;
+        state.Presentation = state.Removed ? default : item.UnitPresentation;
+
         if (state.Removed)
         {
+            ReleaseUnitPresentation(index, item.Stamp, HudUnitChangeAreas.Removal | HudUnitChangeAreas.Assignment | HudUnitChangeAreas.Visibility);
             CancelFeedbackForEntity(item.EntityId);
+            UpdateUnitView(index);
+            return;
         }
+
+        ReconcileUnitPresentation(index, item.UnitPresentation, item.Stamp);
+        HudUnitChangeAreas areas = HudUnitChangeAreas.None;
+        if (!wasActive || previousName != state.Name)
+        {
+            areas |= HudUnitChangeAreas.Identity;
+        }
+
+        if (!wasActive || previousHealth != state.Health || previousMaximumHealth != state.MaximumHealth)
+        {
+            areas |= HudUnitChangeAreas.Vitality;
+        }
+
+        if (!wasActive || previousPlate != state.Presentation.Plate || previousOvertip != state.Presentation.OvertipCandidate)
+        {
+            areas |= HudUnitChangeAreas.Assignment | HudUnitChangeAreas.Visibility;
+        }
+
+        UpdateUnitView(index);
+        EmitUnitChanges(index, areas, item.Stamp);
+    }
+
+    private void ReconcileUnitPresentation(int entityIndex, HudUnitPresentation presentation, HudStamp stamp)
+    {
+        ref EntityState entity = ref _entities[entityIndex];
+        int desiredPlate = presentation.Plate.IsNone ? -1 : FindUnitPlate(presentation.Plate);
+        if (!presentation.Plate.IsNone && desiredPlate < 0)
+        {
+            AddError(HudErrorCode.InvalidEvent, stamp, presentation.Plate.SemanticId, entity.EntityId, entityIndex);
+            entity.Presentation = new HudUnitPresentation(HudPlateAssignment.None, presentation.OvertipCandidate);
+        }
+
+        if (entity.PlateIndex != desiredPlate)
+        {
+            ReleasePlate(entityIndex, stamp, HudUnitChangeAreas.Assignment | HudUnitChangeAreas.Visibility);
+            if (desiredPlate >= 0)
+            {
+                ref UnitPlateState plate = ref _unitPlates[desiredPlate];
+                if (plate.Occupied && plate.EntityIndex != entityIndex)
+                {
+                    int order = stamp.CompareTo(plate.Stamp);
+                    if (order <= 0)
+                    {
+                        AddError(HudErrorCode.UnitPlateAssignmentConflict, stamp, plate.Assignment.SemanticId, entity.EntityId, entityIndex);
+                        desiredPlate = -1;
+                        entity.Presentation = new HudUnitPresentation(HudPlateAssignment.None, presentation.OvertipCandidate);
+                    }
+                    else
+                    {
+                        int displaced = plate.EntityIndex;
+                        _entities[displaced].PlateIndex = -1;
+                        _entities[displaced].Presentation = new HudUnitPresentation(
+                            HudPlateAssignment.None,
+                            _entities[displaced].Presentation.OvertipCandidate);
+                        UpdateUnitView(displaced);
+                        EmitPlate(displaced, desiredPlate, false, HudUnitChangeAreas.Assignment | HudUnitChangeAreas.Visibility, stamp);
+                    }
+                }
+
+                if (desiredPlate >= 0)
+                {
+                    plate.Occupied = true;
+                    plate.EntityIndex = entityIndex;
+                    plate.EntityId = entity.EntityId;
+                    plate.Stamp = stamp;
+                    entity.PlateIndex = desiredPlate;
+                    UpdateUnitPlateView(desiredPlate);
+                }
+            }
+        }
+        else if (desiredPlate >= 0)
+        {
+            _unitPlates[desiredPlate].Stamp = stamp;
+            UpdateUnitPlateView(desiredPlate);
+        }
+
+        if (!presentation.OvertipCandidate)
+        {
+            ReleaseOvertip(entityIndex, stamp, HudUnitChangeAreas.Assignment | HudUnitChangeAreas.Visibility);
+        }
+        else if (entity.OvertipIndex < 0)
+        {
+            int free = FindFreeOvertip();
+            if (free < 0)
+            {
+                AddError(HudErrorCode.OvertipCapacityExceeded, stamp, HudId.Empty, entity.EntityId, entityIndex);
+            }
+            else
+            {
+                ref OvertipState overtip = ref _overtips[free];
+                overtip.Occupied = true;
+                overtip.EntityIndex = entityIndex;
+                overtip.EntityId = entity.EntityId;
+                overtip.Stamp = stamp;
+                overtip.Projected = false;
+                overtip.Position = default;
+                entity.OvertipIndex = free;
+                UpdateOvertipView(free);
+            }
+        }
+        else
+        {
+            _overtips[entity.OvertipIndex].Stamp = stamp;
+            UpdateOvertipView(entity.OvertipIndex);
+        }
+    }
+
+    private void ReleaseUnitPresentation(int entityIndex, HudStamp stamp, HudUnitChangeAreas areas)
+    {
+        ReleasePlate(entityIndex, stamp, areas);
+        ReleaseOvertip(entityIndex, stamp, areas);
+    }
+
+    private void ReleasePlate(int entityIndex, HudStamp stamp, HudUnitChangeAreas areas)
+    {
+        ref EntityState entity = ref _entities[entityIndex];
+        int plateIndex = entity.PlateIndex;
+        if (plateIndex < 0)
+        {
+            return;
+        }
+
+        EmitPlate(entityIndex, plateIndex, false, areas, stamp);
+        _unitPlates[plateIndex].Occupied = false;
+        _unitPlates[plateIndex].EntityIndex = -1;
+        _unitPlates[plateIndex].EntityId = 0;
+        entity.PlateIndex = -1;
+        UpdateUnitPlateView(plateIndex);
+    }
+
+    private void ReleaseOvertip(int entityIndex, HudStamp stamp, HudUnitChangeAreas areas)
+    {
+        ref EntityState entity = ref _entities[entityIndex];
+        int overtipIndex = entity.OvertipIndex;
+        if (overtipIndex < 0)
+        {
+            return;
+        }
+
+        EmitOvertip(entityIndex, overtipIndex, false, areas, stamp);
+        _overtips[overtipIndex].Occupied = false;
+        _overtips[overtipIndex].EntityIndex = -1;
+        _overtips[overtipIndex].EntityId = 0;
+        _overtips[overtipIndex].Projected = false;
+        _overtips[overtipIndex].Position = default;
+        entity.OvertipIndex = -1;
+        UpdateOvertipView(overtipIndex);
+    }
+
+    private int FindUnitPlate(HudPlateAssignment assignment)
+    {
+        for (int index = 0; index < _unitPlates.Length; index++)
+        {
+            if (_unitPlates[index].Assignment == assignment)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private int FindFreeOvertip()
+    {
+        for (int index = 0; index < _overtips.Length; index++)
+        {
+            if (!_overtips[index].Occupied)
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 
     private bool AcceptAuthority(
@@ -757,6 +984,93 @@ public sealed class NativeHud : IDisposable
         }
     }
 
+    private void AdvanceOvertips(HudViewport viewport)
+    {
+        for (int index = 0; index < _overtips.Length; index++)
+        {
+            ref OvertipState overtip = ref _overtips[index];
+            if (!overtip.Occupied)
+            {
+                continue;
+            }
+
+            bool projected = false;
+            HudPoint point = default;
+            if (viewport.IsValid && _world.TryProject(new HudWorldQuery(overtip.EntityId, viewport), out HudProjection projection))
+            {
+                point = projection.Screen;
+                projected = projection.InFrustum && !projection.Occluded && projection.Depth > 0 &&
+                    double.IsFinite(projection.Depth) && viewport.Contains(point);
+            }
+
+            if (overtip.Projected != projected || (projected && overtip.Position != point))
+            {
+                overtip.Projected = projected;
+                overtip.Position = projected ? point : default;
+                UpdateUnitView(overtip.EntityIndex);
+                UpdateOvertipView(index);
+                EmitOvertip(
+                    overtip.EntityIndex,
+                    index,
+                    projected,
+                    HudUnitChangeAreas.Visibility | HudUnitChangeAreas.Projection,
+                    _entities[overtip.EntityIndex].Stamp);
+            }
+        }
+    }
+
+    private void EmitUnitChanges(int entityIndex, HudUnitChangeAreas areas, HudStamp revision)
+    {
+        ref EntityState entity = ref _entities[entityIndex];
+        if (entity.PlateIndex >= 0)
+        {
+            UpdateUnitPlateView(entity.PlateIndex);
+            EmitPlate(entityIndex, entity.PlateIndex, true, areas, revision);
+        }
+
+        if (entity.OvertipIndex >= 0)
+        {
+            UpdateOvertipView(entity.OvertipIndex);
+            EmitOvertip(entityIndex, entity.OvertipIndex, _overtips[entity.OvertipIndex].Projected, areas, revision);
+        }
+    }
+
+    private void EmitPlate(int entityIndex, int plateIndex, bool visible, HudUnitChangeAreas areas, HudStamp revision)
+    {
+        ref EntityState entity = ref _entities[entityIndex];
+        ref UnitPlateState plate = ref _unitPlates[plateIndex];
+        _diff.AddChange(new HudChange(
+            HudChangeKind.UnitPlate,
+            plate.Element,
+            0,
+            visible,
+            entity.Health,
+            false,
+            entity.Name,
+            default,
+            entity.MaximumHealth,
+            revision,
+            areas));
+    }
+
+    private void EmitOvertip(int entityIndex, int overtipIndex, bool visible, HudUnitChangeAreas areas, HudStamp revision)
+    {
+        ref EntityState entity = ref _entities[entityIndex];
+        ref OvertipState overtip = ref _overtips[overtipIndex];
+        _diff.AddChange(new HudChange(
+            HudChangeKind.Overtip,
+            overtip.Element,
+            overtipIndex,
+            visible,
+            entity.Health,
+            false,
+            entity.Name,
+            overtip.Position,
+            entity.MaximumHealth,
+            revision,
+            areas));
+    }
+
     private void DrainInput()
     {
         while (_inputCount > 0)
@@ -978,6 +1292,38 @@ public sealed class NativeHud : IDisposable
             EmitFeedback(index, false);
         }
 
+        for (int index = 0; index < _unitPlates.Length; index++)
+        {
+            _diff.AddChange(new HudChange(
+                HudChangeKind.UnitPlate,
+                _unitPlates[index].Element,
+                0,
+                false,
+                0,
+                false,
+                HudId.Empty,
+                default,
+                0,
+                default,
+                HudUnitChangeAreas.All));
+        }
+
+        for (int index = 0; index < _overtips.Length; index++)
+        {
+            _diff.AddChange(new HudChange(
+                HudChangeKind.Overtip,
+                _overtips[index].Element,
+                index,
+                false,
+                0,
+                false,
+                HudId.Empty,
+                default,
+                0,
+                default,
+                HudUnitChangeAreas.All));
+        }
+
         _diff.AddChange(new HudChange(HudChangeKind.Focus, HudId.Empty, 0, true, (int)_focus, false, HudId.Empty, default));
         HudId cursorId = _product.Cursors.Resolve(_cursor);
         _diff.ReadModel.CursorId = cursorId;
@@ -1038,6 +1384,108 @@ public sealed class NativeHud : IDisposable
             state.Active,
             state.Projected,
             state.Position);
+    }
+
+    private void UpdateUnitView(int index)
+    {
+        ref EntityState entity = ref _entities[index];
+        HudId plateElement = HudId.Empty;
+        bool plateVisible = false;
+        if (entity.PlateIndex >= 0)
+        {
+            plateElement = _unitPlates[entity.PlateIndex].Element;
+            plateVisible = !entity.Removed;
+        }
+
+        HudId overtipElement = HudId.Empty;
+        bool overtipVisible = false;
+        HudPoint overtipPosition = default;
+        if (entity.OvertipIndex >= 0)
+        {
+            ref OvertipState overtip = ref _overtips[entity.OvertipIndex];
+            overtipElement = overtip.Element;
+            overtipVisible = !entity.Removed && overtip.Projected;
+            overtipPosition = overtipVisible ? overtip.Position : default;
+        }
+
+        _unitViews[index] = new HudUnitView(
+            entity.EntityId,
+            entity.Name,
+            entity.Health,
+            entity.MaximumHealth,
+            entity.Stamp,
+            entity.Occupied && entity.HasAuthority && !entity.Removed,
+            entity.Presentation.Plate,
+            plateElement,
+            plateVisible,
+            entity.Presentation.OvertipCandidate,
+            overtipElement,
+            overtipVisible,
+            overtipPosition);
+    }
+
+    private void UpdateUnitPlateView(int index)
+    {
+        ref UnitPlateState plate = ref _unitPlates[index];
+        if (!plate.Occupied)
+        {
+            _unitPlateViews[index] = new HudUnitPlateView(
+                plate.Element,
+                plate.Assignment,
+                0,
+                HudId.Empty,
+                0,
+                0,
+                plate.Stamp,
+                false,
+                false);
+            return;
+        }
+
+        ref EntityState entity = ref _entities[plate.EntityIndex];
+        _unitPlateViews[index] = new HudUnitPlateView(
+            plate.Element,
+            plate.Assignment,
+            entity.EntityId,
+            entity.Name,
+            entity.Health,
+            entity.MaximumHealth,
+            entity.Stamp,
+            true,
+            !entity.Removed);
+    }
+
+    private void UpdateOvertipView(int index)
+    {
+        ref OvertipState overtip = ref _overtips[index];
+        if (!overtip.Occupied)
+        {
+            _overtipViews[index] = new HudOvertipView(
+                overtip.Element,
+                index,
+                0,
+                HudId.Empty,
+                0,
+                0,
+                overtip.Stamp,
+                false,
+                false,
+                default);
+            return;
+        }
+
+        ref EntityState entity = ref _entities[overtip.EntityIndex];
+        _overtipViews[index] = new HudOvertipView(
+            overtip.Element,
+            index,
+            entity.EntityId,
+            entity.Name,
+            entity.Health,
+            entity.MaximumHealth,
+            entity.Stamp,
+            true,
+            !entity.Removed && overtip.Projected,
+            !entity.Removed && overtip.Projected ? overtip.Position : default);
     }
 
     private int FindEntity(ulong entityId)
@@ -1250,6 +1698,30 @@ public sealed class NativeHud : IDisposable
         public HudId Name;
         public int Health;
         public int MaximumHealth;
+        public HudUnitPresentation Presentation;
+        public int PlateIndex;
+        public int OvertipIndex;
+    }
+
+    private struct UnitPlateState
+    {
+        public HudPlateAssignment Assignment;
+        public HudId Element;
+        public bool Occupied;
+        public int EntityIndex;
+        public ulong EntityId;
+        public HudStamp Stamp;
+    }
+
+    private struct OvertipState
+    {
+        public HudId Element;
+        public bool Occupied;
+        public int EntityIndex;
+        public ulong EntityId;
+        public HudStamp Stamp;
+        public bool Projected;
+        public HudPoint Position;
     }
 
     private struct TransientState

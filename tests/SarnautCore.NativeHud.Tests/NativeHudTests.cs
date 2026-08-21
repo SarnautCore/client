@@ -17,6 +17,8 @@ public sealed class NativeHudTests
         Assert.Throws<ArgumentException>(() => Product(actionCount: 35));
         Assert.Throws<ArgumentException>(() => Product(feedbackCount: 6));
         Assert.Throws<ArgumentException>(() => Product(questCount: 21));
+        Assert.Throws<ArgumentException>(() => Product(unitPlateCount: 9));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Product(maxEntities: 4, maxOvertips: 5));
         Assert.Throws<ArgumentException>(() => Product(timelines: HudTimelineCatalog.Retail with { MessageFadeOutMilliseconds = 899 }));
     }
 
@@ -72,6 +74,110 @@ public sealed class NativeHudTests
 
         Assert.Contains(diff.Errors.ToArray(), error => error.Code == HudErrorCode.StaleAuthority);
         Assert.DoesNotContain(diff.ReadModel.Feedback.ToArray(), feedback => feedback.Active);
+    }
+
+    [Fact]
+    public void UnitUpdatePublishesStablePlateAndOvertipViewsWithRevisionAndChangeAreas()
+    {
+        var session = new InMemoryHudSession();
+        var world = new InMemoryHudWorld();
+        world.SetProjection(7, new HudProjection(new HudPoint(440, 330), 2, true, false));
+        using NativeHud hud = Open(session, world);
+        var presentation = new HudUnitPresentation(new HudPlateAssignment(Id("target")), true);
+        session.TryQueue(HudEvent.UnitChanged(Stamp(3), 7, Id("wolf"), 45, 60, presentation));
+
+        HudDiff diff = hud.Advance(Frame(0));
+
+        HudUnitView unit = Assert.Single(diff.ReadModel.Units.ToArray(), item => item.Active);
+        Assert.Equal(7UL, unit.EntityId);
+        Assert.Equal(Id("wolf"), unit.NameId);
+        Assert.Equal(45, unit.Health);
+        Assert.Equal(60, unit.MaximumHealth);
+        Assert.Equal(Stamp(3), unit.Revision);
+        Assert.Equal(Id("plate-target"), unit.PlateElement);
+        Assert.True(unit.PlateVisible);
+        Assert.Equal(Id("overtip-prototype"), unit.OvertipElement);
+        Assert.True(unit.OvertipVisible);
+        Assert.Equal(new HudPoint(440, 330), unit.OvertipPosition);
+        HudUnitPlateView targetPlate = Assert.Single(diff.ReadModel.UnitPlates.ToArray(), item => item.Assignment == presentation.Plate);
+        Assert.True(targetPlate.Occupied);
+        Assert.Equal(7UL, targetPlate.EntityId);
+        HudOvertipView lane = diff.ReadModel.Overtips[0];
+        Assert.Equal(0, lane.Lane);
+        Assert.True(lane.Occupied);
+        Assert.True(lane.Visible);
+        Assert.Equal(7UL, lane.EntityId);
+        Assert.Contains(diff.Changes.ToArray(), change =>
+            change.Kind == HudChangeKind.UnitPlate && change.Element == Id("plate-target") &&
+            change.Value == 45 && change.SecondaryValue == 60 && change.Revision == Stamp(3) &&
+            change.UnitAreas.HasFlag(HudUnitChangeAreas.Vitality));
+        Assert.Contains(diff.Changes.ToArray(), change =>
+            change.Kind == HudChangeKind.Overtip && change.Element == Id("overtip-prototype") && change.Generation == 0 && change.Visible &&
+            change.UnitAreas.HasFlag(HudUnitChangeAreas.Projection));
+    }
+
+    [Fact]
+    public void UnitRemovalHidesAndReleasesStableAssignments()
+    {
+        var session = new InMemoryHudSession();
+        using NativeHud hud = Open(session);
+        var presentation = new HudUnitPresentation(new HudPlateAssignment(Id("target")), true);
+        session.TryQueue(HudEvent.UnitChanged(Stamp(1), 7, Id("wolf"), 45, 60, presentation));
+        hud.Advance(Frame(0));
+        session.TryQueue(HudEvent.UnitRemoved(Stamp(2), 7));
+
+        HudDiff diff = hud.Advance(Frame(1));
+
+        HudUnitView unit = Assert.Single(diff.ReadModel.Units.ToArray(), item => item.EntityId == 7);
+        Assert.False(unit.Active);
+        Assert.True(unit.PlateElement.IsEmpty);
+        Assert.True(unit.OvertipElement.IsEmpty);
+        Assert.False(Assert.Single(diff.ReadModel.UnitPlates.ToArray(), item => item.Assignment == presentation.Plate).Occupied);
+        Assert.False(diff.ReadModel.Overtips[0].Occupied);
+        Assert.Contains(diff.Changes.ToArray(), change =>
+            change.Kind == HudChangeKind.UnitPlate && !change.Visible &&
+            change.UnitAreas.HasFlag(HudUnitChangeAreas.Removal));
+        Assert.Contains(diff.Changes.ToArray(), change =>
+            change.Kind == HudChangeKind.Overtip && !change.Visible &&
+            change.UnitAreas.HasFlag(HudUnitChangeAreas.Removal));
+    }
+
+    [Fact]
+    public void PlateOwnershipUsesAuthorityOrderAndReportsEqualConflicts()
+    {
+        var session = new InMemoryHudSession();
+        using NativeHud hud = Open(session);
+        var targetOnly = new HudUnitPresentation(new HudPlateAssignment(Id("target")), false);
+        session.TryQueue(HudEvent.UnitChanged(new HudStamp(1, 1, 0), 1, Id("one"), 1, 1, targetOnly));
+        session.TryQueue(HudEvent.UnitChanged(new HudStamp(1, 1, 0), 2, Id("two"), 1, 1, targetOnly));
+        HudDiff conflict = hud.Advance(Frame(0));
+        Assert.Contains(conflict.Errors.ToArray(), error => error.Code == HudErrorCode.UnitPlateAssignmentConflict);
+        Assert.Equal(Id("plate-target"), Assert.Single(conflict.ReadModel.Units.ToArray(), item => item.EntityId == 1).PlateElement);
+        Assert.True(Assert.Single(conflict.ReadModel.Units.ToArray(), item => item.EntityId == 2).PlateElement.IsEmpty);
+
+        session.TryQueue(HudEvent.UnitChanged(Stamp(2), 2, Id("two"), 1, 1, targetOnly));
+        HudDiff displaced = hud.Advance(Frame(1));
+        Assert.True(Assert.Single(displaced.ReadModel.Units.ToArray(), item => item.EntityId == 1).PlateElement.IsEmpty);
+        Assert.Equal(Id("plate-target"), Assert.Single(displaced.ReadModel.Units.ToArray(), item => item.EntityId == 2).PlateElement);
+    }
+
+    [Fact]
+    public void OvertipCandidatesUseBoundedStableAuthoredPool()
+    {
+        var session = new InMemoryHudSession();
+        using NativeHud hud = Open(session);
+        for (ulong entity = 1; entity <= 5; entity++)
+        {
+            session.TryQueue(HudEvent.UnitChanged(new HudStamp(1, 1, (uint)entity), entity, Id($"unit-{entity}"), 1, 1));
+        }
+
+        HudDiff diff = hud.Advance(Frame(0));
+
+        Assert.Equal(5, diff.ReadModel.Units.ToArray().Count(item => item.Active));
+        Assert.Equal(4, diff.ReadModel.Units.ToArray().Count(item => !item.OvertipElement.IsEmpty));
+        Assert.Equal(4, diff.ReadModel.Overtips.Length);
+        Assert.Equal([0, 1, 2, 3], diff.ReadModel.Overtips.ToArray().Select(item => item.Lane).ToArray());
+        Assert.Contains(diff.Errors.ToArray(), error => error.Code == HudErrorCode.OvertipCapacityExceeded);
     }
 
     [Fact]
@@ -169,6 +275,41 @@ public sealed class NativeHudTests
         Assert.True(diff.RequiresFullRefresh);
         Assert.Contains(diff.Errors.ToArray(), error => error.Code == HudErrorCode.DiffOverflow);
         Assert.Equal(36, diff.ReadModel.ActionSlots.Length);
+        Assert.Equal(HudRefreshAreas.All, diff.RequiredRefreshAreas);
+    }
+
+    [Fact]
+    public void FullRefreshReadModelContainsCurrentProjectionDependentState()
+    {
+        var session = new InMemoryHudSession();
+        var world = new InMemoryHudWorld();
+        world.SetProjection(9, new HudProjection(new HudPoint(500, 350), 2, true, false));
+        using NativeHud hud = Open(session, world, Product(maxChangesPerFrame: 51));
+        session.TryQueue(HudEvent.UnitChanged(Stamp(1), 9, Id("unit"), 8, 10));
+        session.TryQueue(HudEvent.FeedbackRaised(new HudStamp(1, 1, 1), Id("hit"), HudFeedbackKind.Enemy, 9, 2));
+        session.TryQueue(HudEvent.ChatReceived(new HudStamp(1, 1, 2),
+            new HudChatMessage(Id("chat"), Id("say"), 9, Id("unit"), "hi", true)));
+        hud.Dispatch(HudInput.RequestFocus(HudFocus.Chat));
+        hud.Dispatch(HudInput.PointerEvent(
+            HudInputKind.PointerMoved,
+            Id("action-00"),
+            new HudPoint(12, 13),
+            HudPointerSource.Controller));
+
+        HudDiff diff = hud.Advance(Frame(0));
+
+        Assert.True(diff.RequiresFullRefresh);
+        Assert.Equal(HudRefreshAreas.All, diff.RequiredRefreshAreas);
+        Assert.Equal(1, diff.FrameRevision);
+        Assert.Equal(1, diff.ReadModel.FrameRevision);
+        Assert.Equal(Viewport, diff.ReadModel.Viewport);
+        Assert.True(Assert.Single(diff.ReadModel.Units.ToArray(), item => item.EntityId == 9).OvertipVisible);
+        Assert.True(Assert.Single(diff.ReadModel.Feedback.ToArray(), item => item.EventId == Id("hit")).Projected);
+        Assert.True(Assert.Single(diff.ReadModel.Chat.ToArray(), item => item.EventId == Id("chat")).Projected);
+        Assert.Equal(HudFocus.Chat, diff.ReadModel.Focus);
+        Assert.Equal(Id("cursor-text"), diff.ReadModel.CursorId);
+        Assert.Equal(HudPointerSource.Controller, diff.ReadModel.PointerSource);
+        Assert.Equal(new HudPoint(12, 13), diff.ReadModel.Pointer);
     }
 
     [Fact]
@@ -432,6 +573,8 @@ public sealed class NativeHudTests
         int questCount = 20,
         int maxPendingInputs = 64,
         int maxEntities = 128,
+        int unitPlateCount = 10,
+        int? maxOvertips = null,
         int maxChangesPerFrame = 256,
         HudId[]? masked = null,
         HudTimelineCatalog? timelines = null)
@@ -443,14 +586,31 @@ public sealed class NativeHudTests
                 Enumerable.Range(0, feedbackCount).Select(index => Id($"{kind.ToString().ToLowerInvariant()}-{index:00}")).ToArray()))
             .ToArray();
         HudId[] quests = Enumerable.Range(0, questCount).Select(index => Id($"quest-row-{index:00}")).ToArray();
+        HudUnitPlateProduct[] allPlates =
+        [
+            new(new HudPlateAssignment(Id("avatar")), Id("plate-avatar")),
+            new(new HudPlateAssignment(Id("target")), Id("plate-target")),
+            new(new HudPlateAssignment(Id("target-target")), Id("plate-target-target")),
+            new(new HudPlateAssignment(Id("pet")), Id("plate-pet")),
+            new(new HudPlateAssignment(Id("mount")), Id("plate-mount")),
+            new(new HudPlateAssignment(Id("party-01")), Id("plate-party-01")),
+            new(new HudPlateAssignment(Id("party-02")), Id("plate-party-02")),
+            new(new HudPlateAssignment(Id("party-03")), Id("plate-party-03")),
+            new(new HudPlateAssignment(Id("party-04")), Id("plate-party-04")),
+            new(new HudPlateAssignment(Id("party-05")), Id("plate-party-05")),
+        ];
+        HudUnitPlateProduct[] plates = allPlates.Take(unitPlateCount).ToArray();
         return new HudProduct(
             actions,
             pools,
             quests,
+            plates,
+            Id("overtip-prototype"),
             new HudCursorCatalog(Id("cursor-default"), Id("cursor-hover"), Id("cursor-text"), Id("cursor-drag")),
             timelines ?? HudTimelineCatalog.Retail,
             masked,
             maxEntities: maxEntities,
+            maxOvertips: maxOvertips ?? Math.Min(4, maxEntities),
             maxPendingInputs: maxPendingInputs,
             maxChangesPerFrame: maxChangesPerFrame);
     }
