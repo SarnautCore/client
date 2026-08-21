@@ -6,10 +6,12 @@ public sealed class NativeLoginRouteSourceTests
     public void LoginUsesTheTypedProductHost()
     {
         string login = ReadSource("LoginScreen.cs");
+        string binding = ReadSource("NativeOutOfGameBinding.cs");
 
         Assert.Contains("NativeUiProductHost.TryMount", login, StringComparison.Ordinal);
-        Assert.Contains("RegisterController(_loginScreen, HandleNativeAction)", login, StringComparison.Ordinal);
-        Assert.Contains("HandleNativeAction(UiActionInvocation invocation)", login, StringComparison.Ordinal);
+        Assert.Contains("NativeOutOfGameBinding.Open", login, StringComparison.Ordinal);
+        Assert.Contains("host.RegisterController(screen", binding, StringComparison.Ordinal);
+        Assert.Contains("HandleAction(UiScreenDefinition screen, UiActionInvocation invocation)", binding, StringComparison.Ordinal);
         Assert.DoesNotContain("LoginAccountProduct", login, StringComparison.Ordinal);
         Assert.DoesNotContain("ConvertedChrome", login, StringComparison.Ordinal);
         Assert.DoesNotContain("DevelopmentFallback", login, StringComparison.Ordinal);
@@ -85,26 +87,55 @@ public sealed class NativeLoginRouteSourceTests
         string session = ReadSource("SessionHost.cs");
         string scene = ReadSource("login.tscn");
 
-        Assert.Contains("NativeUiProductHost.TryMount( this", CollapseWhitespace(login));
+        Assert.Contains("NativeUiProductHost.TryMount(this", login, StringComparison.Ordinal);
         Assert.Contains("script = ExtResource(\"1_login\")", scene, StringComparison.Ordinal);
         Assert.DoesNotContain("NativeUiProductHost", session, StringComparison.Ordinal);
         Assert.DoesNotContain("ui-product", session, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "Screen.Login or Screen.CharacterSelect or Screen.CharacterCreate",
+            session,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("character_select.tscn", session, StringComparison.Ordinal);
+        Assert.DoesNotContain("character_create.tscn", session, StringComparison.Ordinal);
     }
 
     [Fact]
     public void LoginTeardownCancelsNavigationAndForgetsThePassword()
     {
         string login = ReadSource("LoginScreen.cs");
+        string binding = ReadSource("NativeOutOfGameBinding.cs");
 
         Assert.Contains(
-            "if (cancellation.IsCancellationRequested || !IsInsideTree())",
-            login,
+            "if (token.IsCancellationRequested || _disposed)",
+            binding,
             StringComparison.Ordinal);
-        Assert.Contains("_model.Password = Secret.None", login, StringComparison.Ordinal);
-        Assert.Contains(
-            "ForgetPassword();\n        _session.Flow.CancelSignIn()",
-            login,
-            StringComparison.Ordinal);
+        Assert.Contains("_login.Password = Secret.None", binding, StringComparison.Ordinal);
+        Assert.Contains("_binding?.Dispose()", login, StringComparison.Ordinal);
+        Assert.Contains("CanPresent(token)", binding, StringComparison.Ordinal);
+        Assert.Contains("_native?.QueueFree()", login, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LoginOwnsTheCompleteNativeOutOfGameLifecycle()
+    {
+        string login = ReadSource("LoginScreen.cs");
+        string binding = ReadSource("NativeOutOfGameBinding.cs");
+
+        Assert.Contains("OutOfGameFlowController.Open", binding, StringComparison.Ordinal);
+        Assert.Contains("EulaClientBinding", binding, StringComparison.Ordinal);
+        Assert.Contains("CreditsController", binding, StringComparison.Ordinal);
+        Assert.Contains("SetScreenSiblingOrder", binding, StringComparison.Ordinal);
+        Assert.Contains("_creditsTimeline = ReadCreditsTimeline()", binding, StringComparison.Ordinal);
+        Assert.Contains("presentation.TextureId", binding, StringComparison.Ordinal);
+        Assert.Contains("main_menu_music", binding, StringComparison.Ordinal);
+        Assert.Contains("credits_music", binding, StringComparison.Ordinal);
+        Assert.Contains("ConfigFile", binding, StringComparison.Ordinal);
+        Assert.Contains("GetTree().Quit()", binding, StringComparison.Ordinal);
+        Assert.Contains("delete-character-panel", binding, StringComparison.Ordinal);
+        Assert.Contains("delete-character-status", binding, StringComparison.Ordinal);
+        Assert.Contains("Could not clear EULA acceptance", binding, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConvertedChrome", login, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConvertedChrome", binding, StringComparison.Ordinal);
     }
 
     private static string ReadSource(string name)
@@ -114,7 +145,4 @@ public sealed class NativeLoginRouteSourceTests
             : "contract-source";
         return File.ReadAllText(Path.Combine(AppContext.BaseDirectory, directory, name));
     }
-
-    private static string CollapseWhitespace(string value) =>
-        string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }

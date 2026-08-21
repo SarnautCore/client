@@ -357,6 +357,45 @@ public sealed class OutOfGameFlowControllerTests
             new OutOfGameFlowStart("test", RequireEula: false)));
     }
 
+    [Fact]
+    public void ProductContractRejectsChangedAuthoredPriority()
+    {
+        UiProductManifest product = Product();
+        UiScreenDefinition credits = product.Screens.Single(
+            screen => screen.Id == OutOfGameFlowController.CreditsScreenId);
+        UiProductManifest malformed = product with
+        {
+            Screens = product.Screens
+                .Select(screen => ReferenceEquals(screen, credits)
+                    ? credits with { Priority = credits.Priority + 1 }
+                    : screen)
+                .ToArray(),
+        };
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            OutOfGameFlowController.Open(
+                malformed,
+                new OutOfGameFlowStart("test", RequireEula: false)));
+        Assert.Contains("authored priority 749", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AuthenticatedFlowCanResumeAtCharacterSelect()
+    {
+        OutOfGameFlowController flow = OutOfGameFlowController.Open(
+            Product(),
+            new OutOfGameFlowStart(
+                "1.1.02.0-native",
+                RequireEula: false,
+                OutOfGameScreen.CharacterSelect));
+
+        Assert.Equal(OutOfGameScreen.CharacterSelect, flow.Presentation.Screen);
+        Assert.True(flow.Presentation.Layer(OutOfGameFlowController.CharacterScreenId).Visible);
+        Assert.DoesNotContain(
+            flow.Presentation.Layers,
+            layer => layer.ScreenId == OutOfGameFlowController.LoginScreenId && layer.Visible);
+    }
+
     private static void AssertForwarded(OutOfGameFlowDispatch dispatch)
     {
         Assert.Equal(OutOfGameRouteStatus.Forwarded, dispatch.Status);
@@ -747,6 +786,7 @@ public sealed class OutOfGameFlowControllerTests
         {
             id,
             scene = $"screens/{id}.tscn",
+            priority = Priority(id),
             initially_visible = false,
             roles,
             actions,
@@ -757,6 +797,22 @@ public sealed class OutOfGameFlowControllerTests
             focus_order = Array.Empty<string>(),
         };
     }
+
+    private static int Priority(string screenId) => screenId switch
+    {
+        "main-menu" => -128,
+        "eula" => 6000,
+        "login-account" => 700,
+        "credits" => 749,
+        "main-menu-tooltip" => 750,
+        "connection-progress" => 800,
+        "shard-select" => 700,
+        "character-selector" => 500,
+        "character-pre-generator" => 600,
+        "character-generator" => 600,
+        "message-box" => 750,
+        _ => 0,
+    };
 
     private static object Role(string id, string node) => new
     {

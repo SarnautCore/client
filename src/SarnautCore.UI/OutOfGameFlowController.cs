@@ -191,6 +191,16 @@ public sealed class OutOfGameFlowController
         ValidateContract(manifest);
         _actionOwners = IndexActions(manifest);
         ClientVersion = start.ClientVersion;
+        if (start.InitialScreen is not OutOfGameScreen.Login
+            and not OutOfGameScreen.CharacterSelect
+            and not OutOfGameScreen.CharacterPreGenerator)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(start),
+                start.InitialScreen,
+                "The out-of-game flow cannot resume at that screen");
+        }
+        _screen = start.InitialScreen;
         _eulaVisible = start.RequireEula;
     }
 
@@ -799,19 +809,19 @@ public sealed class OutOfGameFlowController
     private static void ValidateContract(UiProductManifest manifest)
     {
         UiRuntimeKey.Validate(MainMenuScreenId, nameof(MainMenuScreenId));
-        string[] requiredScreens =
+        (string Id, int Priority)[] requiredScreens =
         [
-            MainMenuScreenId,
-            EulaScreenId,
-            LoginScreenId,
-            CreditsScreenId,
-            TooltipScreenId,
-            ConnectionScreenId,
-            ShardScreenId,
-            CharacterScreenId,
-            CharacterPreGeneratorScreenId,
-            CharacterGeneratorScreenId,
-            MessageBoxScreenId,
+            (MainMenuScreenId, -128),
+            (EulaScreenId, 6000),
+            (LoginScreenId, 700),
+            (CreditsScreenId, 749),
+            (TooltipScreenId, 750),
+            (ConnectionScreenId, 800),
+            (ShardScreenId, 700),
+            (CharacterScreenId, 500),
+            (CharacterPreGeneratorScreenId, 600),
+            (CharacterGeneratorScreenId, 600),
+            (MessageBoxScreenId, 750),
         ];
         var screens = manifest.Screens.ToDictionary(screen => screen.Id, StringComparer.Ordinal);
         if (screens.Count != requiredScreens.Length)
@@ -820,11 +830,16 @@ public sealed class OutOfGameFlowController
                 $"UI product must contain exactly {requiredScreens.Length} out-of-game screens");
         }
 
-        foreach (string screenId in requiredScreens)
+        foreach ((string screenId, int priority) in requiredScreens)
         {
-            if (!screens.ContainsKey(screenId))
+            if (!screens.TryGetValue(screenId, out UiScreenDefinition? screen))
             {
                 throw new InvalidDataException($"UI product has no required screen '{screenId}'");
+            }
+            if (screen.Priority != priority)
+            {
+                throw new InvalidDataException(
+                    $"UI product screen '{screenId}' must have authored priority {priority}");
             }
         }
 
@@ -1218,7 +1233,10 @@ public sealed class OutOfGameFlowController
     }
 }
 
-public readonly record struct OutOfGameFlowStart(string ClientVersion, bool RequireEula);
+public readonly record struct OutOfGameFlowStart(
+    string ClientVersion,
+    bool RequireEula,
+    OutOfGameScreen InitialScreen = OutOfGameScreen.Login);
 
 public enum OutOfGameScreen
 {

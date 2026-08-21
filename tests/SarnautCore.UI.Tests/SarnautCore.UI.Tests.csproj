@@ -25,6 +25,9 @@
     <None Include="../../src/session/SessionHost.cs"
           Link="contract-source/SessionHost.cs"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/ui/NativeOutOfGameBinding.cs"
+          Link="contract-source/NativeOutOfGameBinding.cs"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../scenes/ui/login.tscn"
           Link="contract-scenes/login.tscn"
           CopyToOutputDirectory="PreserveNewest" />

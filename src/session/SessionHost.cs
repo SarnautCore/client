@@ -120,9 +120,8 @@ public partial class SessionHost : Node
     private static string SceneFor(Screen screen) => screen switch
     {
         Screen.Start => "res://scenes/boot.tscn",
-        Screen.Login => "res://scenes/ui/login.tscn",
-        Screen.CharacterSelect => "res://scenes/ui/character_select.tscn",
-        Screen.CharacterCreate => "res://scenes/ui/character_create.tscn",
+        Screen.Login or Screen.CharacterSelect or Screen.CharacterCreate =>
+            "res://scenes/ui/login.tscn",
         Screen.EnteringWorld or Screen.InWorld => "res://scenes/zone_walkabout.tscn",
         _ => "res://scenes/boot.tscn",
     };
