@@ -11,7 +11,11 @@
     "Rat1_1": {
       "scene": "Rat1_1/Rat1_1.tscn",
       "clips": ["idle", "run", "attack", "hit", "death"],
-      "combat_event_clips": ["attack"]
+      "combat_event_clips": ["attack"],
+      "lod": {
+        "levels": 3,
+        "switch_distances": [12.0, 28.0]
+      }
     },
     "player.kania.female": {
       "scene": "player.kania.female/player.kania.female.tscn",
