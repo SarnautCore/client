@@ -2,7 +2,7 @@
   "schema_version": 1,
   "manifest_type": "sarnaut.zone-presentation",
   "map_id": "inst-league-start",
-  "zone_id": "inst-league-1",
+  "zone_id": "inst-league1",
   "scene": "zone-presentation.tscn",
   "topology": {
     "camera_centered": true,

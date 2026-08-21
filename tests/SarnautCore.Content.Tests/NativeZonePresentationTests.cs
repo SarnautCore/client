@@ -7,7 +7,11 @@ public sealed class NativeZonePresentationTests
     private static readonly string FixturePath = Path.Combine(
         AppContext.BaseDirectory,
         "fixtures",
-        "zone-presentation-manifest.json");
+        "maps",
+        "inst-league-start",
+        "zones",
+        "inst-league1",
+        "zone-presentation.json");
 
     private static string Fixture => File.ReadAllText(FixturePath);
 
@@ -17,7 +21,7 @@ public sealed class NativeZonePresentationTests
         NativeZonePresentation presentation = Parse(Fixture);
 
         Assert.Equal("inst-league-start", presentation.MapId);
-        Assert.Equal("inst-league-1", presentation.ZoneId);
+        Assert.Equal("inst-league1", presentation.ZoneId);
         Assert.Equal("zone-presentation.tscn", presentation.Scene);
         Assert.True(presentation.Topology.CameraCentered);
         Assert.Equal("Environment", presentation.Topology.EnvironmentNode);
@@ -65,8 +69,9 @@ public sealed class NativeZonePresentationTests
     [InlineData("\"manifest_type\": \"sarnaut.zone-presentation\"", "\"manifest_type\": \" sarnaut.zone-presentation \"")]
     [InlineData("\"map_id\": \"inst-league-start\"", "\"map_id\": \"other\"")]
     [InlineData("\"map_id\": \"inst-league-start\"", "\"map_id\": \"inst-league-start \"")]
-    [InlineData("\"zone_id\": \"inst-league-1\"", "\"zone_id\": \"other\"")]
-    [InlineData("\"zone_id\": \"inst-league-1\"", "\"zone_id\": \" inst-league-1\"")]
+    [InlineData("\"zone_id\": \"inst-league1\"", "\"zone_id\": \"other\"")]
+    [InlineData("\"zone_id\": \"inst-league1\"", "\"zone_id\": \"inst-league-1\"")]
+    [InlineData("\"zone_id\": \"inst-league1\"", "\"zone_id\": \" inst-league1\"")]
     public void Contract_identity_must_match_exactly(string before, string after)
     {
         AssertInvalid(Fixture.Replace(before, after, StringComparison.Ordinal));
@@ -149,12 +154,12 @@ public sealed class NativeZonePresentationTests
     [Fact]
     public void Expected_identifiers_must_be_supplied()
     {
-        Assert.Throws<ArgumentException>(() => NativeZonePresentation.Parse(Fixture, " ", "inst-league-1"));
+        Assert.Throws<ArgumentException>(() => NativeZonePresentation.Parse(Fixture, " ", "inst-league1"));
         Assert.Throws<ArgumentException>(() => NativeZonePresentation.Parse(Fixture, "inst-league-start", ""));
     }
 
     private static NativeZonePresentation Parse(string json) =>
-        NativeZonePresentation.Parse(json, "inst-league-start", "inst-league-1");
+        NativeZonePresentation.Parse(json, "inst-league-start", "inst-league1");
 
     private static void AssertInvalid(string json) =>
         Assert.Throws<InvalidDataException>(() => Parse(json));

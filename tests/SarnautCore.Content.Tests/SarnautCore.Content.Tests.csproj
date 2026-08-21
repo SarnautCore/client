@@ -23,8 +23,8 @@
     <None Include="../../src/zone/CameraCenteredSky.cs"
           Link="fixtures/CameraCenteredSky.cs"
           CopyToOutputDirectory="PreserveNewest" />
-    <None Include="../fixtures/native-zone-presentation/manifest.json"
-          Link="fixtures/zone-presentation-manifest.json"
+    <None Include="../fixtures/native-zone-presentation/maps/inst-league-start/zones/inst-league1/zone-presentation.json"
+          Link="fixtures/maps/inst-league-start/zones/inst-league1/zone-presentation.json"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
