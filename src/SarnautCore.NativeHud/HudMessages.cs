@@ -13,6 +13,7 @@ public enum HudEventKind
     QuestUntracked,
     ChatReceived,
     ChatRemoved,
+    ChatRejected,
     InventoryReplaced,
     InventoryCooldownStarted,
     InventoryCooldownFinished,
@@ -84,24 +85,209 @@ public sealed class HudQuestSnapshot
         Objectives.SequenceEqual(other.Objectives);
 }
 
+public abstract record HudChatBody
+{
+    private HudChatBody()
+    {
+    }
+
+    public sealed record UserText : HudChatBody
+    {
+        public UserText(string value)
+        {
+            HudChatText.Validate(value);
+            Value = value;
+        }
+
+        public string Value { get; }
+    }
+
+    public sealed record Localized : HudChatBody
+    {
+        private readonly string[] _arguments;
+
+        public Localized(HudId productLocalizationId, IEnumerable<string> arguments)
+        {
+            if (productLocalizationId.IsEmpty)
+            {
+                throw new ArgumentException("A localized chat body requires a product localization identifier.", nameof(productLocalizationId));
+            }
+
+            ArgumentNullException.ThrowIfNull(arguments);
+            _arguments = arguments.ToArray();
+            if (_arguments.Any(argument => argument is null || !HudChatText.IsWellFormedUtf16(argument)))
+            {
+                throw new ArgumentException("Localized chat arguments must be valid UTF-16 strings.", nameof(arguments));
+            }
+
+            ProductLocalizationId = productLocalizationId;
+        }
+
+        public HudId ProductLocalizationId { get; }
+
+        public ReadOnlySpan<string> Arguments => _arguments;
+    }
+
+    public sealed record UnreadableFaction : HudChatBody
+    {
+        public UnreadableFaction(HudId factionNameLocalizationId)
+        {
+            if (factionNameLocalizationId.IsEmpty)
+            {
+                throw new ArgumentException("An unreadable-faction body requires a faction localization identifier.", nameof(factionNameLocalizationId));
+            }
+
+            FactionNameLocalizationId = factionNameLocalizationId;
+        }
+
+        public HudId FactionNameLocalizationId { get; }
+    }
+
+    internal bool ContentEquals(HudChatBody other) => (this, other) switch
+    {
+        (UserText left, UserText right) => string.Equals(left.Value, right.Value, StringComparison.Ordinal),
+        (Localized left, Localized right) => left.ProductLocalizationId == right.ProductLocalizationId &&
+            left.Arguments.SequenceEqual(right.Arguments, StringComparer.Ordinal),
+        (UnreadableFaction left, UnreadableFaction right) =>
+            left.FactionNameLocalizationId == right.FactionNameLocalizationId,
+        _ => false,
+    };
+}
+
+public abstract record HudChatContext
+{
+    private HudChatContext()
+    {
+    }
+
+    public sealed record NoContext : HudChatContext;
+    public sealed record WhisperPeerName(string Value) : HudChatContext;
+    public sealed record NamedChannel(string Value) : HudChatContext;
+
+    public static NoContext None { get; } = new();
+}
+
 public sealed record HudChatMessage(
     HudId EventId,
-    HudId ChannelId,
+    ulong RequestId,
+    HudChatChannel Channel,
+    long SentAtUnixMilliseconds,
     ulong SenderEntityId,
-    HudId SenderNameId,
-    string Text,
-    bool WorldBubble)
+    string SenderName,
+    bool SenderAlive,
+    HudChatBody Body,
+    HudChatContext Context,
+    int SpamWeight,
+    bool SenderIsPlayer,
+    bool Local)
 {
+    public HudId ChannelId => HudChatIds.Channel(Channel);
+
     public HudChatMessage Validate()
     {
-        if (EventId.IsEmpty || ChannelId.IsEmpty || string.IsNullOrWhiteSpace(Text) ||
-            (WorldBubble && SenderEntityId == 0))
+        if (EventId.IsEmpty || SentAtUnixMilliseconds < 0 || SenderEntityId == 0 ||
+            string.IsNullOrEmpty(SenderName) || !HudChatText.IsWellFormedUtf16(SenderName) ||
+            Body is null || Context is null || SpamWeight < 0)
         {
-            throw new ArgumentException("Chat messages require event, channel, text, and a sender entity for world bubbles.");
+            throw new ArgumentException("Chat messages require valid identity, time, sender, body, context, and spam weight.");
+        }
+
+        bool validContext = (Channel, Context) switch
+        {
+            (HudChatChannel.Whisper, HudChatContext.WhisperPeerName peer) =>
+                !string.IsNullOrWhiteSpace(peer.Value) && HudChatText.IsWellFormedUtf16(peer.Value),
+            (HudChatChannel.Whisper, _) => false,
+            (_, HudChatContext.NoContext) => true,
+            _ => false,
+        };
+        if (!validContext)
+        {
+            throw new ArgumentException("Chat message context does not match its channel.", nameof(Context));
+        }
+
+        if (Local && RequestId == 0 || !Local && RequestId != 0)
+        {
+            throw new ArgumentException("Only local chat projections carry a request identifier.", nameof(RequestId));
+        }
+
+        switch (Body)
+        {
+            case HudChatBody.UserText text:
+                HudChatText.Validate(text.Value);
+                break;
+            case HudChatBody.Localized:
+            case HudChatBody.UnreadableFaction:
+                break;
+            default:
+                throw new ArgumentException("Chat body is unsupported.", nameof(Body));
         }
 
         return this;
     }
+
+    internal bool ContentEquals(HudChatMessage other) =>
+        EventId == other.EventId && RequestId == other.RequestId && Channel == other.Channel &&
+        SentAtUnixMilliseconds == other.SentAtUnixMilliseconds && SenderEntityId == other.SenderEntityId &&
+        string.Equals(SenderName, other.SenderName, StringComparison.Ordinal) && SenderAlive == other.SenderAlive &&
+        Body.ContentEquals(other.Body) && Equals(Context, other.Context) && SpamWeight == other.SpamWeight &&
+        SenderIsPlayer == other.SenderIsPlayer && Local == other.Local;
+}
+
+public enum HudChatRejectionReason
+{
+    Mute,
+    InternalError,
+    Silence,
+    NoPoints,
+    EnemyFaction,
+    Ignored,
+    Dead,
+    NotPsionic,
+    TargetNotFound,
+    TargetOffline,
+    RateLimited,
+    TooLong,
+    NotMember,
+    NotAuthorized,
+    UnsupportedChannel,
+    Empty,
+}
+
+public sealed record HudChatRejection(
+    ulong RequestId,
+    HudChatChannel Channel,
+    HudChatRejectionReason Reason,
+    HudChatBody.Localized? Detail,
+    int RetryAfterMilliseconds)
+{
+    public HudChatRejection Validate()
+    {
+        if (RequestId == 0 || RetryAfterMilliseconds < 0)
+        {
+            throw new ArgumentException("Chat rejection requires a request and nonnegative retry duration.");
+        }
+
+        return this;
+    }
+}
+
+public static class HudChatIds
+{
+    private static readonly HudId[] Channels =
+    [
+        new("whisper"),
+        new("party"),
+        new("say"),
+        new("zone"),
+        new("zone-special"),
+        new("world"),
+        new("guild"),
+        new("guild-officer"),
+        new("raid"),
+    ];
+
+    public static HudId Channel(HudChatChannel channel) =>
+        (uint)channel < (uint)Channels.Length ? Channels[(int)channel] : throw new ArgumentOutOfRangeException(nameof(channel));
 }
 
 /// <summary>A closed authoritative or transient event accepted by the HUD runtime.</summary>
@@ -123,7 +309,8 @@ public readonly record struct HudEvent(
     HudLootSnapshot? Loot,
     HudQuestLogSnapshot? QuestLog,
     HudQuestInfoSnapshot? QuestInfo,
-    HudCharacterSnapshot? Character)
+    HudCharacterSnapshot? Character,
+    HudChatRejection? ChatRejection = null)
 {
     public static HudEvent ActionSlotChanged(
         HudStamp stamp,
@@ -182,11 +369,19 @@ public readonly record struct HudEvent(
     {
         message.Validate();
         return new HudEvent(HudEventKind.ChatReceived, stamp, message.EventId, message.SenderEntityId, -1, 0, 0,
-            message.WorldBubble, message.ChannelId, default, null, message, default, null, null, null, null, null);
+            false, message.ChannelId, default, null, message, default, null, null, null, null, null);
     }
 
     public static HudEvent ChatRemoved(HudStamp stamp, HudId eventId) =>
         new(HudEventKind.ChatRemoved, stamp, eventId, 0, -1, 0, 0, false, HudId.Empty, default, null, null, default, null, null, null, null, null);
+
+    public static HudEvent ChatRejected(HudStamp stamp, HudChatRejection rejection)
+    {
+        rejection.Validate();
+        return new HudEvent(HudEventKind.ChatRejected, stamp, HudId.Empty, 0, -1, 0, 0, false,
+            HudChatIds.Channel(rejection.Channel), default, null, null, default, null, null, null, null, null,
+            rejection);
+    }
 
     public static HudEvent InventoryReplaced(HudStamp stamp, HudInventorySnapshot snapshot) =>
         new(HudEventKind.InventoryReplaced, stamp, HudId.Empty, 0, -1, 0, 0, false, HudId.Empty, default,
@@ -227,7 +422,8 @@ public readonly record struct HudEvent(
         Value == other.Value && Auxiliary == other.Auxiliary && Flag == other.Flag &&
         ContentId == other.ContentId && FeedbackKind == other.FeedbackKind &&
         (ReferenceEquals(Quest, other.Quest) || (Quest is not null && other.Quest is not null && Quest.ContentEquals(other.Quest))) &&
-        Equals(Chat, other.Chat) && UnitPresentation == other.UnitPresentation &&
+        (ReferenceEquals(Chat, other.Chat) || (Chat is not null && other.Chat is not null && Chat.ContentEquals(other.Chat))) &&
+        Equals(ChatRejection, other.ChatRejection) && UnitPresentation == other.UnitPresentation &&
         (ReferenceEquals(Inventory, other.Inventory) || (Inventory is not null && other.Inventory is not null && Inventory.ContentEquals(other.Inventory))) &&
         (ReferenceEquals(Loot, other.Loot) || (Loot is not null && other.Loot is not null && Loot.ContentEquals(other.Loot))) &&
         (ReferenceEquals(QuestLog, other.QuestLog) || (QuestLog is not null && other.QuestLog is not null && QuestLog.ContentEquals(other.QuestLog))) &&
@@ -309,7 +505,8 @@ public readonly record struct HudInput(
     int Value = 0,
     bool Flag = false,
     HudId SecondaryTarget = default,
-    long Amount = 0)
+    long Amount = 0,
+    HudChatSubmission? ChatSubmission = null)
 {
     public static HudInput ActivateAction(int slot) => new(HudInputKind.ActivateAction, HudId.Empty, 0, slot, -1, default, default, default, 0, false, HudId.Empty, default);
 
@@ -337,6 +534,13 @@ public readonly record struct HudInput(
     }
 
     public static HudInput SubmitChat(HudId text) => new(HudInputKind.SubmitChat, HudId.Empty, 0, -1, -1, default, default, default, 0, false, text, default);
+
+    public static HudInput SubmitChat(HudChatSubmission submission)
+    {
+        ArgumentNullException.ThrowIfNull(submission);
+        return new HudInput(HudInputKind.SubmitChat, HudId.Empty, 0, -1, -1, default, default, default,
+            0, false, HudId.Empty, default, ChatSubmission: submission.Validate());
+    }
 
     public static HudInput ToggleInventory() => Context(HudInputKind.ToggleInventory);
     public static HudInput CloseInventory() => Context(HudInputKind.CloseInventory);
@@ -419,7 +623,8 @@ public readonly record struct HudCommand(
     bool Flag = false,
     HudId SecondaryValue = default,
     HudStamp ExpectedRevision = default,
-    long Amount = 0)
+    long Amount = 0,
+    HudChatSubmission? ChatSubmission = null)
 {
     public static HudCommand ActivateAction(int slot, HudStamp expectedRevision) =>
         new(HudCommandKind.ActivateAction, slot, -1, 0, HudId.Empty, ExpectedRevision: expectedRevision);
@@ -427,6 +632,13 @@ public readonly record struct HudCommand(
     public static HudCommand SelectWorldEntity(ulong entityId) => new(HudCommandKind.SelectWorldEntity, -1, -1, entityId, HudId.Empty);
 
     public static HudCommand SubmitChat(HudId text) => new(HudCommandKind.SubmitChat, -1, -1, 0, text);
+
+    public static HudCommand SubmitChat(HudChatSubmission submission)
+    {
+        ArgumentNullException.ThrowIfNull(submission);
+        return new HudCommand(HudCommandKind.SubmitChat, -1, -1, 0, HudId.Empty,
+            ChatSubmission: submission.Validate());
+    }
 
     public static HudCommand InteractWorldEntity(ulong entityId) => new(HudCommandKind.InteractWorldEntity, -1, -1, entityId, HudId.Empty);
 

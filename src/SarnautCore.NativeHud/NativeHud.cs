@@ -76,6 +76,7 @@ public sealed class NativeHud : IDisposable
     private bool _questLogOpen;
     private bool _questInfoOpen;
     private bool _characterOpen;
+    private HudChatBubbleSettings _chatBubbleSettings = HudChatBubbleSettings.RetailDefault;
     private bool _firstFrame = true;
     private bool _disposed;
 
@@ -196,6 +197,12 @@ public sealed class NativeHud : IDisposable
         return new NativeHud(product, session, world);
     }
 
+    public void SetChatBubbleSettings(HudChatBubbleSettings settings)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _chatBubbleSettings = settings.Validate();
+    }
+
     /// <summary>Queues typed input. The bounded queue is drained by the next frame.</summary>
     public HudDispatchResult Dispatch(in HudInput input)
     {
@@ -269,7 +276,7 @@ public sealed class NativeHud : IDisposable
         AdvanceFeedback(now, frame.Viewport);
         AdvanceActionCooldowns(now);
         AdvanceInventoryCooldowns(now);
-        AdvanceWorldChat(frame.Viewport);
+        AdvanceWorldChat(now, frame.Viewport);
         AdvanceOvertips(frame.Viewport);
         UpdateCursor();
         _frameRevision++;
@@ -368,6 +375,9 @@ public sealed class NativeHud : IDisposable
             case HudEventKind.ChatReceived:
             case HudEventKind.ChatRemoved:
                 ApplyChat(item);
+                break;
+            case HudEventKind.ChatRejected:
+                ApplyChatRejection(item);
                 break;
             case HudEventKind.InventoryReplaced:
                 ApplyInventory(item);
@@ -951,13 +961,55 @@ public sealed class NativeHud : IDisposable
         }
 
         ref ChatState state = ref _chat[index];
+        if (item.Kind == HudEventKind.ChatRemoved)
+        {
+            state.Active = false;
+            if (state.BubbleActive)
+            {
+                state.CriticalHideStartedAt = _lastNow;
+            }
+
+            state.Stamp = item.Stamp;
+            state.LastEvent = item;
+            UpdateChatView(index);
+            _diff.AddChange(new HudChange(
+                HudChangeKind.Chat,
+                item.EventId,
+                0,
+                false,
+                0,
+                state.BubbleActive,
+                state.Message?.ChannelId ?? HudId.Empty,
+                default));
+            return;
+        }
+
+        HudChatMessage message = item.Chat!;
+        bool bubbleEligible = HudChatBubblePolicy.AllowsOrdinaryBubble(
+            message.Channel,
+            message.SenderIsPlayer,
+            _chatBubbleSettings.Show,
+            message.SpamWeight,
+            _chatBubbleSettings.AntiSpamEnabled);
+        if (bubbleEligible)
+        {
+            ReplaceSenderBubble(message.SenderEntityId, index);
+        }
+
         state.Occupied = true;
         state.HasAuthority = true;
         state.EventId = item.EventId;
         state.Stamp = item.Stamp;
         state.LastEvent = item;
-        state.Message = item.Kind == HudEventKind.ChatReceived ? item.Chat : null;
-        state.Active = state.Message is not null;
+        state.Message = message;
+        state.Active = true;
+        state.BubbleEligible = bubbleEligible;
+        state.BubbleActive = false;
+        state.BubbleAttached = false;
+        state.BubbleOpacity = 0;
+        state.BubbleStartedAt = _lastNow;
+        state.CriticalHideStartedAt = -1;
+        state.CriticalHide = default;
         state.Projected = false;
         state.Position = default;
         UpdateChatView(index);
@@ -967,9 +1019,64 @@ public sealed class NativeHud : IDisposable
             0,
             state.Active,
             0,
-            state.Message?.WorldBubble ?? false,
+            state.BubbleEligible,
             state.Message?.ChannelId ?? HudId.Empty,
             default));
+    }
+
+    private void ApplyChatRejection(in HudEvent item)
+    {
+        if (item.ChatRejection is null)
+        {
+            AddError(HudErrorCode.InvalidEvent, item.Stamp, HudId.Empty, 0, -1);
+            return;
+        }
+
+        _diff.ReadModel.ChatRejection = item.ChatRejection;
+        _diff.AddChange(new HudChange(
+            HudChangeKind.Chat,
+            HudChatIds.Channel(item.ChatRejection.Channel),
+            0,
+            true,
+            item.ChatRejection.RetryAfterMilliseconds,
+            false,
+            HudId.Empty,
+            default));
+    }
+
+    private void ReplaceSenderBubble(ulong senderEntityId, int replacementIndex)
+    {
+        for (int index = 0; index < _chat.Length; index++)
+        {
+            if (index == replacementIndex)
+            {
+                continue;
+            }
+
+            ref ChatState current = ref _chat[index];
+            if (!current.BubbleEligible || current.Message?.SenderEntityId != senderEntityId)
+            {
+                continue;
+            }
+
+            current.BubbleEligible = false;
+            current.BubbleActive = false;
+            current.BubbleAttached = false;
+            current.BubbleOpacity = 0;
+            current.Projected = false;
+            current.Position = default;
+            current.CriticalHide = default;
+            UpdateChatView(index);
+            _diff.AddChange(new HudChange(
+                HudChangeKind.WorldChatProjection,
+                current.EventId,
+                0,
+                false,
+                0,
+                false,
+                current.Message.ChannelId,
+                default));
+        }
     }
 
     private void ApplyInventory(in HudEvent item)
@@ -1268,27 +1375,45 @@ public sealed class NativeHud : IDisposable
         }
     }
 
-    private void AdvanceWorldChat(HudViewport viewport)
+    private void AdvanceWorldChat(long nowMilliseconds, HudViewport viewport)
     {
         for (int index = 0; index < _chat.Length; index++)
         {
             ref ChatState state = ref _chat[index];
-            if (!state.Active || state.Message is null || !state.Message.WorldBubble)
+            if (!state.Occupied || state.Message is null || !state.BubbleEligible)
             {
                 continue;
             }
 
+            HudChatBubbleFrame bubble = state.CriticalHideStartedAt >= 0
+                ? default
+                : HudChatBubblePolicy.EvaluateNormal(nowMilliseconds - state.BubbleStartedAt, _chatBubbleSettings.OpacityTenths);
+            HudChatCriticalHideFrame criticalHide = state.CriticalHideStartedAt >= 0
+                ? HudChatBubblePolicy.EvaluateCriticalHide(nowMilliseconds - state.CriticalHideStartedAt)
+                : default;
+            bool bubbleActive = _chatBubbleSettings.Show && (bubble.Active || criticalHide.Active);
+            float opacity = bubble.Active ? bubble.Opacity : criticalHide.Active ? criticalHide.FromOpacity : 0f;
             bool projected = false;
+            bool attached = false;
             HudPoint point = default;
-            if (viewport.IsValid && _world.TryProject(new HudWorldQuery(state.Message.SenderEntityId, viewport), out HudProjection projection))
+            if (bubbleActive && viewport.IsValid &&
+                _world.TryProject(new HudWorldQuery(state.Message.SenderEntityId, viewport), out HudProjection projection))
             {
                 point = projection.Screen;
-                projected = projection.InFrustum && !projection.Occluded && projection.Depth > 0 &&
-                    double.IsFinite(projection.Depth) && viewport.Contains(point);
+                float distance = (float)projection.Depth;
+                attached = HudChatBubblePolicy.IsWithinAttachmentDistance(distance);
+                projected = attached && HudChatBubblePolicy.IsWithinDisplayDistance(distance) &&
+                    projection.InFrustum && !projection.Occluded && viewport.Contains(point);
             }
 
-            if (state.Projected != projected || (projected && state.Position != point))
+            if (state.BubbleActive != bubbleActive || state.BubbleAttached != attached ||
+                state.BubbleOpacity != opacity || state.CriticalHide != criticalHide ||
+                state.Projected != projected || (projected && state.Position != point))
             {
+                state.BubbleActive = bubbleActive;
+                state.BubbleAttached = attached;
+                state.BubbleOpacity = opacity;
+                state.CriticalHide = criticalHide;
                 state.Projected = projected;
                 state.Position = projected ? point : default;
                 UpdateChatView(index);
@@ -1297,8 +1422,8 @@ public sealed class NativeHud : IDisposable
                     state.EventId,
                     0,
                     projected,
-                    0,
-                    true,
+                    (int)MathF.Round(opacity * 1000f),
+                    bubbleActive,
                     state.Message.ChannelId,
                     state.Position));
             }
@@ -1486,7 +1611,11 @@ public sealed class NativeHud : IDisposable
 
                 break;
             case HudInputKind.SubmitChat:
-                SendCommand(HudCommand.SubmitChat(input.Text), HudCommandFamilies.SubmitChat);
+                SendCommand(
+                    input.ChatSubmission is not null
+                        ? HudCommand.SubmitChat(input.ChatSubmission)
+                        : HudCommand.SubmitChat(input.Text),
+                    HudCommandFamilies.SubmitChat);
                 break;
             case HudInputKind.ToggleInventory:
                 SetInventoryOpen(!_inventoryOpen);
@@ -2670,12 +2799,20 @@ public sealed class NativeHud : IDisposable
         ref ChatState state = ref _chat[index];
         _chatViews[index] = new HudChatView(
             state.EventId,
-            state.Message?.ChannelId ?? HudId.Empty,
+            state.Message?.RequestId ?? 0,
+            state.Message?.Channel ?? default,
             state.Message?.SenderEntityId ?? 0,
-            state.Message?.SenderNameId ?? HudId.Empty,
-            state.Message?.Text,
-            state.Message?.WorldBubble ?? false,
+            state.Message?.SenderName,
+            state.Message?.SenderAlive ?? false,
+            state.Message?.Body,
+            state.Message?.Context,
+            state.Message?.SpamWeight ?? 0,
+            state.Message?.Local ?? false,
             state.Active,
+            state.BubbleActive,
+            state.BubbleAttached,
+            state.BubbleOpacity,
+            state.CriticalHide,
             state.Projected,
             state.Position,
             state.Stamp);
@@ -2689,7 +2826,7 @@ public sealed class NativeHud : IDisposable
         HudInputKind.ActivateAction => input.Slot >= 0,
         HudInputKind.SelectWorldEntity or HudInputKind.InteractWorldEntity => input.EntityId != 0,
         HudInputKind.RequestFocus or HudInputKind.ReleaseFocus => (uint)input.Focus <= (uint)HudFocus.Drag,
-        HudInputKind.SubmitChat => !input.Text.IsEmpty,
+        HudInputKind.SubmitChat => input.ChatSubmission is not null || !input.Text.IsEmpty,
         HudInputKind.MoveInventoryItem => input.Slot >= 0 && input.Auxiliary >= 0 && input.Slot != input.Auxiliary,
         HudInputKind.DropInventoryItem => input.Slot >= 0 && input.Value > 0,
         HudInputKind.UseInventoryItem or HudInputKind.DressInventoryItem or HudInputKind.UndressInventoryItem or
@@ -2820,6 +2957,13 @@ public sealed class NativeHud : IDisposable
         public HudEvent LastEvent;
         public HudChatMessage? Message;
         public bool Active;
+        public bool BubbleEligible;
+        public bool BubbleActive;
+        public bool BubbleAttached;
+        public float BubbleOpacity;
+        public long BubbleStartedAt;
+        public long CriticalHideStartedAt;
+        public HudChatCriticalHideFrame CriticalHide;
         public bool Projected;
         public HudPoint Position;
     }

@@ -136,15 +136,26 @@ public readonly record struct HudQuestView(
 
 public readonly record struct HudChatView(
     HudId EventId,
-    HudId ChannelId,
+    ulong RequestId,
+    HudChatChannel Channel,
     ulong SenderEntityId,
-    HudId SenderNameId,
-    string? Text,
-    bool WorldBubble,
+    string? SenderName,
+    bool SenderAlive,
+    HudChatBody? Body,
+    HudChatContext? Context,
+    int SpamWeight,
+    bool Local,
     bool Active,
+    bool BubbleActive,
+    bool BubbleAttached,
+    float BubbleOpacity,
+    HudChatCriticalHideFrame CriticalHide,
     bool Projected,
     HudPoint Position,
-    HudStamp Stamp);
+    HudStamp Stamp)
+{
+    public HudId ChannelId => HudChatIds.Channel(Channel);
+}
 
 public readonly record struct HudUnitView(
     ulong EntityId,
@@ -411,6 +422,8 @@ public sealed class HudReadModel
     public HudQuestInfoView QuestInfo { get; internal set; }
 
     public HudCharacterReadModel Character { get; }
+
+    public HudChatRejection? ChatRejection { get; internal set; }
 
     public HudSelectedTargetView SelectedTarget { get; internal set; }
 

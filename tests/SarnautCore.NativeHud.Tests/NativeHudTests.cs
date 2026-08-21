@@ -289,7 +289,7 @@ public sealed class NativeHudTests
         session.TryQueue(HudEvent.UnitChanged(Stamp(1), 9, Id("unit"), 8, 10));
         session.TryQueue(HudEvent.FeedbackRaised(new HudStamp(1, 1, 1), Id("hit"), HudFeedbackKind.Enemy, 9, 2));
         session.TryQueue(HudEvent.ChatReceived(new HudStamp(1, 1, 2),
-            new HudChatMessage(Id("chat"), Id("say"), 9, Id("unit"), "hi", true)));
+            Chat(Id("chat"), 9, "unit", "hi")));
         hud.Dispatch(HudInput.RequestFocus(HudFocus.Chat));
         hud.Dispatch(HudInput.PointerEvent(
             HudInputKind.PointerMoved,
@@ -525,13 +525,124 @@ public sealed class NativeHudTests
         var world = new InMemoryHudWorld();
         world.SetProjection(7, new HudProjection(new HudPoint(4000, 300), 2, true, false));
         using NativeHud hud = Open(session, world);
-        var message = new HudChatMessage(Id("chat-1"), Id("say"), 7, Id("sender"), "hello", true);
+        HudChatMessage message = Chat(Id("chat-1"), 7, "sender", "hello");
         session.TryQueue(HudEvent.ChatReceived(Stamp(1), message));
 
         HudDiff diff = hud.Advance(Frame(0));
         HudChatView chat = Assert.Single(diff.ReadModel.Chat.ToArray(), item => item.Active);
         Assert.False(chat.Projected);
         Assert.Equal(default, chat.Position);
+    }
+
+    [Fact]
+    public void ChatLogKeepsWhitespaceAndBubbleUsesAuditedLifetime()
+    {
+        var session = new InMemoryHudSession();
+        var world = new InMemoryHudWorld();
+        world.SetProjection(7, new HudProjection(new HudPoint(500, 300), 2, true, false));
+        using NativeHud hud = Open(session, world);
+        session.TryQueue(HudEvent.ChatReceived(Stamp(1), Chat(Id("chat-space"), 7, "sender", "   ")));
+
+        HudChatView atStart = Assert.Single(hud.Advance(Frame(0)).ReadModel.Chat.ToArray(), item => item.Active);
+        Assert.Equal("   ", Assert.IsType<HudChatBody.UserText>(atStart.Body).Value);
+        Assert.True(atStart.BubbleActive);
+        Assert.Equal(0.7f, atStart.BubbleOpacity);
+
+        HudChatView atHold = Assert.Single(hud.Advance(Frame(7000)).ReadModel.Chat.ToArray(), item => item.Active);
+        Assert.True(atHold.BubbleActive);
+        Assert.Equal(0.7f, atHold.BubbleOpacity);
+
+        HudChatView atFade = Assert.Single(hud.Advance(Frame(7500)).ReadModel.Chat.ToArray(), item => item.Active);
+        Assert.True(atFade.BubbleActive);
+        Assert.Equal(0.35f, atFade.BubbleOpacity);
+
+        HudChatView expired = Assert.Single(hud.Advance(Frame(8000)).ReadModel.Chat.ToArray(), item => item.Active);
+        Assert.False(expired.BubbleActive);
+        Assert.False(expired.Projected);
+    }
+
+    [Fact]
+    public void NewPublicMessageReplacesOnlyTheSameSendersBubble()
+    {
+        var session = new InMemoryHudSession();
+        var world = new InMemoryHudWorld();
+        world.SetProjection(7, new HudProjection(new HudPoint(500, 300), 2, true, false));
+        world.SetProjection(8, new HudProjection(new HudPoint(520, 300), 2, true, false));
+        using NativeHud hud = Open(session, world);
+        session.TryQueue(HudEvent.ChatReceived(Stamp(1), Chat(Id("first"), 7, "sender", "one")));
+        hud.Advance(Frame(0));
+
+        session.TryQueue(HudEvent.ChatReceived(Stamp(2), Chat(Id("second"), 7, "sender", "two")));
+        session.TryQueue(HudEvent.ChatReceived(Stamp(3), Chat(Id("other"), 8, "other", "three")));
+        HudChatView[] chat = hud.Advance(Frame(100)).ReadModel.Chat.ToArray();
+
+        Assert.True(Assert.Single(chat, item => item.EventId == Id("first")).Active);
+        Assert.False(Assert.Single(chat, item => item.EventId == Id("first")).BubbleActive);
+        Assert.True(Assert.Single(chat, item => item.EventId == Id("second")).BubbleActive);
+        Assert.True(Assert.Single(chat, item => item.EventId == Id("other")).BubbleActive);
+    }
+
+    [Fact]
+    public void BubblePolicyAppliesChannelSpamToggleOpacityAndDistance()
+    {
+        var session = new InMemoryHudSession();
+        var world = new InMemoryHudWorld();
+        world.SetProjection(7, new HudProjection(new HudPoint(500, 300), 68.001, true, false));
+        using NativeHud hud = Open(session, world);
+        hud.SetChatBubbleSettings(new HudChatBubbleSettings(true, 4, true));
+        session.TryQueue(HudEvent.ChatReceived(Stamp(1), Chat(Id("private"), 7, "sender", "one", HudChatChannel.Party)));
+        session.TryQueue(HudEvent.ChatReceived(Stamp(2), Chat(Id("spam"), 7, "sender", "two", spamWeight: 100)));
+        session.TryQueue(HudEvent.ChatReceived(Stamp(3), Chat(Id("public"), 7, "sender", "three")));
+
+        HudChatView[] chat = hud.Advance(Frame(0)).ReadModel.Chat.ToArray();
+        Assert.False(Assert.Single(chat, item => item.EventId == Id("private")).BubbleActive);
+        Assert.False(Assert.Single(chat, item => item.EventId == Id("spam")).BubbleActive);
+        HudChatView visible = Assert.Single(chat, item => item.EventId == Id("public"));
+        Assert.True(visible.BubbleActive);
+        Assert.Equal(0.4f, visible.BubbleOpacity);
+        Assert.True(visible.BubbleAttached);
+        Assert.False(visible.Projected);
+
+        hud.SetChatBubbleSettings(new HudChatBubbleSettings(false, 4, false));
+        visible = Assert.Single(hud.Advance(Frame(1)).ReadModel.Chat.ToArray(), item => item.EventId == Id("public"));
+        Assert.False(visible.BubbleActive);
+    }
+
+    [Fact]
+    public void ChatRemovalRunsThreeStageCriticalHide()
+    {
+        var session = new InMemoryHudSession();
+        var world = new InMemoryHudWorld();
+        world.SetProjection(7, new HudProjection(new HudPoint(500, 300), 2, true, false));
+        using NativeHud hud = Open(session, world);
+        session.TryQueue(HudEvent.ChatReceived(Stamp(1), Chat(Id("chat-hide"), 7, "sender", "one")));
+        hud.Advance(Frame(0));
+        session.TryQueue(HudEvent.ChatRemoved(Stamp(2), Id("chat-hide")));
+
+        HudChatView first = Assert.Single(hud.Advance(Frame(100)).ReadModel.Chat.ToArray(), item => item.EventId == Id("chat-hide"));
+        Assert.Equal(HudChatCriticalHideStage.FirstFlash, first.CriticalHide.Stage);
+        HudChatView second = Assert.Single(hud.Advance(Frame(350)).ReadModel.Chat.ToArray(), item => item.EventId == Id("chat-hide"));
+        Assert.Equal(HudChatCriticalHideStage.SecondFlash, second.CriticalHide.Stage);
+        HudChatView final = Assert.Single(hud.Advance(Frame(600)).ReadModel.Chat.ToArray(), item => item.EventId == Id("chat-hide"));
+        Assert.Equal(HudChatCriticalHideStage.FinalFade, final.CriticalHide.Stage);
+        HudChatView hidden = Assert.Single(hud.Advance(Frame(850)).ReadModel.Chat.ToArray(), item => item.EventId == Id("chat-hide"));
+        Assert.False(hidden.BubbleActive);
+    }
+
+    [Fact]
+    public void TypedChatSubmissionReachesSessionWithoutLosingWhitespace()
+    {
+        var session = new InMemoryHudSession();
+        using NativeHud hud = Open(session);
+        var submission = new HudChatSubmission(HudChatChannel.Say, "   ");
+
+        Assert.Equal(HudDispatchStatus.Accepted, hud.Dispatch(HudInput.SubmitChat(submission)).Status);
+        hud.Advance(Frame(0));
+
+        Assert.True(session.TryReadCommand(out HudCommand command));
+        Assert.Equal(HudCommandKind.SubmitChat, command.Kind);
+        Assert.Same(submission, command.ChatSubmission);
+        Assert.Equal("   ", command.ChatSubmission?.Text);
     }
 
     [Fact]
@@ -926,6 +1037,27 @@ public sealed class NativeHudTests
     }
 
     private static HudFrame Frame(long now) => new(now, Viewport);
+
+    private static HudChatMessage Chat(
+        HudId eventId,
+        ulong senderEntityId,
+        string senderName,
+        string text,
+        HudChatChannel channel = HudChatChannel.Say,
+        int spamWeight = 0) =>
+        new(
+            eventId,
+            0,
+            channel,
+            1,
+            senderEntityId,
+            senderName,
+            true,
+            new HudChatBody.UserText(text),
+            channel == HudChatChannel.Whisper ? new HudChatContext.WhisperPeerName(senderName) : HudChatContext.None,
+            spamWeight,
+            true,
+            false);
 
     private static HudQuestDocument Quest(HudId questId, HudQuestClientState state, bool canAbandon = false) =>
         new(questId, Id($"{questId.Value}.title"), Id($"{questId.Value}.description"), state, canAbandon,

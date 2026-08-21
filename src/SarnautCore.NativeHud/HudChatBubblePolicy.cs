@@ -17,6 +17,24 @@ public enum HudChatBubbleEasing
 
 public readonly record struct HudChatBubbleFrame(bool Active, float Opacity);
 
+public readonly record struct HudChatBubbleSettings(
+    bool Show,
+    int OpacityTenths,
+    bool AntiSpamEnabled)
+{
+    public static HudChatBubbleSettings RetailDefault => new(true, HudChatBubblePolicy.DefaultOpacityTenths, true);
+
+    public HudChatBubbleSettings Validate()
+    {
+        if (OpacityTenths is < 0 or > 10)
+        {
+            throw new ArgumentOutOfRangeException(nameof(OpacityTenths));
+        }
+
+        return this;
+    }
+}
+
 public readonly record struct HudChatCriticalHideFrame(
     bool Active,
     HudChatCriticalHideStage Stage,
