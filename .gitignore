@@ -46,6 +46,10 @@ converted/*
 !converted/.gitkeep
 !converted/.gdignore
 
+# User-local native content (maps, terrain scenes). Mounted as a junction by
+# scripts/mount-assets.ps1; the .gdignore keeps the editor from importing.
+content/*
+!content/.gdignore
 # User-local upscaled texture variants. Mounted as a junction by
 # scripts/mount-assets.ps1; the .gdignore keeps Godot from importing 35 GB of
 # 4x PNGs that UpscaledTextures reads through FileAccess instead.

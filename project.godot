@@ -29,6 +29,7 @@ visual/prefer_upscaled_textures=true
 visual/upscaled_root="res://upscaled/assets"
 visual/upscaled_mipmaps=false
 visual/upscaled_vram_compression=true
+content/native_root="res://content/league-slice"
 
 [input]
 

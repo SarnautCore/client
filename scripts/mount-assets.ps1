@@ -1,19 +1,20 @@
 <#
 .SYNOPSIS
-    Mounts the converted and upscaled asset trees into the project.
+    Mounts the converted, upscaled, and native content asset trees into the project.
 
 .DESCRIPTION
-    Both trees are far too large to live in git, so the project reaches them
+    Asset trees are far too large to live in git, so the project reaches them
     through directory junctions:
 
         converted/assets -> <AssetRoot>\converted     (imported by Godot)
         upscaled/assets  -> <AssetRoot>\upscaled      (never imported)
+        content/league-slice -> <ContentRoot>\league-slice (never imported)
 
-    The upscaled mount carries a .gdignore. Godot therefore skips the whole
-    subtree during its filesystem scan, and SarnautCore.UpscaledTextures reads
-    the variants through FileAccess/Image at runtime instead. Importing them
-    would add tens of GB to .godot/imported for no rendering benefit — see
-    docs/upscaled-texture-preference.md.
+    The upscaled and native content mounts carry .gdignore files. Godot therefore
+    skips these subtrees during its filesystem scan. UpscaledTextures and
+    NativeContentSettings read variants through FileAccess/ResourceLoader at
+    runtime instead. Importing them would add tens of GB to .godot/imported for
+    no rendering benefit.
 
     Idempotent: re-running only reports what is already in place.
 #>
@@ -53,6 +54,11 @@ Mount-Tree -MountPoint (Join-Path $projectRoot 'converted\assets') `
 Mount-Tree -MountPoint (Join-Path $projectRoot 'upscaled\assets') `
            -Target (Join-Path $AssetRoot 'upscaled')
 
+# Mount native content (created by separate converter task).
+$contentStagingRoot = Join-Path (Split-Path -Parent $AssetRoot) 'content-staging'
+Mount-Tree -MountPoint (Join-Path $projectRoot 'content\league-slice') `
+           -Target (Join-Path $contentStagingRoot 'league-slice')
+
 # Must exist before Godot next scans, or it will start importing the 4x tree.
 $gdignore = Join-Path $projectRoot 'upscaled\.gdignore'
 if (-not (Test-Path $gdignore)) {
@@ -61,4 +67,14 @@ if (-not (Test-Path $gdignore)) {
 }
 else {
     Write-Host "already present: $gdignore"
+}
+
+# Must exist before Godot next scans for native content too.
+$contentGdignore = Join-Path $projectRoot 'content\.gdignore'
+if (-not (Test-Path $contentGdignore)) {
+    Set-Content -Path $contentGdignore -Value '' -NoNewline
+    Write-Host "wrote $contentGdignore"
+}
+else {
+    Write-Host "already present: $contentGdignore"
 }

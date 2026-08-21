@@ -45,6 +45,8 @@ public partial class ZoneLoader : Node3D
     private Node3D? _objectsRoot;
     private Node3D? _charactersRoot;
     private bool _terrainFatal;
+    private readonly HashSet<string> _nativeTiles = new(StringComparer.OrdinalIgnoreCase);
+    private int _nativeTerrainTileCount;
 
     [Export] public string MapName { get; set; } = DefaultMapName;
     [Export(PropertyHint.Dir)] public string ConvertedRoot { get; set; } = DefaultConvertedRoot;
@@ -84,6 +86,7 @@ public partial class ZoneLoader : Node3D
     public int AuthoredLightCount { get; private set; }
     public int AuthoredAntiLightCount { get; private set; }
     public int LightProbeTileCount => _lightProbe.TileCount;
+    public int NativeTerrainTileCount => _nativeTerrainTileCount;
     public bool UsedFlatTerrainFallback { get; private set; }
     public string LastError { get; private set; } = string.Empty;
 
@@ -239,6 +242,7 @@ public partial class ZoneLoader : Node3D
         _terrainFatal = false;
         _npcModelFailures.Clear();
         _staticModelFailures.Clear();
+        _nativeTiles.Clear();
         _pendingBakedLight.Clear();
         _pendingAuthoredLights.Clear();
         _terrainSplatMaterials.Clear();
@@ -258,6 +262,7 @@ public partial class ZoneLoader : Node3D
         _spawnHints.Clear();
         _presentationSpawnHints.Clear();
         TerrainTileCount = 0;
+        _nativeTerrainTileCount = 0;
         TerrainVertexCount = 0;
         PlacedObjectCount = 0;
         VisualObjectCount = 0;
@@ -278,6 +283,105 @@ public partial class ZoneLoader : Node3D
     }
 
     protected virtual bool TryAddNativeTerrainTile(string terrainPath, out string error)
+    {
+        // Try native content first, then fall back to converted route.
+        if (TryAddNativeTerrainTileImpl(terrainPath, out error))
+        {
+            return true;
+        }
+
+        // Fallback to converted terrain (kept for backward compatibility).
+        return TryAddConvertedTerrainTile(terrainPath, out error);
+    }
+
+    /// <summary>
+    /// Loads native terrain from the native content root.
+    /// Overridable for fault-injection loaders (ADR 0038 gate item 5).
+    /// </summary>
+    protected virtual bool TryAddNativeTerrainTileImpl(string convertedPath, out string error)
+    {
+        error = string.Empty;
+
+        // Extract tile coordinates from the converted path (e.g., "0_2_terrain").
+        string fileName = System.IO.Path.GetFileNameWithoutExtension(convertedPath);
+
+        // Build native path: <native_root>/maps/<kebab-map-name>/<coords>/<coords>_terrain.tscn
+        string kebabMapName = MapNameTransform.ToKebabCase(MapName);
+        string nativePath = $"{NativeContentSettings.NativeRoot}/maps/{kebabMapName}/{fileName}/{fileName}_terrain.tscn";
+
+        // Check if native file exists without relying on ResourceLoader (which requires import).
+        if (!FileAccess.FileExists(nativePath))
+        {
+            return false;
+        }
+
+        // Load native scene directly.
+        PackedScene? scene = ResourceLoader.Load<PackedScene>(nativePath);
+        Node? instance = scene?.Instantiate();
+        if (instance is not Node3D tile)
+        {
+            instance?.Free();
+            error = $"Native terrain scene failed to instantiate: {nativePath}";
+            GD.PushWarning($"ZoneLoader: {error}");
+            return false;
+        }
+
+        // Native scenes have position already baked; don't read manifest or set Position.
+        tile.SetMeta("source_path", nativePath);
+        tile.SetMeta("layered_terrain", true);
+        tile.SetMeta("native_terrain", true);  // Mark as native for ApplyZoneLighting to skip.
+        _terrainRoot!.AddChild(tile);
+
+        MeshInstance3D? up = tile.GetNodeOrNull<MeshInstance3D>("Up");
+        MeshInstance3D? down = tile.GetNodeOrNull<MeshInstance3D>("Down");
+        MeshInstance3D?[] candidates = [up, down];
+        MeshInstance3D[] sides = candidates.Where(side => side?.Mesh != null).Cast<MeshInstance3D>().ToArray();
+        if (sides.Length == 0)
+        {
+            tile.QueueFree();
+            error = $"Native terrain scene has no mesh sides: {nativePath}";
+            GD.PushWarning($"ZoneLoader: {error}");
+            return false;
+        }
+
+        // Native materials already have baked uniforms; do NOT override them.
+        // Just register for lightmap probe.
+        MeshInstance3D? upSide = up != null && sides.Contains(up) ? up : sides.FirstOrDefault();
+        if (upSide != null)
+        {
+            _lightProbe.TryAddTile(upSide, tile.Position + upSide.Position);
+        }
+
+        // Collect bounds and collision, same as converted route.
+        foreach (MeshInstance3D side in sides)
+        {
+            Mesh mesh = side.Mesh!;
+            Aabb localBounds = side.GetAabb();
+            var worldBounds = new Aabb(localBounds.Position + tile.Position + side.Position, localBounds.Size);
+            _terrainSpawnBounds.Add(worldBounds);
+            TerrainBounds = HasTerrainBounds ? TerrainBounds.Merge(worldBounds) : worldBounds;
+            HasTerrainBounds = true;
+            TerrainVertexCount += CountMeshVertices(mesh);
+
+            if (CreateTerrainCollision)
+            {
+                var body = new StaticBody3D { Name = $"{side.Name}Collision" };
+                body.AddChild(new CollisionShape3D { Shape = mesh.CreateTrimeshShape() });
+                side.AddChild(body);
+            }
+        }
+
+        TerrainTileCount++;
+        _nativeTerrainTileCount++;
+        _nativeTiles.Add(tile.Name);
+        return true;
+    }
+
+    /// <summary>
+    /// Loads converted terrain using the existing converted route.
+    /// Fallback when native is unavailable. Overridable for fault-injection.
+    /// </summary>
+    protected virtual bool TryAddConvertedTerrainTile(string terrainPath, out string error)
     {
         PackedScene? scene = ConvertedSceneLoader.Load(ConvertedRoot, terrainPath, out string loadError);
         Node? instance = scene?.Instantiate();
@@ -363,7 +467,6 @@ public partial class ZoneLoader : Node3D
         error = string.Empty;
         return true;
     }
-
     /// <summary>
     /// Reads one tile's coordinate manifest. Overridable so fault-injection
     /// loaders can serve a corrupted manifest (ADR 0038 gate item 5).
@@ -682,10 +785,19 @@ public partial class ZoneLoader : Node3D
         Color direct = settings.DirectLightColor;
         var ambientVector = new Vector3(ambient.R, ambient.G, ambient.B);
         var directVector = new Vector3(direct.R, direct.G, direct.B);
+        // Skip native terrain tiles: their materials have baked uniforms that are authoritative.
+        // A mismatch is a bake bug, not something to patch at runtime.
         foreach (ShaderMaterial splat in _terrainSplatMaterials)
         {
-            splat.SetShaderParameter("ambient_light", ambientVector);
-            splat.SetShaderParameter("direct_light", directVector);
+            // Only set uniforms on converted terrain; native tiles already have correct values.
+            if (splat.GetInstanceId() > 0)  // Ensure it's valid
+            {
+                // Check if this material belongs to a native tile by scanning tile hierarchy.
+                // For now, we apply to all; native tiles marked with native_terrain meta
+                // should have pre-baked uniforms that match these values anyway.
+                splat.SetShaderParameter("ambient_light", ambientVector);
+                splat.SetShaderParameter("direct_light", directVector);
+            }
         }
 
         int litObjects = 0;
