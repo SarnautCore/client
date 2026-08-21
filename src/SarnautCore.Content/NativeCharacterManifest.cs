@@ -199,7 +199,7 @@ public sealed class NativeCharacterManifest
                     $"Character '{characterKey}' names missing identity '{entry.IdentityId}'.");
             }
 
-            string scene = ValidateScenePath(identityId, identity.Scene);
+            string scene = ValidateScenePath(identityId, identity.Scene, identity.RuntimeScene);
             IReadOnlyList<string> clips = ValidateClips(identityId, "clips", identity.Clips);
             IReadOnlyList<string> combatClips = ValidateClips(
                 identityId,
@@ -291,22 +291,22 @@ public sealed class NativeCharacterManifest
         return copy;
     }
 
-    private static string ValidateScenePath(string identityId, string value)
+    private static string ValidateScenePath(
+        string identityId,
+        string? sceneValue,
+        string? runtimeSceneValue)
     {
-        string scene = value.Trim();
-        string[] parts = scene.Split('/');
-        if (scene.Length == 0
-            || scene.Contains('\\')
-            || scene.StartsWith('/')
-            || scene.Contains("://", StringComparison.Ordinal)
-            || !scene.EndsWith(".tscn", StringComparison.OrdinalIgnoreCase)
-            || parts.Any(part => part.Length == 0 || part is "." or ".."))
+        try
         {
-            throw new InvalidDataException(
-                $"Identity '{identityId}' has invalid manifest-relative scene '{value}'.");
+            return NativeSceneReference.Select(sceneValue, runtimeSceneValue);
         }
-
-        return scene;
+        catch (InvalidDataException exception)
+        {
+            string selected = runtimeSceneValue ?? sceneValue ?? string.Empty;
+            throw new InvalidDataException(
+                $"Identity '{identityId}' has invalid manifest-relative scene '{selected}': {exception.Message}",
+                exception);
+        }
     }
 
     private static IReadOnlyList<string> ValidateClips(
@@ -465,7 +465,8 @@ public sealed class NativeCharacterManifest
 
     private sealed class IdentityEntry
     {
-        [JsonPropertyName("scene")] public string Scene { get; set; } = string.Empty;
+        [JsonPropertyName("scene")] public string? Scene { get; set; }
+        [JsonPropertyName("runtime_scene")] public string? RuntimeScene { get; set; }
         [JsonPropertyName("clips")] public List<string>? Clips { get; set; }
         [JsonPropertyName("combat_event_clips")] public List<string>? CombatEventClips { get; set; }
         [JsonPropertyName("lod")] public LodEntry? Lod { get; set; }

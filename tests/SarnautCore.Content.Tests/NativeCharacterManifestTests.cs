@@ -113,6 +113,50 @@ public sealed class NativeCharacterManifestTests
         Assert.Contains("invalid manifest-relative scene", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Compiled_scene_can_replace_plain_scene()
+    {
+        string json = File.ReadAllText(FixturePath)
+            .Replace("Rat1_1/Rat1_1.tscn", "Rat1_1/Rat1_1.scn", StringComparison.Ordinal);
+
+        NativeCharacterManifest manifest = NativeCharacterManifest.Parse(json);
+
+        Assert.True(manifest.TryResolve("50032", out NativeCharacterModel rat));
+        Assert.Equal("Rat1_1/Rat1_1.scn", rat.ScenePath);
+    }
+
+    [Fact]
+    public void Runtime_scene_is_preferred_and_plain_scene_can_be_absent()
+    {
+        string json = File.ReadAllText(FixturePath)
+            .Replace(
+                "\"scene\": \"Rat1_1/Rat1_1.tscn\"",
+                "\"runtime_scene\": \"Rat1_1/Rat1_1.scn\"",
+                StringComparison.Ordinal);
+
+        NativeCharacterManifest manifest = NativeCharacterManifest.Parse(json);
+
+        Assert.True(manifest.TryResolve("50032", out NativeCharacterModel rat));
+        Assert.Equal("Rat1_1/Rat1_1.scn", rat.ScenePath);
+        Assert.DoesNotContain(".tscn", rat.ScenePath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("\"runtime_scene\": \"Rat1_1/Rat1_1.tscn\"")]
+    [InlineData("\"runtime_scene\": \"../Rat1_1.scn\"")]
+    [InlineData("\"runtime_scene\": \"res://Rat1_1.scn\"")]
+    [InlineData("\"runtime_scene\": \"\"")]
+    public void Invalid_runtime_scene_is_rejected(string runtimeField)
+    {
+        string json = File.ReadAllText(FixturePath)
+            .Replace("\"scene\": \"Rat1_1/Rat1_1.tscn\"", runtimeField, StringComparison.Ordinal);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(
+            () => NativeCharacterManifest.Parse(json));
+
+        Assert.Contains("invalid manifest-relative scene", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData("[12.0]", "switch distances")]
     [InlineData("[12.0, 12.0]", "positive, and increasing")]

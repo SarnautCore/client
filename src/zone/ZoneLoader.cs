@@ -321,17 +321,30 @@ public partial class ZoneLoader : Node3D
             foreach (NativeTerrainTile entry in manifest.Tiles)
             {
                 string pathError = string.Empty;
+                string selectedScene;
+                try
+                {
+                    selectedScene = NativeSceneReference.Select(
+                        entry.ScenePath,
+                        entry.RuntimeScene,
+                        allowParentSegments: true);
+                }
+                catch (System.IO.InvalidDataException exception)
+                {
+                    error = $"Native terrain entry '{entry.TileId}' has an invalid scene: {exception.Message}";
+                    return false;
+                }
+
                 if (string.IsNullOrWhiteSpace(entry.TileId)
                     || entry.TileId.IndexOfAny(['/', '\\', ':']) >= 0
                     || !seenTileIds.Add(entry.TileId)
                     || entry.Origin == null
                     || !entry.Origin.IsFinite
-                    || entry.ScenePath.Replace('\\', '/').Split('/').Contains("..", StringComparer.Ordinal)
                     || !TryResolveRelativeResourcePath(
                         manifestPath,
-                        entry.ScenePath,
+                        selectedScene,
                         terrainRoot,
-                        ".tscn",
+                        NativeSceneReference.Extension(selectedScene),
                         out string scenePath,
                         out pathError))
                 {
@@ -680,6 +693,7 @@ public partial class ZoneLoader : Node3D
             if (!placement.Visual)
             {
                 if (!string.IsNullOrWhiteSpace(placement.Scene)
+                    || !string.IsNullOrWhiteSpace(placement.RuntimeScene)
                     || (placement.NonVisualReason != "collision_only"
                         && placement.NonVisualReason != "invisible_portal")
                     || placement.Classification != placement.NonVisualReason)
@@ -697,11 +711,25 @@ public partial class ZoneLoader : Node3D
                 return false;
             }
 
+            string selectedScene;
+            try
+            {
+                selectedScene = NativeSceneReference.Select(
+                    placement.Scene,
+                    placement.RuntimeScene,
+                    allowParentSegments: true);
+            }
+            catch (System.IO.InvalidDataException exception)
+            {
+                error = $"Native static placement '{placement.Name}' has an invalid scene: {exception.Message}";
+                return false;
+            }
+
             if (!TryResolveRelativeResourcePath(
                     manifestPath,
-                    placement.Scene,
+                    selectedScene,
                     staticsRoot,
-                    ".tscn",
+                    NativeSceneReference.Extension(selectedScene),
                     out string scenePath,
                     out string scenePathError))
             {
@@ -1582,6 +1610,7 @@ public partial class ZoneLoader : Node3D
         [JsonPropertyName("tile_id")] public string TileId { get; set; } = string.Empty;
         [JsonPropertyName("origin")] public NativeTerrainPosition? Origin { get; set; }
         [JsonPropertyName("scene_path")] public string ScenePath { get; set; } = string.Empty;
+        [JsonPropertyName("runtime_scene")] public string? RuntimeScene { get; set; }
     }
 
     private sealed class NativeTerrainPosition
@@ -1667,6 +1696,7 @@ public partial class ZoneLoader : Node3D
         [JsonPropertyName("order")] public int Order { get; set; } = -1;
         [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
         [JsonPropertyName("scene")] public string? Scene { get; set; }
+        [JsonPropertyName("runtime_scene")] public string? RuntimeScene { get; set; }
         [JsonPropertyName("position")] public float[]? Position { get; set; }
         [JsonPropertyName("rotation")] public float[]? Rotation { get; set; }
         [JsonPropertyName("scale")] public float Scale { get; set; }
