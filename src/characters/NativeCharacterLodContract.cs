@@ -96,7 +96,7 @@ public static class NativeCharacterLodContract
             }
         }
 
-        InspectAttachments(model);
+        InspectAttachments(model, lod.Attachments);
         EnsureAllMeshDescendantsReceiveDynamicLight(model);
 
         return levels.AsReadOnly();
@@ -177,30 +177,61 @@ public static class NativeCharacterLodContract
         return count;
     }
 
-    private static void InspectAttachments(Node node)
+    private static void InspectAttachments(
+        Node node,
+        IReadOnlyDictionary<string, NativeCharacterAttachmentLod> declared)
     {
-        foreach (Node child in node.GetChildren())
+        var found = new Dictionary<string, BoneAttachment3D>(StringComparer.Ordinal);
+        CollectAttachments(node, found);
+        if (found.Count != declared.Count)
         {
-            if (child is BoneAttachment3D attachment)
+            throw new InvalidDataException(
+                $"Native character has {found.Count} attachments; manifest declares {declared.Count}.");
+        }
+
+        foreach ((string nodeName, NativeCharacterAttachmentLod capability) in declared)
+        {
+            if (!found.TryGetValue(nodeName, out BoneAttachment3D? attachment))
             {
-                InspectAttachment(attachment);
+                throw new InvalidDataException(
+                    $"Native character attachment '{nodeName}' is declared but missing.");
             }
 
-            InspectAttachments(child);
+            InspectAttachment(attachment, capability);
         }
     }
 
-    private static void InspectAttachment(BoneAttachment3D attachment)
+    private static void CollectAttachments(
+        Node node,
+        Dictionary<string, BoneAttachment3D> found)
+    {
+        foreach (Node child in node.GetChildren())
+        {
+            if (child is BoneAttachment3D attachment
+                && !found.TryAdd(attachment.Name.ToString(), attachment))
+            {
+                throw new InvalidDataException(
+                    $"Native character has duplicate attachment node '{attachment.Name}'.");
+            }
+
+            CollectAttachments(child, found);
+        }
+    }
+
+    private static void InspectAttachment(
+        BoneAttachment3D attachment,
+        NativeCharacterAttachmentLod capability)
     {
         string baseName = $"{attachment.Name}Mesh";
-        var levels = new List<MeshInstance3D>();
-        for (int level = 0; ; level++)
+        var levels = new List<MeshInstance3D>(capability.Levels);
+        for (int level = 0; level < capability.Levels; level++)
         {
             string name = level == 0 ? baseName : $"{baseName}LOD{level}";
             MeshInstance3D? mesh = attachment.GetNodeOrNull<MeshInstance3D>(name);
             if (mesh is null)
             {
-                break;
+                throw new InvalidDataException(
+                    $"Attachment '{attachment.Name}' declared LOD{level}, but node '{name}' is missing.");
             }
 
             levels.Add(mesh);
@@ -215,10 +246,10 @@ public static class NativeCharacterLodContract
             }
         }
 
-        if (levels.Count == 0 || levels.Count != directMeshes)
+        if (levels.Count != directMeshes)
         {
             throw new InvalidDataException(
-                $"Attachment '{attachment.Name}' has missing or unexpected LOD mesh names.");
+                $"Attachment '{attachment.Name}' has {directMeshes} meshes; manifest declares {levels.Count}.");
         }
 
         var meshIds = new HashSet<ulong>();
@@ -261,38 +292,27 @@ public static class NativeCharacterLodContract
             }
         }
 
-        RequireRange(levels[0].VisibilityRangeBegin, 0.0f, 0, "attachment begin");
+        for (int level = 0; level < levels.Count; level++)
+        {
+            float expectedBegin = level == 0 ? 0.0f : capability.SwitchDistances[level - 1];
+            float expectedEnd = level == capability.Levels - 1
+                ? 0.0f
+                : capability.SwitchDistances[level];
+            RequireRange(levels[level].VisibilityRangeBegin, expectedBegin, level, "attachment begin");
+            RequireRange(levels[level].VisibilityRangeEnd, expectedEnd, level, "attachment end");
+        }
+
         if (levels.Count == 1)
         {
-            RequireRange(levels[0].VisibilityRangeEnd, 0.0f, 0, "attachment end");
             return;
         }
 
-        for (int level = 0; level < levels.Count - 1; level++)
-        {
-            float end = levels[level].VisibilityRangeEnd;
-            if (!float.IsFinite(end) || end <= levels[level].VisibilityRangeBegin)
-            {
-                throw new InvalidDataException(
-                    $"Attachment '{attachment.Name}' LOD{level} has a non-increasing range.");
-            }
-
-            RequireRange(
-                levels[level + 1].VisibilityRangeBegin,
-                end,
-                level + 1,
-                "attachment begin");
-        }
-
-        RequireRange(
-            levels[^1].VisibilityRangeEnd,
-            0.0f,
-            levels.Count - 1,
-            "attachment end");
-
         for (int level = 0; level < levels.Count; level++)
         {
-            float distance = ProbeDistance(levels, level);
+            float distance = ProbeDistance(
+                capability.Levels,
+                capability.SwitchDistances,
+                level);
             MeshInstance3D selected = SelectAtDistance(levels, distance);
             if (!ReferenceEquals(selected, levels[level]))
             {
@@ -317,20 +337,23 @@ public static class NativeCharacterLodContract
         }
     }
 
-    private static float ProbeDistance(IReadOnlyList<MeshInstance3D> levels, int level)
+    private static float ProbeDistance(
+        int levelCount,
+        IReadOnlyList<float> switchDistances,
+        int level)
     {
         if (level == 0)
         {
-            return levels[0].VisibilityRangeEnd * 0.5f;
+            return switchDistances[0] * 0.5f;
         }
 
-        if (level == levels.Count - 1)
+        if (level == levelCount - 1)
         {
-            float begin = levels[level].VisibilityRangeBegin;
+            float begin = switchDistances[^1];
             return begin + MathF.Max(1.0f, begin * 0.25f);
         }
 
-        return (levels[level].VisibilityRangeBegin + levels[level].VisibilityRangeEnd) * 0.5f;
+        return (switchDistances[level - 1] + switchDistances[level]) * 0.5f;
     }
 
     private static string LevelName(int level) => level == 0 ? "Mesh" : $"MeshLOD{level}";

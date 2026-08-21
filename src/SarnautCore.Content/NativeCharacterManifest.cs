@@ -19,7 +19,10 @@ public sealed record NativeCharacterModel(
 }
 
 /// <summary>Authored character mesh levels and their distance switches.</summary>
-public sealed record NativeCharacterLod(int Levels, IReadOnlyList<float> SwitchDistances)
+public sealed record NativeCharacterLod(
+    int Levels,
+    IReadOnlyList<float> SwitchDistances,
+    IReadOnlyDictionary<string, NativeCharacterAttachmentLod> Attachments)
 {
     /// <summary>Returns the sole mesh level eligible at a nonnegative camera distance.</summary>
     public int GetLevelAtDistance(float distance)
@@ -40,6 +43,12 @@ public sealed record NativeCharacterLod(int Levels, IReadOnlyList<float> SwitchD
         return Levels - 1;
     }
 }
+
+/// <summary>One rigid attachment's baked LOD capability.</summary>
+public sealed record NativeCharacterAttachmentLod(
+    string Node,
+    int Levels,
+    IReadOnlyList<float> SwitchDistances);
 
 /// <summary>
 /// Maps server content ids and player appearance keys to native Godot scenes.
@@ -324,35 +333,88 @@ public sealed class NativeCharacterManifest
             return null;
         }
 
-        if (source.Levels < 2)
+        if (source.Levels != 3)
         {
             throw new InvalidDataException(
-                $"Identity '{identityId}' LOD has {source.Levels} levels; expected at least 2.");
+                $"Identity '{identityId}' body LOD has {source.Levels} levels; expected 3.");
         }
 
-        if (source.SwitchDistances is null
-            || source.SwitchDistances.Count != source.Levels - 1)
+        IReadOnlyList<float> distances = ValidateSwitchDistances(
+            identityId,
+            "body",
+            source.Levels,
+            source.SwitchDistances);
+        if (source.Attachments is null)
         {
-            int actual = source.SwitchDistances?.Count ?? 0;
             throw new InvalidDataException(
-                $"Identity '{identityId}' LOD has {actual} switch distances for {source.Levels} levels.");
+                $"Identity '{identityId}' LOD has no attachments capability array.");
         }
 
-        var distances = new List<float>(source.SwitchDistances.Count);
+        var attachments = new Dictionary<string, NativeCharacterAttachmentLod>(StringComparer.Ordinal);
+        foreach (AttachmentLodEntry? sourceAttachment in source.Attachments)
+        {
+            string node = sourceAttachment?.Node.Trim() ?? string.Empty;
+            if (node.Length == 0
+                || !node.StartsWith("Attach_", StringComparison.Ordinal)
+                || node.Contains('/')
+                || node.Contains('\\')
+                || !attachments.TryAdd(
+                    node,
+                    new NativeCharacterAttachmentLod(
+                        node,
+                        sourceAttachment!.Levels,
+                        ValidateSwitchDistances(
+                            identityId,
+                            $"attachment '{node}'",
+                            sourceAttachment.Levels,
+                            sourceAttachment.SwitchDistances))))
+            {
+                throw new InvalidDataException(
+                    $"Identity '{identityId}' has an invalid or duplicate attachment LOD node '{node}'.");
+            }
+        }
+
+        return new NativeCharacterLod(
+            source.Levels,
+            distances,
+            new ReadOnlyDictionary<string, NativeCharacterAttachmentLod>(attachments));
+    }
+
+    private static IReadOnlyList<float> ValidateSwitchDistances(
+        string identityId,
+        string subject,
+        int levels,
+        List<float>? source)
+    {
+        if (levels is not 1 and not 3)
+        {
+            throw new InvalidDataException(
+                $"Identity '{identityId}' {subject} LOD has {levels} levels; expected 1 or 3.");
+        }
+
+        int expected = levels - 1;
+        if (source is null || source.Count != expected)
+        {
+            int actual = source?.Count ?? 0;
+            throw new InvalidDataException(
+                $"Identity '{identityId}' {subject} LOD has {actual} switch distances for {levels} levels.");
+        }
+
+        var distances = new List<float>(source.Count);
         float previous = 0.0f;
-        foreach (float distance in source.SwitchDistances)
+        foreach (float distance in source)
         {
             if (!float.IsFinite(distance) || distance <= previous)
             {
                 throw new InvalidDataException(
-                    $"Identity '{identityId}' LOD switch distances must be finite, positive, and increasing.");
+                    $"Identity '{identityId}' {subject} LOD switch distances must be finite, positive, and increasing.");
             }
 
             distances.Add(distance);
             previous = distance;
         }
 
-        return new NativeCharacterLod(source.Levels, distances.AsReadOnly());
+        return distances.AsReadOnly();
     }
 
     private static void ValidateCount(string label, int expected, int actual)
@@ -392,6 +454,14 @@ public sealed class NativeCharacterManifest
 
     private sealed class LodEntry
     {
+        [JsonPropertyName("levels")] public int Levels { get; set; }
+        [JsonPropertyName("switch_distances")] public List<float>? SwitchDistances { get; set; }
+        [JsonPropertyName("attachments")] public List<AttachmentLodEntry?>? Attachments { get; set; }
+    }
+
+    private sealed class AttachmentLodEntry
+    {
+        [JsonPropertyName("node")] public string Node { get; set; } = string.Empty;
         [JsonPropertyName("levels")] public int Levels { get; set; }
         [JsonPropertyName("switch_distances")] public List<float>? SwitchDistances { get; set; }
     }

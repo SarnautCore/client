@@ -14,7 +14,19 @@
       "combat_event_clips": ["attack"],
       "lod": {
         "levels": 3,
-        "switch_distances": [12.0, 28.0]
+        "switch_distances": [12.0, 28.0],
+        "attachments": [
+          {
+            "node": "Attach_Test",
+            "levels": 3,
+            "switch_distances": [8.0, 20.0]
+          },
+          {
+            "node": "Attach_Single",
+            "levels": 1,
+            "switch_distances": []
+          }
+        ]
       }
     },
     "player.kania.female": {
