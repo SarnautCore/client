@@ -9,10 +9,9 @@ namespace SarnautCore;
 /// </summary>
 public sealed class ZoneEntityVisualFactory(
     Node3D entityRoot,
-    EntityModelCatalog catalog,
-    string convertedRoot) : IEntityVisualFactory
+    EntityModelCatalog catalog) : IEntityVisualFactory
 {
-    /// <summary>How many entities got a converted model rather than a capsule.</summary>
+    /// <summary>How many entities got a native model rather than a capsule.</summary>
     public int ModelCount { get; private set; }
 
     /// <summary>How many entities fell back to a labelled capsule.</summary>
@@ -26,7 +25,7 @@ public sealed class ZoneEntityVisualFactory(
             EntityId = sample.EntityId,
         };
         entityRoot.AddChild(visual);
-        visual.Bind(sample, catalog, convertedRoot);
+        visual.Bind(sample, catalog);
         if (visual.HasModel)
         {
             ModelCount++;

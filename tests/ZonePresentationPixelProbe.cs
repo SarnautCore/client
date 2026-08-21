@@ -35,13 +35,13 @@ public partial class ZonePresentationPixelProbe : Node
 
         ZoneLoader loader = zone.GetNode<ZoneLoader>("ZoneLoader");
         WalkaboutController walker = zone.GetNode<WalkaboutController>("Walker");
-        ConvertedCharacter character = zone.GetNode<ConvertedCharacter>("Walker/Character");
+        CharacterRig character = zone.GetNode<CharacterRig>("Walker/Character");
         Image image = GetViewport().GetTexture().GetImage();
         string proofPath = ProjectSettings.GlobalizePath("user://zone-presentation-proof.png");
         Error saveError = image.SavePng(proofPath);
         float darkFraction = DarkFraction(image);
         bool atAuthoredFloor = walker.Position.DistanceTo(ExpectedFloor6PlayerPosition) <= 1.0f;
-        bool selectedAppearance = character.CharacterScene == option.VisualRef
+        bool selectedAppearance = character.ScenePath.Contains(option.Id, StringComparison.OrdinalIgnoreCase)
             && character.Model?.FindChild("Mainhand", recursive: true, owned: false) is BoneAttachment3D
             && character.Model.FindChild("Offhand", recursive: true, owned: false) is BoneAttachment3D;
         bool passed = loader.TerrainTileCount == 4
@@ -54,7 +54,7 @@ public partial class ZonePresentationPixelProbe : Node
 
         GD.Print(
             $"ZONE_PRESENTATION_PIXEL_PROBE spawn={walker.Position} expected={ExpectedFloor6PlayerPosition} "
-            + $"appearance=\"{character.CharacterScene}\" selected_gear={selectedAppearance} "
+            + $"appearance=\"{character.ScenePath}\" selected_gear={selectedAppearance} "
             + $"dark_fraction={darkFraction:F4} max_dark_fraction={MaximumDarkFraction:F2} "
             + $"proof={proofPath} result={(passed ? "PASS" : "FAIL")}");
         GetTree().Quit(passed ? 0 : 1);

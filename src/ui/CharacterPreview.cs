@@ -1,4 +1,5 @@
 using Godot;
+using SarnautCore.Shell;
 
 namespace SarnautCore;
 
@@ -8,9 +9,8 @@ namespace SarnautCore;
 /// </summary>
 /// <remarks>
 /// The same arrangement <c>AssetViewer</c> uses, extracted so the creation screen
-/// does not grow a second copy of it. The model is the converted rig named by the
-/// chargen option when the converted tree is present; when it is not — a fresh
-/// clone, or CI — the preview shows a placeholder and says so, because the
+/// does not grow a second copy of it. The model is the native rig named by the
+/// chargen option when content is mounted. Otherwise the preview shows a placeholder because the
 /// screen still has to work.
 /// </remarks>
 public partial class CharacterPreview : SubViewportContainer
@@ -20,12 +20,13 @@ public partial class CharacterPreview : SubViewportContainer
     private Node3D _orbitPivot = null!;
     private Camera3D _camera = null!;
     private Label _caption = null!;
+    private EntityModelCatalog _catalog = null!;
     private bool _orbiting;
     private Vector2 _lastPointerPosition;
     private float _cameraDistance = 3.2f;
 
-    /// <summary>Whether the last <see cref="ShowOption"/> found a converted model.</summary>
-    public bool HasConvertedModel { get; private set; }
+    /// <summary>Whether the last <see cref="ShowOption"/> found a native model.</summary>
+    public bool HasNativeModel { get; private set; }
 
     /// <summary>What the preview is currently showing, for a caption.</summary>
     public string Description { get; private set; } = "No character selected.";
@@ -35,6 +36,7 @@ public partial class CharacterPreview : SubViewportContainer
         Stretch = true;
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         GuiInput += OnGuiInput;
+        _catalog = new EntityModelCatalog();
 
         _viewport = new SubViewport
         {
@@ -99,29 +101,23 @@ public partial class CharacterPreview : SubViewportContainer
     /// <summary>
     /// Shows the model for one chargen option.
     /// </summary>
-    /// <param name="visualRef">
-    /// The option's <c>visual_ref</c>, which names a pack visual rather than a
-    /// converted path. Until that mapping exists the preview shows the default
-    /// converted rig and captions the reference it was asked for, so the screen
-    /// never claims to be showing something it is not.
-    /// </param>
-    public void ShowOption(string visualRef, string title)
+    public void ShowOption(ChargenOption option, string title)
     {
         Clear();
-        var character = new ConvertedCharacter
+        var character = new CharacterRig
         {
             Name = "PreviewCharacter",
             AutoLoad = false,
-            LocomotionOnly = true,
             ShowPlaceholderOnFailure = true,
             ModelYawDegrees = 180,
         };
+        PlayerCharacterModel.Apply(character, _catalog, option);
         _stage.AddChild(character);
-        HasConvertedModel = character.LoadCharacter();
-        Description = HasConvertedModel
-            ? $"{title} · {visualRef}"
-            : $"{title} · {visualRef} · placeholder (no converted model)";
-        _caption.Text = HasConvertedModel ? string.Empty : Description;
+        HasNativeModel = character.Load();
+        Description = HasNativeModel
+            ? title
+            : $"{title} · placeholder (native model unavailable)";
+        _caption.Text = HasNativeModel ? string.Empty : Description;
         FrameStage();
     }
 
@@ -134,7 +130,7 @@ public partial class CharacterPreview : SubViewportContainer
             child.QueueFree();
         }
 
-        HasConvertedModel = false;
+        HasNativeModel = false;
     }
 
     private void FrameStage()

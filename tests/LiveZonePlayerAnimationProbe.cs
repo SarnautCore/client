@@ -15,10 +15,10 @@ public partial class LiveZonePlayerAnimationProbe : Node
         Node zone = scene.Instantiate();
         AddChild(zone);
 
-        ConvertedCharacter character = zone.GetNode<ConvertedCharacter>("Walker/Character");
+        CharacterRig character = zone.GetNode<CharacterRig>("Walker/Character");
         Skeleton3D? skeleton = character.Model == null ? null : FindDescendant<Skeleton3D>(character.Model);
         AnimationPlayer? player = character.Model == null ? null : FindDescendant<AnimationPlayer>(character.Model);
-        Expect(character.HasConvertedModel, $"live player model loads: {character.LastError}");
+        Expect(character.HasModel, $"live player model loads: {character.LastError}");
         Expect(skeleton != null, "live player has a skeleton");
         Expect(player != null, "live player has an AnimationPlayer");
 

@@ -18,7 +18,6 @@ namespace SarnautCore;
 /// </remarks>
 public partial class EntityBindingSmoke : Node3D
 {
-    private const string ConvertedRoot = "res://converted/assets/classic-1.1";
     private const ulong LocalEntityId = 1;
     private const ulong NearEntityId = 2;
     private const ulong FarEntityId = 3;
@@ -27,12 +26,12 @@ public partial class EntityBindingSmoke : Node3D
 
     public override async void _Ready()
     {
-        var catalog = new EntityModelCatalog(ConvertedRoot);
+        var catalog = new EntityModelCatalog();
         string contentId = "mob.inst-league1.rat.rat1-1";
         var entityRoot = new Node3D { Name = "NetworkEntities" };
         AddChild(entityRoot);
 
-        var factory = new ZoneEntityVisualFactory(entityRoot, catalog, ConvertedRoot);
+        var factory = new ZoneEntityVisualFactory(entityRoot, catalog);
         var registry = new EntityRegistry(factory);
         var timeline = new SnapshotTimeline();
 

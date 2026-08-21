@@ -80,7 +80,7 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
     private Label3D _nameplate = null!;
     private MeshInstance3D _healthBar = null!;
     private ShaderMaterial _healthMaterial = null!;
-    private ConvertedCharacter? _character;
+    private CharacterRig? _character;
     private MeshInstance3D? _capsule;
     private StandardMaterial3D? _capsuleMaterial;
 
@@ -95,13 +95,13 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
     /// <summary>The entity this draws.</summary>
     public ulong EntityId { get; init; }
 
-    /// <summary>True when a converted model loaded, false when this is a capsule.</summary>
+    /// <summary>True when a native model loaded, false when this is a capsule.</summary>
     public bool HasModel { get; private set; }
 
-    /// <summary>True when the converted model is actively evaluating a clip.</summary>
+    /// <summary>True when the native model is actively evaluating a clip.</summary>
     public bool IsAnimationPlaying => _character?.IsAnimationPlaying == true;
 
-    /// <summary>The converted clip currently selected for this entity.</summary>
+    /// <summary>The native clip currently selected for this entity.</summary>
     public string ActiveClip => _character?.ActiveClip ?? string.Empty;
 
     /// <summary>The pick capsule's radius, height, and the height of its centre.</summary>
@@ -135,39 +135,36 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
     }
 
     /// <summary>
-    /// Fills in the visual for one entity: its model if the converted tree has
+    /// Fills in the visual for one entity: its model if the native content has
     /// one, and a capsule if it does not.
     /// </summary>
     /// <remarks>
-    /// Called after the node is in the scene tree, because a converted character
+    /// Called after the node is in the scene tree, because a character
     /// starts its idle animation as it loads and an <c>AnimationPlayer</c>
     /// outside the tree has nothing to play into.
     /// </remarks>
-    public void Bind(SampledEntity sample, EntityModelCatalog catalog, string convertedRoot)
+    public void Bind(SampledEntity sample, EntityModelCatalog catalog)
     {
         float scale = 1.0f;
         if (catalog.TryResolve(sample.ContentId, out EntityModel model))
         {
-            var character = new ConvertedCharacter
+            var character = new CharacterRig
             {
                 Name = "Model",
                 AutoLoad = false,
-                LocomotionOnly = true,
                 ShowPlaceholderOnFailure = false,
-                ConvertedRoot = convertedRoot,
-                CharacterScene = model.ScenePath,
-                Scale = Vector3.One * model.Scale,
+                ScenePath = model.ScenePath,
             };
             AddChild(character);
-            if (character.LoadCharacter())
+            if (character.Load())
             {
                 _character = character;
                 HasModel = true;
-                scale = model.Scale;
+                scale = 1.0f;
             }
             else
             {
-                // The manifest named a scene the converted tree cannot build.
+                // The manifest named a scene the mounted content cannot load.
                 // A capsule with the right name over it beats an empty patch of
                 // ground, and the loader's failure list already names it.
                 RemoveChild(character);

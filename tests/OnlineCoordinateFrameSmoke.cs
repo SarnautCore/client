@@ -22,8 +22,7 @@ public partial class OnlineCoordinateFrameSmoke : Node3D
         AddChild(entityRoot);
         var factory = new ZoneEntityVisualFactory(
             entityRoot,
-            new EntityModelCatalog("res://__missing_coordinate_smoke_assets__"),
-            "res://__missing_coordinate_smoke_assets__");
+            new EntityModelCatalog("res://__missing_coordinate_smoke_assets__"));
         var sample = new SampledEntity(
             EntityId: 2,
             Kind: EntityKind.Npc,

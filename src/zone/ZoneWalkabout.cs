@@ -45,6 +45,7 @@ public partial class ZoneWalkabout : Node3D
     private readonly GameplayFocusOwner _focus = new();
     private ZoneLoader _loader = null!;
     private WalkaboutController _walker = null!;
+    private EntityModelCatalog _characterCatalog = null!;
     private ZoneNetworkLoop? _networkLoop;
     private GameplayHudViewModel? _hudModel;
     private GameplayHudControl? _hudControl;
@@ -54,12 +55,13 @@ public partial class ZoneWalkabout : Node3D
     public override void _EnterTree()
     {
         // Parent _EnterTree runs before the child character's _Ready, so the
-        // selected rig is in place before ConvertedCharacter auto-loads it.
+        // selected native scene is in place before CharacterRig auto-loads it.
         SessionHost session = SessionHost.Of(this);
-        ConvertedCharacter? character = GetNodeOrNull<ConvertedCharacter>("Walker/Character");
+        _characterCatalog = new EntityModelCatalog();
+        CharacterRig? character = GetNodeOrNull<CharacterRig>("Walker/Character");
         if (character != null)
         {
-            PlayerCharacterModel.Apply(character, session.Player.Option);
+            PlayerCharacterModel.Apply(character, _characterCatalog, session.Player.Option);
         }
     }
 
@@ -101,10 +103,9 @@ public partial class ZoneWalkabout : Node3D
 
         var entityRoot = new Node3D { Name = "NetworkEntities" };
         AddChild(entityRoot);
-        var catalog = new EntityModelCatalog(_loader.ConvertedRoot);
-        if (!catalog.IsAvailable)
+        if (!_characterCatalog.IsAvailable)
         {
-            GD.Print($"ZoneWalkabout: {catalog.LastError}");
+            GD.Print($"ZoneWalkabout: {_characterCatalog.LastError}");
         }
 
         _networkLoop = new ZoneNetworkLoop { Name = "NetworkLoop" };
@@ -127,8 +128,7 @@ public partial class ZoneWalkabout : Node3D
         _networkLoop.Start(
             _walker,
             entityRoot,
-            catalog,
-            _loader.ConvertedRoot,
+            _characterCatalog,
             request.ServerAddress,
             string.IsNullOrWhiteSpace(request.ZoneId) ? DefaultZoneId : request.ZoneId,
             _session.ContentPackId,

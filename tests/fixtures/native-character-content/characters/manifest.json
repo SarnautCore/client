@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "manifest_type": "sarnaut.characters",
+  "counts": {
+    "mob_keys": 2,
+    "player_keys": 1,
+    "chargen_keys": 1,
+    "identity_scenes": 3
+  },
+  "identities": {
+    "Rat1_1": {
+      "scene": "Rat1_1/Rat1_1.tscn",
+      "clips": ["idle", "run", "attack", "hit", "death"],
+      "combat_event_clips": ["attack"]
+    },
+    "player.kania.female": {
+      "scene": "player.kania.female/player.kania.female.tscn",
+      "clips": ["idle", "run", "attack", "hit", "death"],
+      "combat_event_clips": ["attack"]
+    },
+    "chargen.league.warrior": {
+      "scene": "chargen.league.warrior/chargen.league.warrior.tscn",
+      "clips": ["idle", "run", "attack", "hit", "death"],
+      "combat_event_clips": ["attack"]
+    }
+  },
+  "characters": {
+    "mob.inst-league1.rat.rat1-1": {
+      "kind": "mob",
+      "content_id": "50032",
+      "identity_id": "Rat1_1"
+    },
+    "mob.inst-league1.rat.rat1-1a": {
+      "kind": "mob",
+      "content_id": "50033",
+      "identity_id": "Rat1_1"
+    },
+    "player.kania.female": {
+      "kind": "player",
+      "identity_id": "player.kania.female"
+    },
+    "chargen.league.warrior": {
+      "kind": "chargen",
+      "identity_id": "chargen.league.warrior"
+    }
+  },
+  "content_ids": {
+    "50032": "mob.inst-league1.rat.rat1-1",
+    "50033": "mob.inst-league1.rat.rat1-1a"
+  }
+}

@@ -34,7 +34,7 @@ public partial class DirectionalLightingProbe : Node
         walker.LookInputEnabled = false;
         var sun = zone.GetNode<DirectionalLight3D>("Sun");
         var loader = zone.GetNode<ZoneLoader>("ZoneLoader");
-        ConvertedCharacter character = zone.GetNode<ConvertedCharacter>("Walker/Character");
+        CharacterRig character = zone.GetNode<CharacterRig>("Walker/Character");
 
         for (int frame = 0; frame < 24; frame++)
         {
@@ -295,4 +295,3 @@ public partial class DirectionalLightingProbe : Node
         double StandardDeviation,
         float ClippedBrightFraction);
 }
-
