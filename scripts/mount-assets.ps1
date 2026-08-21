@@ -19,33 +19,57 @@
     Idempotent: re-running only reports what is already in place.
 #>
 param(
-    [string]$AssetRoot = 'E:\SarnautCore\assets'
+    [string]$AssetRoot = 'E:\SarnautCore\assets',
+    [string]$ContentRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 
 function Mount-Tree {
-    param([string]$MountPoint, [string]$Target)
+    param(
+        [string]$MountPoint,
+        [string]$Target,
+        [switch]$Required
+    )
 
-    if (-not (Test-Path $Target)) {
+    if (-not (Test-Path -LiteralPath $Target)) {
+        if ($Required) {
+            throw "missing required target $Target"
+        }
         Write-Warning "missing target $Target - skipping $MountPoint"
         return
     }
+
+    $expectedTarget = (Resolve-Path -LiteralPath $Target).Path.TrimEnd('\', '/')
 
     $parent = Split-Path -Parent $MountPoint
     if (-not (Test-Path $parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
 
-    if (Test-Path $MountPoint) {
-        $existing = (Get-Item $MountPoint -Force).Target
-        Write-Host "already mounted: $MountPoint -> $existing"
+    $existingItem = Get-Item -LiteralPath $MountPoint -Force -ErrorAction SilentlyContinue
+    if ($null -ne $existingItem) {
+        if ($existingItem.LinkType -ne 'Junction') {
+            throw "mount point exists but is not a junction: $MountPoint"
+        }
+
+        $existingTargetValue = @($existingItem.Target) | Select-Object -First 1
+        if ([string]::IsNullOrWhiteSpace($existingTargetValue)) {
+            throw "junction has no target: $MountPoint"
+        }
+
+        $existingTarget = (Resolve-Path -LiteralPath $existingTargetValue).Path.TrimEnd('\', '/')
+        if (-not $existingTarget.Equals($expectedTarget, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "junction target mismatch: $MountPoint -> $existingTarget; expected $expectedTarget"
+        }
+
+        Write-Host "already mounted: $MountPoint -> $existingTarget"
         return
     }
 
-    New-Item -ItemType Junction -Path $MountPoint -Target $Target | Out-Null
-    Write-Host "mounted: $MountPoint -> $Target"
+    New-Item -ItemType Junction -Path $MountPoint -Target $expectedTarget | Out-Null
+    Write-Host "mounted: $MountPoint -> $expectedTarget"
 }
 
 Mount-Tree -MountPoint (Join-Path $projectRoot 'converted\assets') `
@@ -54,10 +78,16 @@ Mount-Tree -MountPoint (Join-Path $projectRoot 'converted\assets') `
 Mount-Tree -MountPoint (Join-Path $projectRoot 'upscaled\assets') `
            -Target (Join-Path $AssetRoot 'upscaled')
 
-# Mount native content (created by separate converter task).
-$contentStagingRoot = Join-Path (Split-Path -Parent $AssetRoot) 'content-staging'
+if ([string]::IsNullOrWhiteSpace($ContentRoot)) {
+    $contentStagingRoot = Join-Path (Split-Path -Parent $AssetRoot) 'content-staging'
+    $ContentRoot = Join-Path $contentStagingRoot 'league-slice'
+}
+
+# Mount the exact native output selected by the caller. Compiled-only gates pass
+# their scratch compiler output here instead of inheriting content-staging.
 Mount-Tree -MountPoint (Join-Path $projectRoot 'content\league-slice') `
-           -Target (Join-Path $contentStagingRoot 'league-slice')
+           -Target $ContentRoot `
+           -Required
 
 # Must exist before Godot next scans, or it will start importing the 4x tree.
 $gdignore = Join-Path $projectRoot 'upscaled\.gdignore'

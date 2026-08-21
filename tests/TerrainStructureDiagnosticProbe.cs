@@ -32,7 +32,8 @@ public partial class TerrainStructureDiagnosticProbe : Node
             return path.StartsWith(
                     $"{NativeContentSettings.NativeRoot}/maps/inst-league-start/",
                     StringComparison.Ordinal)
-                && path.EndsWith($"/{tile.Name}_terrain.tscn", StringComparison.Ordinal)
+                && path.EndsWith($"/{tile.Name}_terrain.scn", StringComparison.Ordinal)
+                && !path.EndsWith(".tscn", StringComparison.OrdinalIgnoreCase)
                 && !path.Contains("res://converted", StringComparison.OrdinalIgnoreCase);
         });
         bool globalBounds = loader.HasTerrainBounds

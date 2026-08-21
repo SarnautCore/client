@@ -176,7 +176,8 @@ The two memory knobs override the same way, for measurement:
 at 4x through the `.gdignore`, checks the retried creature texture is not blank,
 checks terrain keeps originals, checks the disable toggle suppresses everything,
 and reports coverage and VRAM from a real zone load. It is deliberately **not**
-in `visual-gate.ps1`, which stays at its 16 rendering probes.
+in `visual-gate.ps1`, which has 17 rendering probes including the all-identity
+native character LOD check.
 
 Coverage on `Inst_LeagueStart`: **1559 of 1568 textured surfaces (99.4%)**. The
 remaining 9 are runtime-built textures with no source path (the Kania starting-kit

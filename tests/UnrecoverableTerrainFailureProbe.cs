@@ -14,7 +14,8 @@ public partial class UnrecoverableTerrainFailureProbe : Node
             && loader.NativeTerrainTileCount == 0
             && !loader.UsedFlatTerrainFallback
             && loader.LastError.Contains("listed more than once", StringComparison.Ordinal)
-            && loader.LastError.Contains("0_2_terrain.tscn", StringComparison.Ordinal);
+            && loader.LastError.Contains("0_2_terrain.scn", StringComparison.Ordinal)
+            && !loader.LastError.Contains(".tscn", StringComparison.OrdinalIgnoreCase);
 
         GD.Print(
             $"UNRECOVERABLE_TERRAIN_FAILURE loaded={loaded} terrain={loader.TerrainTileCount} "

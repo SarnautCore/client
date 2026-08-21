@@ -8,10 +8,13 @@ function Get-VisualGateAllowedErrorPatterns {
 
     switch ($Scene) {
         "origin_applied_manifest_probe" {
-            '^ERROR: ZoneLoader: 1 terrain tile\(s\) could not load\. res://converted/assets/classic-1\.1/assets/Maps/Inst_LeagueStart/000_020/1_2: Tile-local coordinate contract is incompatible or already shifted: res://converted/assets/classic-1\.1/assets/Maps/Inst_LeagueStart/000_020/1_2\.terrain\.tscn; legacy fallback failed: Injected: legacy fallback disabled for the origin-applied tile\.$'
+            '^ERROR: ZoneLoader: Native terrain manifest is incompatible: res://content/league-slice/maps/inst-league-start/terrain-manifest\.json$'
+        }
+        "partial_native_terrain_fallback_probe" {
+            '^ERROR: ZoneLoader: Native terrain scene is missing: res://content/league-slice/maps/inst-league-start/1_2/missing_terrain\.scn$'
         }
         "unrecoverable_terrain_failure_probe" {
-            '^ERROR: ZoneLoader: 1 terrain tile\(s\) could not load\. res://converted/assets/classic-1\.1/assets/Maps/Inst_LeagueStart/000_020/1_2: Injected native terrain failure for 1_2\.; legacy fallback failed: Injected legacy terrain failure for 1_2\.$'
+            '^ERROR: ZoneLoader: Native terrain scene is listed more than once: res://content/league-slice/maps/inst-league-start/0_2/0_2_terrain\.scn$'
         }
     }
 }

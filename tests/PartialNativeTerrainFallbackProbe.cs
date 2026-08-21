@@ -16,7 +16,8 @@ public partial class PartialNativeTerrainFallbackProbe : Node
             && tiles == 0
             && !loader.UsedFlatTerrainFallback
             && loader.LastError.Contains("Native terrain scene is missing", System.StringComparison.Ordinal)
-            && loader.LastError.Contains("missing_terrain.tscn", System.StringComparison.Ordinal);
+            && loader.LastError.Contains("missing_terrain.scn", System.StringComparison.Ordinal)
+            && !loader.LastError.Contains(".tscn", System.StringComparison.OrdinalIgnoreCase);
 
         GD.Print(
             $"PARTIAL_NATIVE_TERRAIN_FORBIDDEN loaded={loaded} terrain={loader.TerrainTileCount} "

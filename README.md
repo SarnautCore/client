@@ -87,10 +87,11 @@ Client-side prediction is intentionally left behind the `WalkaboutController.Net
 Maintainers mount an existing private content workspace into a development checkout with:
 
 ```powershell
-./scripts/mount-assets.ps1 -AssetRoot E:\SarnautCore\assets
+./scripts/mount-assets.ps1 -AssetRoot E:\SarnautCore\assets `
+    -ContentRoot E:\SarnautCore\content-staging\league-slice
 ```
 
-The script mounts `content/league-slice` from `content-staging/league-slice`. Baked product content is stored privately in Perforce `//content/main`; source inputs remain separate in `//assets/main`. A public code checkout intentionally contains neither tree.
+The script mounts `content/league-slice` from the exact `-ContentRoot` path and rejects a normal directory or a junction aimed elsewhere. Omit the parameter only for the local `content-staging/league-slice` default. A compiled-only gate must pass its compiler output explicitly. Baked product content is stored privately in Perforce `//content/main`; source inputs remain separate in `//assets/main`. A public code checkout intentionally contains neither tree.
 
 ### Command-line checks
 
@@ -98,7 +99,8 @@ The script mounts `content/league-slice` from `content-staging/league-slice`. Ba
 dotnet build SarnautCore.sln
 dotnet test SarnautCore.sln
 ./scripts/test-visual-gate-diagnostics.ps1
-./scripts/visual-gate.ps1 -Godot <path to godot_console>
+./scripts/visual-gate.ps1 -Godot <path to godot_console> `
+    -CompiledContentRoot E:\SarnautCore\.tmp\compiled-native\league-slice
 godot_console --headless --import --path .
 godot_console --headless --path . --scene res://tests/asset_viewer_smoke.tscn
 godot_console --headless --path . --scene res://tests/zone_walkabout_smoke.tscn

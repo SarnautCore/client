@@ -39,8 +39,9 @@ function Assert-Reasons {
 }
 
 $expectedInjectedError = '^ERROR: ZoneLoader: expected injected failure\.$'
-$originAppliedError = "ERROR: ZoneLoader: 1 terrain tile(s) could not load. res://converted/assets/classic-1.1/assets/Maps/Inst_LeagueStart/000_020/1_2: Tile-local coordinate contract is incompatible or already shifted: res://converted/assets/classic-1.1/assets/Maps/Inst_LeagueStart/000_020/1_2.terrain.tscn; legacy fallback failed: Injected: legacy fallback disabled for the origin-applied tile."
-$unrecoverableTerrainError = "ERROR: ZoneLoader: 1 terrain tile(s) could not load. res://converted/assets/classic-1.1/assets/Maps/Inst_LeagueStart/000_020/1_2: Injected native terrain failure for 1_2.; legacy fallback failed: Injected legacy terrain failure for 1_2."
+$originAppliedError = "ERROR: ZoneLoader: Native terrain manifest is incompatible: res://content/league-slice/maps/inst-league-start/terrain-manifest.json"
+$partialTerrainError = "ERROR: ZoneLoader: Native terrain scene is missing: res://content/league-slice/maps/inst-league-start/1_2/missing_terrain.scn"
+$unrecoverableTerrainError = "ERROR: ZoneLoader: Native terrain scene is listed more than once: res://content/league-slice/maps/inst-league-start/0_2/0_2_terrain.scn"
 $fixtures = @(
     @{
         Name = "clean pass"
@@ -126,6 +127,13 @@ $fixtures = @(
         ExpectedReasons = @()
     },
     @{
+        Name = "partial-terrain probe's exact compiled-scene error"
+        Stdout = "PARTIAL_NATIVE_TERRAIN_FORBIDDEN result=PASS"
+        Stderr = $partialTerrainError
+        AllowedErrorPatterns = @(Get-VisualGateAllowedErrorPatterns -Scene "partial_native_terrain_fallback_probe")
+        ExpectedReasons = @()
+    },
+    @{
         Name = "unexpected error beside injected error"
         Stdout = "PROBE result=PASS"
         Stderr = "ERROR: ZoneLoader: expected injected failure.`nERROR: unrelated regression"
@@ -173,11 +181,52 @@ foreach ($requiredContract in @(
     'Scene = "converted_model_animation_smoke"',
     'CONVERTED_MODEL_ANIMATION cases=53',
     'Scene = "native_character_lod_smoke"',
+    'SARNAUT_NATIVE_CHARACTER_LOD_ROOT = "res://content/league-slice"',
     'SARNAUT_NATIVE_CHARACTER_LOD_KEY = "*"',
-    'NATIVE_CHARACTER_LOD identities=40/40'
+    'NATIVE_CHARACTER_LOD identities=40/40',
+    'MaxSeconds = 45; MaxPeakBytes = 2469606195',
+    '$process.PeakWorkingSet64',
+    'visual-gate-metrics.json',
+    '[Parameter(Mandatory = $true)]',
+    'compiled-only gate content target mismatch',
+    '$managedEnvironmentNames = @(',
+    '[System.Environment]::SetEnvironmentVariable($name, $null, "Process")',
+    '[System.Environment]::SetEnvironmentVariable($name, $originalEnvironment[$name], "Process")'
 )) {
     if (-not $visualGate.Contains($requiredContract, [StringComparison]::Ordinal)) {
         throw "visual gate is missing standing coverage contract: $requiredContract"
+    }
+}
+
+$mountAssets = Get-Content -LiteralPath (Join-Path $PSScriptRoot "mount-assets.ps1") -Raw
+foreach ($mountContract in @(
+    '[string]$ContentRoot =',
+    "`$existingItem.LinkType -ne 'Junction'",
+    'junction target mismatch:',
+    '-Target $ContentRoot',
+    '-Required'
+)) {
+    if (-not $mountAssets.Contains($mountContract, [StringComparison]::Ordinal)) {
+        throw "mount-assets is missing compiled-content mount contract: $mountContract"
+    }
+}
+
+$zoneCameraProbe = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\tests\ZoneCameraSpawnSmoke.cs") -Raw
+if ($zoneCameraProbe.Contains("1_2.terrain.up.obj", [StringComparison]::Ordinal) -or
+    $zoneCameraProbe.Contains("ResourceLoader.Load<Mesh>", [StringComparison]::Ordinal) -or
+    -not $zoneCameraProbe.Contains("compiledNativeTerrain", [StringComparison]::Ordinal) -or
+    -not $zoneCameraProbe.Contains(".scn", [StringComparison]::Ordinal)) {
+    throw "zone camera probe must derive its proof from compiled native terrain"
+}
+
+foreach ($faultLoader in @(
+    "PartialNativeTerrainFallbackLoader.cs",
+    "UnrecoverableTerrainFailureLoader.cs"
+)) {
+    $faultSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\tests\$faultLoader") -Raw
+    if ($faultSource.Contains("_terrain.tscn", [StringComparison]::Ordinal) -or
+        -not $faultSource.Contains("NativeTerrainManifestTestMutation", [StringComparison]::Ordinal)) {
+        throw "$faultLoader must mutate authoritative compiled runtime_scene values"
     }
 }
 
