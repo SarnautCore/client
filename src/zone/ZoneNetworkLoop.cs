@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Threading;
 using System.Threading.Channels;
@@ -48,6 +49,7 @@ public partial class ZoneNetworkLoop : Node
     private ulong _ownEntityId;
     private double _statusAccumulator;
     private bool _connected;
+    private ulong _nextHudRequestId = 1;
 
     [Export(PropertyHint.Range, "0.1,0.15,0.005")]
     public double InterpolationDelaySeconds { get; set; } = 0.125;
@@ -198,22 +200,32 @@ public partial class ZoneNetworkLoop : Node
     /// </summary>
     public bool TryTargetAtScreenPoint(Vector2 screenPoint, out ulong entityId)
     {
-        entityId = 0;
-        if (Entities is null)
-        {
-            return false;
-        }
-
-        if (!_picker.TryPick(GetViewport().GetCamera3D(), screenPoint, out ulong pickKey)
-            || !Entities.TryGetByPickKey(pickKey, out TrackedEntity? hit))
+        if (!TryPickEntityAtScreenPoint(screenPoint, out entityId))
         {
             // Clicking past everything is how a target is dropped.
             SetTarget(0);
             return false;
         }
 
-        entityId = hit.EntityId;
         SetTarget(entityId);
+        return true;
+    }
+
+    /// <summary>
+    /// Reports the replicated entity under a screen point without changing selection.
+    /// Native HUD input uses this only after its pixel-aware role hit test misses.
+    /// </summary>
+    public bool TryPickEntityAtScreenPoint(Vector2 screenPoint, out ulong entityId)
+    {
+        entityId = 0;
+        if (Entities is null
+            || !_picker.TryPick(GetViewport().GetCamera3D(), screenPoint, out ulong pickKey)
+            || !Entities.TryGetByPickKey(pickKey, out TrackedEntity? hit))
+        {
+            return false;
+        }
+
+        entityId = hit.EntityId;
         return true;
     }
 
@@ -590,22 +602,351 @@ public partial class ZoneNetworkLoop : Node
             {
                 case HudCommandKind.SelectWorldEntity:
                     SetTarget(command.EntityId);
+                    if (!TryNextHudRequestId(out ulong targetRequestId))
+                    {
+                        return;
+                    }
+
+                    EnqueueCommand(new ClientMessage
+                    {
+                        TargetSelect = new TargetSelect
+                        {
+                            TargetEntityId = command.EntityId,
+                            RequestId = targetRequestId,
+                        },
+                    });
                     break;
                 case HudCommandKind.InteractWorldEntity:
                     RequestInteract(command.EntityId);
                     break;
                 case HudCommandKind.ActivateAction:
-                    RequestAbilityUse(new AbilityUseRequest(
-                        command.Value.Value,
-                        TargetEntityId,
-                        _timeline.LatestServerTick));
+                    if (!TryExpectedRevision(command, out ulong actionRevision)
+                        || !TrySlot(command, command.Slot, 36, "action-bar", out uint actionSlot)
+                        || !TryNextHudRequestId(out ulong actionRequestId))
+                    {
+                        return;
+                    }
+
+                    EnqueueCommand(new ClientMessage
+                    {
+                        ActivateAction = new ActivateAction
+                        {
+                            RequestId = actionRequestId,
+                            SlotIndex = actionSlot,
+                            ClientTick = _timeline.LatestServerTick,
+                            ExpectedRevision = actionRevision,
+                        },
+                    });
+                    break;
+                case HudCommandKind.MoveInventoryItem:
+                    if (command.Flag)
+                    {
+                        RejectHudCommand(command, "the inventory wire moves only a complete stack");
+                        return;
+                    }
+
+                    if (!TryExpectedRevision(command, out ulong inventoryRevision)
+                        || !TrySlot(command, command.Slot, 60, "inventory source", out uint fromSlot)
+                        || !TrySlot(command, command.Auxiliary, 60, "inventory destination", out uint toSlot))
+                    {
+                        return;
+                    }
+
+                    if (fromSlot == toSlot)
+                    {
+                        RejectHudCommand(command, "inventory source and destination slots are identical");
+                        return;
+                    }
+
+                    if (!TryNextHudRequestId(out ulong inventoryRequestId))
+                    {
+                        return;
+                    }
+
+                    EnqueueCommand(new ClientMessage
+                    {
+                        InventoryMove = new InventoryMove
+                        {
+                            RequestId = inventoryRequestId,
+                            ExpectedRevision = inventoryRevision,
+                            FromSlot = fromSlot,
+                            ToSlot = toSlot,
+                        },
+                    });
+                    break;
+                case HudCommandKind.TakeLootItem:
+                    if (!TryExpectedRevision(command, out ulong lootItemRevision)
+                        || !TryEntity(command, "loot item", out ulong lootItemEntity)
+                        || !TrySlot(command, command.Slot, 20, "loot item", out uint lootItemIndex)
+                        || !TryNextHudRequestId(out ulong lootItemRequestId))
+                    {
+                        return;
+                    }
+
+                    EnqueueCommand(new ClientMessage
+                    {
+                        LootTakeItem = new LootTakeItem
+                        {
+                            RequestId = lootItemRequestId,
+                            LootEntityId = lootItemEntity,
+                            ExpectedRevision = lootItemRevision,
+                            ItemIndex = checked((int)lootItemIndex),
+                        },
+                    });
+                    break;
+                case HudCommandKind.TakeLootMoney:
+                    if (command.Amount != -1)
+                    {
+                        RejectHudCommand(command, "the loot wire supports only retail's take-all-money operation");
+                        return;
+                    }
+
+                    if (!TryExpectedRevision(command, out ulong lootMoneyRevision)
+                        || !TryEntity(command, "loot money", out ulong lootMoneyEntity)
+                        || !TryNextHudRequestId(out ulong lootMoneyRequestId))
+                    {
+                        return;
+                    }
+
+                    EnqueueCommand(new ClientMessage
+                    {
+                        LootTakeMoney = new LootTakeMoney
+                        {
+                            RequestId = lootMoneyRequestId,
+                            LootEntityId = lootMoneyEntity,
+                            ExpectedRevision = lootMoneyRevision,
+                        },
+                    });
+                    break;
+                case HudCommandKind.TakeAllLoot:
+                    if (!TryExpectedRevision(command, out ulong lootAllRevision)
+                        || !TryEntity(command, "loot all", out ulong lootAllEntity)
+                        || !TryNextHudRequestId(out ulong lootAllRequestId))
+                    {
+                        return;
+                    }
+
+                    EnqueueCommand(new ClientMessage
+                    {
+                        LootTakeAll = new LootTakeAll
+                        {
+                            RequestId = lootAllRequestId,
+                            LootEntityId = lootAllEntity,
+                            ExpectedRevision = lootAllRevision,
+                        },
+                    });
+                    break;
+                case HudCommandKind.CloseLoot:
+                    if (!TryNextHudRequestId(out ulong lootCloseRequestId))
+                    {
+                        return;
+                    }
+
+                    // LootClose is session-contextual. The server closes the open loot
+                    // context for this session; the request id only correlates its reply.
+                    EnqueueCommand(new ClientMessage
+                    {
+                        LootClose = new LootClose { RequestId = lootCloseRequestId },
+                    });
+                    break;
+                case HudCommandKind.AbandonQuest:
+                    if (!TryQuest(command, "abandon", out string abandonQuestId, out ulong abandonRevision)
+                        || !TryNextHudRequestId(out ulong abandonRequestId))
+                    {
+                        return;
+                    }
+
+                    EnqueueCommand(new ClientMessage
+                    {
+                        QuestAbandon = new QuestAbandon
+                        {
+                            QuestId = abandonQuestId,
+                            RequestId = abandonRequestId,
+                            ExpectedRevision = abandonRevision,
+                        },
+                    });
+                    break;
+                case HudCommandKind.ShareQuest:
+                    if (!TryQuest(command, "share", out string shareQuestId, out ulong shareRevision)
+                        || !TryNextHudRequestId(out ulong shareRequestId))
+                    {
+                        return;
+                    }
+
+                    EnqueueCommand(new ClientMessage
+                    {
+                        QuestShare = new QuestShare
+                        {
+                            RequestId = shareRequestId,
+                            QuestId = shareQuestId,
+                            ExpectedRevision = shareRevision,
+                        },
+                    });
+                    break;
+                case HudCommandKind.AcceptSharedQuest:
+                case HudCommandKind.DeclineSharedQuest:
+                    if (!TryExpectedRevision(command, out ulong responseRevision)
+                        || !TryPositiveUInt64(command, command.Value, "quest-share invite", out ulong inviteId))
+                    {
+                        return;
+                    }
+
+                    if (command.SecondaryValue.IsEmpty)
+                    {
+                        RejectHudCommand(command, "quest-share response has no quest identifier");
+                        return;
+                    }
+
+                    if (!TryNextHudRequestId(out ulong responseRequestId))
+                    {
+                        return;
+                    }
+
+                    EnqueueCommand(new ClientMessage
+                    {
+                        QuestShareResponse = new QuestShareResponse
+                        {
+                            RequestId = responseRequestId,
+                            InviteId = inviteId,
+                            Accept = command.Kind == HudCommandKind.AcceptSharedQuest,
+                            ExpectedRevision = responseRevision,
+                        },
+                    });
+                    break;
+                case HudCommandKind.AcceptQuest:
+                    if (!TryQuest(command, "accept", out string acceptQuestId, out ulong acceptRevision)
+                        || !TryEntity(command, "quest accept", out ulong starterEntityId)
+                        || !TryNextHudRequestId(out ulong acceptRequestId))
+                    {
+                        return;
+                    }
+
+                    EnqueueCommand(new ClientMessage
+                    {
+                        QuestAccept = new QuestAccept
+                        {
+                            QuestId = acceptQuestId,
+                            StarterEntityId = starterEntityId,
+                            RequestId = acceptRequestId,
+                            ExpectedRevision = acceptRevision,
+                        },
+                    });
+                    break;
+                case HudCommandKind.TurnInQuest:
+                    if (!TryQuest(command, "turn in", out string turnInQuestId, out ulong turnInRevision)
+                        || !TryEntity(command, "quest turn-in", out ulong finisherEntityId)
+                        || !TrySlot(command, command.Slot, 5, "quest reward", out uint rewardIndex)
+                        || !TryNextHudRequestId(out ulong turnInRequestId))
+                    {
+                        return;
+                    }
+
+                    EnqueueCommand(new ClientMessage
+                    {
+                        QuestTurnIn = new QuestTurnIn
+                        {
+                            QuestId = turnInQuestId,
+                            FinisherEntityId = finisherEntityId,
+                            RewardIndex = rewardIndex,
+                            RequestId = turnInRequestId,
+                            ExpectedRevision = turnInRevision,
+                        },
+                    });
                     break;
                 default:
-                    _hudSession.ReportTransportFault($"Unsupported queued HUD command {command.Kind}.");
+                    RejectHudCommand(command, "no matching product-protocol request exists");
                     return;
             }
         }
     }
+
+    private bool TryExpectedRevision(in HudCommand command, out ulong revision)
+    {
+        revision = command.ExpectedRevision.Revision;
+        if (_hudSession is not null
+            && command.ExpectedRevision.SourceEpoch == _hudSession.SourceEpoch
+            && revision != 0)
+        {
+            return true;
+        }
+
+        RejectHudCommand(
+            command,
+            $"expected revision {command.ExpectedRevision} does not belong to source epoch {_hudSession?.SourceEpoch ?? 0}");
+        return false;
+    }
+
+    private bool TryQuest(
+        in HudCommand command,
+        string operation,
+        out string questId,
+        out ulong expectedRevision)
+    {
+        questId = command.Value.Value;
+        if (command.Value.IsEmpty)
+        {
+            expectedRevision = 0;
+            RejectHudCommand(command, $"quest {operation} has no quest identifier");
+            return false;
+        }
+
+        return TryExpectedRevision(command, out expectedRevision);
+    }
+
+    private bool TryEntity(in HudCommand command, string operation, out ulong entityId)
+    {
+        entityId = command.EntityId;
+        if (entityId != 0)
+        {
+            return true;
+        }
+
+        RejectHudCommand(command, $"{operation} has no entity identifier");
+        return false;
+    }
+
+    private bool TrySlot(in HudCommand command, int slot, int count, string operation, out uint value)
+    {
+        if ((uint)slot < (uint)count)
+        {
+            value = checked((uint)slot);
+            return true;
+        }
+
+        value = 0;
+        RejectHudCommand(command, $"{operation} slot {slot} is outside 0..{count - 1}");
+        return false;
+    }
+
+    private bool TryPositiveUInt64(in HudCommand command, HudId value, string operation, out ulong parsed)
+    {
+        if (!value.IsEmpty
+            && ulong.TryParse(value.Value, NumberStyles.None, CultureInfo.InvariantCulture, out parsed)
+            && parsed != 0)
+        {
+            return true;
+        }
+
+        parsed = 0;
+        RejectHudCommand(command, $"{operation} identifier '{value.Value}' is not a positive integer");
+        return false;
+    }
+
+    private bool TryNextHudRequestId(out ulong requestId)
+    {
+        requestId = _nextHudRequestId;
+        if (requestId == 0)
+        {
+            _hudSession?.ReportTransportFault("Native HUD request identifier space is exhausted for this session.");
+            return false;
+        }
+
+        _nextHudRequestId = unchecked(requestId + 1);
+        return true;
+    }
+
+    private void RejectHudCommand(in HudCommand command, string reason) =>
+        _hudSession?.ReportTransportFault($"HUD command {command.Kind} was rejected: {reason}.");
 
     private static EntityHudSnapshot ToHudSnapshot(SampledEntity sample) => new(
         sample.EntityId,
