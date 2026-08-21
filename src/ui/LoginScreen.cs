@@ -1,6 +1,9 @@
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using Godot;
 using SarnautCore.Shell;
+using SarnautCore.UI;
 
 namespace SarnautCore;
 
@@ -10,74 +13,50 @@ namespace SarnautCore;
 /// </summary>
 /// <remarks>
 /// Everything decidable lives in the view model, in the plain-C# assembly, where
-/// CI can run it. A Godot headless smoke needs converted assets and libmsquic
-/// and cannot run on CI, so a rule that lives in this file is a rule that ships
-/// untested.
+/// CI can run it. This adapter only joins validated native controls to that
+/// behaviour.
 /// </remarks>
 public partial class LoginScreen : Control
 {
     private SessionHost _session = null!;
     private LoginViewModel _model = null!;
-    private LineEdit _email = null!;
-    private LineEdit _password = null!;
-    private Label _message = null!;
-    private Label _service = null!;
-    private Button _signIn = null!;
-    private Button _register = null!;
-    private Button _back = null!;
+    private CenterContainer _failure = null!;
+    private Label _failureMessage = null!;
+    private NativeLoginUiHost? _native;
+    private CancellationTokenSource? _submitCancellation;
 
     public override void _Ready()
     {
         _session = SessionHost.Of(this);
         _model = new LoginViewModel(_session.Auth, _session.Player);
 
-        _email = GetNode<LineEdit>("%Email");
-        _password = GetNode<LineEdit>("%Password");
-        _message = GetNode<Label>("%Message");
-        _service = GetNode<Label>("%Service");
-        _signIn = GetNode<Button>("%SignIn");
-        _register = GetNode<Button>("%Register");
-        _back = GetNode<Button>("%Back");
+        GetNode<CanvasLayer>("Content").Visible = false;
+        _failure = GetNode<CenterContainer>("%NativeFailure");
+        _failureMessage = GetNode<Label>("%NativeFailureMessage");
 
-        _service.Text = $"{_session.Auth.ServiceAddress}   ·   {ConvertedChrome.Mount(this, ConvertedChrome.LoginForm)}";
-        _message.AddThemeColorOverride("font_color", UiTheme.ErrorInk);
-
-        _email.TextChanged += text => Bind(email: text);
-        _password.TextChanged += text => Bind(password: text);
-        _email.TextSubmitted += _ => Submit(register: false);
-        _password.TextSubmitted += _ => Submit(register: false);
-        _signIn.Pressed += () => Submit(register: false);
-        _register.Pressed += () => Submit(register: true);
-        _back.Pressed += () =>
+        bool nativeMounted = NativeLoginUiHost.TryMount(
+            this,
+            _model,
+            HandleNativeAction,
+            out _native,
+            out string nativeStatus);
+        if (!nativeMounted)
         {
-            _session.Flow.CancelSignIn();
-            _session.Show(Screen.Start);
-        };
+            ShowFailure(nativeStatus);
+            return;
+        }
 
-        _email.GrabFocus();
+        GD.Print($"Login screen: {nativeStatus}");
         Render();
     }
 
-    private void Bind(string? email = null, string? password = null)
+    public override void _ExitTree()
     {
-        if (email is not null)
-        {
-            _model.Email = email;
-        }
-
-        if (password is not null)
-        {
-            // Straight into a Secret: the plaintext never reaches a field that
-            // something could print.
-            _model.Password = new Secret(password);
-        }
-
-        Render();
+        _submitCancellation?.Cancel();
     }
 
-    private async void Submit(bool register)
+    private async void Submit()
     {
-        Bind(_email.Text, _password.Text);
         if (!_model.CanSubmit)
         {
             Render();
@@ -85,20 +64,28 @@ public partial class LoginScreen : Control
         }
 
         SetInteractive(false);
+        var cancellation = new CancellationTokenSource();
+        _submitCancellation = cancellation;
         try
         {
-            bool signedIn = register ? await _model.RegisterAsync() : await _model.SignInAsync();
+            Task<bool> signIn = _model.SignInAsync(cancellation.Token);
+            Render();
+            bool signedIn = await signIn;
             Render();
             if (!signedIn)
             {
-                _password.Clear();
-                _password.GrabFocus();
+                _native?.ClearPassword();
+                _native?.FocusPassword();
                 return;
             }
 
-            _password.Clear();
+            _native?.ClearPassword();
             _session.Flow.SignedIn();
             _session.Show(Screen.CharacterSelect);
+        }
+        catch (OperationCanceledException)
+        {
+            // Leaving the screen owns cancellation. It is not an authentication refusal.
         }
         catch (Exception exception)
         {
@@ -106,30 +93,79 @@ public partial class LoginScreen : Control
             // is a bug in this build, and it is reported without the form's
             // contents.
             GD.PushError($"Login screen failed unexpectedly: {exception.GetType().Name}");
-            _message.Text = "Something went wrong in the client. See the log.";
+            ShowFailure("Something went wrong in the client. See the log.");
         }
         finally
         {
-            SetInteractive(true);
+            if (ReferenceEquals(_submitCancellation, cancellation))
+            {
+                _submitCancellation = null;
+            }
+
+            cancellation.Dispose();
+            if (IsInsideTree())
+            {
+                SetInteractive(true);
+            }
         }
     }
 
     private void SetInteractive(bool interactive)
     {
-        _signIn.Disabled = !interactive;
-        _register.Disabled = !interactive;
-        _email.Editable = interactive;
-        _password.Editable = interactive;
+        _native?.SetInteractive(interactive);
     }
 
     private void Render()
     {
-        _message.Text = _model.Message;
-        _message.Visible = _model.Message.Length > 0;
-        _message.AddThemeColorOverride(
+        _failureMessage.Text = _model.Message;
+        _failure.Visible = _model.Message.Length > 0;
+        _failureMessage.AddThemeColorOverride(
             "font_color",
             _model.MessageIsError ? UiTheme.ErrorInk : UiTheme.MutedInk);
-        _signIn.Disabled = !_model.CanSubmit;
-        _register.Disabled = !_model.CanSubmit;
+        _native?.RenderModelState();
+    }
+
+    private void HandleNativeAction(string action)
+    {
+        switch (action)
+        {
+            case LoginAccountProduct.SubmitAction:
+                Submit();
+                break;
+            case LoginAccountProduct.CancelAction:
+                Cancel();
+                break;
+            case LoginAccountProduct.ToggleOptionsAction:
+                // The native host applies the product-owned toggle variant.
+                break;
+            case LoginAccountProduct.LocalSessionAction:
+                _session.Zone = ZoneRequest.Offline(
+                    _session.Zone.MapName,
+                    _session.Zone.ZoneId);
+                GetTree().ChangeSceneToFile("res://scenes/zone_walkabout.tscn");
+                break;
+            case LoginAccountProduct.CreditsAction:
+                ShowFailure("Credits are not available in this build.");
+                break;
+            case LoginAccountProduct.QuitAction:
+                GetTree().Quit();
+                break;
+            default:
+                GD.PushError($"Native login dispatched unknown action '{action}'.");
+                break;
+        }
+    }
+
+    private void Cancel()
+    {
+        _session.Flow.CancelSignIn();
+        _session.Show(Screen.Start);
+    }
+
+    private void ShowFailure(string message)
+    {
+        _failureMessage.Text = message;
+        _failureMessage.AddThemeColorOverride("font_color", UiTheme.ErrorInk);
+        _failure.Visible = true;
     }
 }

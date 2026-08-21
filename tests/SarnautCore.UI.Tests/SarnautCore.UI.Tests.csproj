@@ -15,4 +15,22 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" PrivateAssets="All" />
     <ProjectReference Include="../../src/SarnautCore.UI/SarnautCore.UI.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../fixtures/native-ui-product/ui-product.json"
+          Link="fixtures/native-ui-product/ui-product.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/ui/LoginScreen.cs"
+          Link="contract-source/LoginScreen.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/ui/NativeLoginUiHost.cs"
+          Link="contract-source/NativeLoginUiHost.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/SarnautCore.UI/UiRuntimeKey.cs"
+          Link="contract-source/UiRuntimeKey.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/SarnautCore.UI/UiManifestJson.cs"
+          Link="contract-source/UiManifestJson.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

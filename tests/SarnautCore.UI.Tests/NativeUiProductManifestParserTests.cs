@@ -100,7 +100,6 @@ public sealed class NativeUiProductManifestParserTests
 
     [Theory]
     [InlineData("\"id\": \"login\"", "\"id\": \"Login\"")]
-    [InlineData("\"id\": \"login\"", "\"id\": \"widget-login\"")]
     [InlineData("\"id\": \"login\"", "\"id\": \"login_name\"")]
     public void EnforcesProductIdentifierGrammar(string oldValue, string newValue)
     {

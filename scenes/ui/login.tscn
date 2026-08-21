@@ -120,3 +120,26 @@ offset_right = 900.0
 offset_bottom = -8.0
 grow_vertical = 0
 text = "account service"
+
+[node name="FailureLayer" type="CanvasLayer" parent="."]
+layer = 100
+
+[node name="NativeFailure" type="CenterContainer" parent="FailureLayer"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="NativeFailureMessage" type="Label" parent="FailureLayer/NativeFailure"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(560, 0)
+layout_mode = 2
+mouse_filter = 2
+text = "Native login content is unavailable."
+horizontal_alignment = 1
+autowrap_mode = 3
