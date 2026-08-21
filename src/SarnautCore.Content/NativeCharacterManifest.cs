@@ -11,10 +11,34 @@ public sealed record NativeCharacterModel(
     string IdentityId,
     string ScenePath,
     IReadOnlyList<string> Clips,
-    IReadOnlyList<string> CombatEventClips)
+    IReadOnlyList<string> CombatEventClips,
+    NativeCharacterLod? Lod)
 {
     /// <summary>The bake applies authored scale to the scene root.</summary>
     public float Scale => 1.0f;
+}
+
+/// <summary>Authored character mesh levels and their distance switches.</summary>
+public sealed record NativeCharacterLod(int Levels, IReadOnlyList<float> SwitchDistances)
+{
+    /// <summary>Returns the sole mesh level eligible at a nonnegative camera distance.</summary>
+    public int GetLevelAtDistance(float distance)
+    {
+        if (!float.IsFinite(distance) || distance < 0.0f)
+        {
+            throw new ArgumentOutOfRangeException(nameof(distance));
+        }
+
+        for (int level = 0; level < SwitchDistances.Count; level++)
+        {
+            if (distance < SwitchDistances[level])
+            {
+                return level;
+            }
+        }
+
+        return Levels - 1;
+    }
 }
 
 /// <summary>
@@ -162,9 +186,10 @@ public sealed class NativeCharacterManifest
                 identityId,
                 "combat_event_clips",
                 identity.CombatEventClips);
+            NativeCharacterLod? lod = ValidateLod(identityId, identity.Lod);
             characters.Add(
                 characterKey,
-                new NativeCharacterModel(characterKey, kind, identityId, scene, clips, combatClips));
+                new NativeCharacterModel(characterKey, kind, identityId, scene, clips, combatClips, lod));
 
             if (isMob)
             {
@@ -292,6 +317,44 @@ public sealed class NativeCharacterManifest
         return clips.AsReadOnly();
     }
 
+    private static NativeCharacterLod? ValidateLod(string identityId, LodEntry? source)
+    {
+        if (source is null)
+        {
+            return null;
+        }
+
+        if (source.Levels < 2)
+        {
+            throw new InvalidDataException(
+                $"Identity '{identityId}' LOD has {source.Levels} levels; expected at least 2.");
+        }
+
+        if (source.SwitchDistances is null
+            || source.SwitchDistances.Count != source.Levels - 1)
+        {
+            int actual = source.SwitchDistances?.Count ?? 0;
+            throw new InvalidDataException(
+                $"Identity '{identityId}' LOD has {actual} switch distances for {source.Levels} levels.");
+        }
+
+        var distances = new List<float>(source.SwitchDistances.Count);
+        float previous = 0.0f;
+        foreach (float distance in source.SwitchDistances)
+        {
+            if (!float.IsFinite(distance) || distance <= previous)
+            {
+                throw new InvalidDataException(
+                    $"Identity '{identityId}' LOD switch distances must be finite, positive, and increasing.");
+            }
+
+            distances.Add(distance);
+            previous = distance;
+        }
+
+        return new NativeCharacterLod(source.Levels, distances.AsReadOnly());
+    }
+
     private static void ValidateCount(string label, int expected, int actual)
     {
         if (expected != actual)
@@ -324,6 +387,13 @@ public sealed class NativeCharacterManifest
         [JsonPropertyName("scene")] public string Scene { get; set; } = string.Empty;
         [JsonPropertyName("clips")] public List<string>? Clips { get; set; }
         [JsonPropertyName("combat_event_clips")] public List<string>? CombatEventClips { get; set; }
+        [JsonPropertyName("lod")] public LodEntry? Lod { get; set; }
+    }
+
+    private sealed class LodEntry
+    {
+        [JsonPropertyName("levels")] public int Levels { get; set; }
+        [JsonPropertyName("switch_distances")] public List<float>? SwitchDistances { get; set; }
     }
 
     private sealed class CharacterEntry

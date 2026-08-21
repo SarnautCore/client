@@ -25,6 +25,15 @@ public sealed class NativeCharacterManifestTests
         Assert.Equal(1.0f, rat.Scale);
         Assert.Contains("run", rat.Clips);
         Assert.Contains("attack", rat.CombatEventClips);
+        Assert.NotNull(rat.Lod);
+        Assert.Equal(3, rat.Lod.Levels);
+        Assert.Equal([12.0f, 28.0f], rat.Lod.SwitchDistances);
+        Assert.Equal(0, rat.Lod.GetLevelAtDistance(0.0f));
+        Assert.Equal(0, rat.Lod.GetLevelAtDistance(11.999f));
+        Assert.Equal(1, rat.Lod.GetLevelAtDistance(12.0f));
+        Assert.Equal(1, rat.Lod.GetLevelAtDistance(27.999f));
+        Assert.Equal(2, rat.Lod.GetLevelAtDistance(28.0f));
+        Assert.Equal(2, rat.Lod.GetLevelAtDistance(500.0f));
 
         Assert.True(manifest.TryResolve("50032", out NativeCharacterModel decimalRat));
         Assert.Same(rat, decimalRat);
@@ -67,5 +76,33 @@ public sealed class NativeCharacterManifestTests
             () => NativeCharacterManifest.Parse(json));
 
         Assert.Contains("invalid manifest-relative scene", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("[12.0]", "switch distances")]
+    [InlineData("[12.0, 12.0]", "positive, and increasing")]
+    [InlineData("[12.0, 8.0]", "positive, and increasing")]
+    [InlineData("[0.0, 28.0]", "positive, and increasing")]
+    public void Invalid_lod_switches_are_rejected(string distances, string expectedMessage)
+    {
+        string json = File.ReadAllText(FixturePath)
+            .Replace("[12.0, 28.0]", distances, StringComparison.Ordinal);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(
+            () => NativeCharacterManifest.Parse(json));
+
+        Assert.Contains(expectedMessage, error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Lod_distance_rejects_negative_or_nonfinite_input()
+    {
+        NativeCharacterManifest manifest = NativeCharacterManifest.Parse(File.ReadAllText(FixturePath));
+        Assert.True(manifest.TryResolve("50032", out NativeCharacterModel rat));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => rat.Lod!.GetLevelAtDistance(-0.1f));
+        Assert.Throws<ArgumentOutOfRangeException>(() => rat.Lod!.GetLevelAtDistance(float.NaN));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => rat.Lod!.GetLevelAtDistance(float.PositiveInfinity));
     }
 }
