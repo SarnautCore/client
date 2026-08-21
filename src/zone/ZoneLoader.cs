@@ -45,7 +45,6 @@ public partial class ZoneLoader : Node3D
     private Node3D? _objectsRoot;
     private Node3D? _charactersRoot;
     private bool _terrainFatal;
-    private readonly HashSet<string> _nativeTiles = new(StringComparer.OrdinalIgnoreCase);
     private int _nativeTerrainTileCount;
 
     [Export] public string MapName { get; set; } = DefaultMapName;
@@ -193,6 +192,14 @@ public partial class ZoneLoader : Node3D
             AddFlatTerrainFallback(placementFiles);
         }
 
+        if (_nativeTerrainTileCount > 0)
+        {
+            GD.Print(
+                $"ZoneLoader: native terrain | map={MapName} "
+                + $"tiles={_nativeTerrainTileCount}/{TerrainTileCount} "
+                + $"root={NativeContentSettings.NativeRoot}");
+        }
+
         foreach (string placementPath in placementFiles)
         {
             LoadStaticPlacements(placementPath);
@@ -242,7 +249,6 @@ public partial class ZoneLoader : Node3D
         _terrainFatal = false;
         _npcModelFailures.Clear();
         _staticModelFailures.Clear();
-        _nativeTiles.Clear();
         _pendingBakedLight.Clear();
         _pendingAuthoredLights.Clear();
         _terrainSplatMaterials.Clear();
@@ -373,7 +379,6 @@ public partial class ZoneLoader : Node3D
 
         TerrainTileCount++;
         _nativeTerrainTileCount++;
-        _nativeTiles.Add(tile.Name);
         return true;
     }
 
@@ -785,19 +790,15 @@ public partial class ZoneLoader : Node3D
         Color direct = settings.DirectLightColor;
         var ambientVector = new Vector3(ambient.R, ambient.G, ambient.B);
         var directVector = new Vector3(direct.R, direct.G, direct.B);
-        // Skip native terrain tiles: their materials have baked uniforms that are authoritative.
-        // A mismatch is a bake bug, not something to patch at runtime.
+        // Only converted-route materials are collected here. Native-baked tiles
+        // never register their splat materials: the bake pre-sets ambient_light
+        // and direct_light from the same authored ZoneLights values, and the
+        // baked uniforms are authoritative — a mismatch is a bake bug, not
+        // something to patch at runtime.
         foreach (ShaderMaterial splat in _terrainSplatMaterials)
         {
-            // Only set uniforms on converted terrain; native tiles already have correct values.
-            if (splat.GetInstanceId() > 0)  // Ensure it's valid
-            {
-                // Check if this material belongs to a native tile by scanning tile hierarchy.
-                // For now, we apply to all; native tiles marked with native_terrain meta
-                // should have pre-baked uniforms that match these values anyway.
-                splat.SetShaderParameter("ambient_light", ambientVector);
-                splat.SetShaderParameter("direct_light", directVector);
-            }
+            splat.SetShaderParameter("ambient_light", ambientVector);
+            splat.SetShaderParameter("direct_light", directVector);
         }
 
         int litObjects = 0;

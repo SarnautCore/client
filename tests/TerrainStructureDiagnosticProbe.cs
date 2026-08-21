@@ -28,18 +28,24 @@ public partial class TerrainStructureDiagnosticProbe : Node
             && loader.TerrainBounds.End.X >= 1239.9f
             && loader.TerrainBounds.Position.Z <= -6111.9f
             && loader.TerrainBounds.End.Z >= -5752.1f;
+        // The League slice ships baked terrain (ADR 0040): the diagnostic gate
+        // also proves every tile was served from the native content root. The
+        // converted route stays covered by the fault-injection probes, which
+        // force it explicitly.
         bool passed = loader.TerrainTileCount == 4
             && tiles.Length == 4
             && layered == 4
             && lit == 4
             && positioned == 4
             && globalBounds
-            && !loader.UsedFlatTerrainFallback;
+            && !loader.UsedFlatTerrainFallback
+            && loader.NativeTerrainTileCount == 4;
 
         GD.Print(
             $"TERRAIN_STRUCTURE_DIAGNOSTIC reported={loader.TerrainTileCount} roots={tiles.Length} "
             + $"layered={layered} lit={lit} positioned={positioned} bounds={loader.TerrainBounds} "
             + $"global_bounds={globalBounds} flat_fallback={loader.UsedFlatTerrainFallback} "
+            + $"native={loader.NativeTerrainTileCount} "
             + $"result={(passed ? "PASS" : "FAIL")}");
         GetTree().Quit(passed ? 0 : 1);
     }
