@@ -29,8 +29,8 @@ public sealed class HudChatCompositionTests
 
         HudChatSubmission whisper = Assert.IsType<HudChatSubmission>(composer.Enter(0).Submission);
         Assert.Equal(HudChatChannel.Whisper, whisper.Channel);
-        Assert.Equal(HudChatTargetKind.WhisperCharacterName, whisper.TargetKind);
-        Assert.Equal("Alice", whisper.Target);
+        var target = Assert.IsType<HudChatTarget.WhisperCharacterName>(whisper.Target);
+        Assert.Equal("Alice", target.Value);
         Assert.Equal(" hello ", whisper.Text);
 
         composer.Open();

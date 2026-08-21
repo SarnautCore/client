@@ -1,5 +1,3 @@
-using System.Text;
-
 namespace SarnautCore.NativeHud;
 
 public enum HudChatChannel
@@ -13,6 +11,39 @@ public enum HudChatChannel
     Guild,
     GuildOfficer,
     Raid,
+}
+
+public abstract record HudChatTarget
+{
+    private HudChatTarget()
+    {
+    }
+
+    public sealed record NoTarget : HudChatTarget;
+
+    public sealed record WhisperCharacterName : HudChatTarget
+    {
+        public WhisperCharacterName(string value)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(value);
+            Value = value;
+        }
+
+        public string Value { get; }
+    }
+
+    public sealed record NamedChannel : HudChatTarget
+    {
+        public NamedChannel(string value)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(value);
+            Value = value;
+        }
+
+        public string Value { get; }
+    }
+
+    public static NoTarget None { get; } = new();
 }
 
 public enum HudChatTargetKind
@@ -182,17 +213,20 @@ public sealed class HudChatCommandCatalog
 public sealed record HudChatSubmission(
     HudChatChannel Channel,
     string Text,
-    HudChatTargetKind TargetKind = HudChatTargetKind.None,
-    string? Target = null)
+    HudChatTarget Target)
 {
+    public HudChatSubmission(HudChatChannel channel, string text)
+        : this(channel, text, HudChatTarget.None)
+    {
+    }
+
     public HudChatSubmission Validate()
     {
         HudChatText.Validate(Text);
-        bool validTarget = TargetKind switch
+        bool validTarget = Target switch
         {
-            HudChatTargetKind.None => Target is null,
-            HudChatTargetKind.WhisperCharacterName or HudChatTargetKind.NamedChannel =>
-                !string.IsNullOrWhiteSpace(Target),
+            HudChatTarget.NoTarget => true,
+            HudChatTarget.WhisperCharacterName or HudChatTarget.NamedChannel => true,
             _ => false,
         };
         if (!validTarget)
@@ -377,9 +411,18 @@ public sealed class HudChatComposer
 
         string target = Text[cursor..targetEnd];
         string message = Text[(targetEnd + 1)..];
-        return message.Length == 0
-            ? HudChatCommit.None
-            : Submit(new HudChatSubmission(command.Channel, message, command.TargetKind, target));
+        if (message.Length == 0)
+        {
+            return HudChatCommit.None;
+        }
+
+        HudChatTarget submissionTarget = command.TargetKind switch
+        {
+            HudChatTargetKind.WhisperCharacterName => new HudChatTarget.WhisperCharacterName(target),
+            HudChatTargetKind.NamedChannel => new HudChatTarget.NamedChannel(target),
+            _ => throw new InvalidOperationException("The validated command target kind is unsupported."),
+        };
+        return Submit(new HudChatSubmission(command.Channel, message, submissionTarget));
     }
 
     private static HudChatCommit Submit(HudChatSubmission submission) =>
@@ -437,10 +480,6 @@ public static class HudChatText
     public static bool IsWellFormedUtf16(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        foreach (Rune _ in text.EnumerateRunes())
-        {
-        }
-
         return !text.AsSpan().ContainsAnyInRange('\uD800', '\uDFFF') || IsSurrogateSequenceValid(text);
     }
 
