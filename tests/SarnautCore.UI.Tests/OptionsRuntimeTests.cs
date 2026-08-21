@@ -270,6 +270,54 @@ public sealed class OptionsRuntimeTests
     }
 
     [Fact]
+    public void GlobalOptionInUserDocumentIsIgnoredAndWarned()
+    {
+        OptionsProduct product = OptionsProductFixture.Parse();
+        RecordingOptionsAdapters adapters = OptionsProductFixture.Adapters(product);
+        adapters.Persistence.State = adapters.Persistence.State with
+        {
+            User = adapters.Persistence.State.User.SetItem(
+                "gfx_gamma",
+                OptionScalar.FromNumber(0)),
+        };
+        OptionsRuntime runtime = adapters.Create(product);
+
+        OptionsTransition opened = runtime.Open();
+
+        Assert.True(opened.Succeeded);
+        Assert.Equal(Row(runtime, "gfx_gamma").Default, Row(runtime, "gfx_gamma").Draft);
+        Assert.Contains(runtime.View.Warnings, warning => warning is
+        {
+            Code: OptionsIssueCode.InvalidStoredOption,
+            RelatedId: "gfx_gamma",
+        });
+    }
+
+    [Fact]
+    public void UserOptionInGlobalDocumentIsIgnoredAndWarned()
+    {
+        OptionsProduct product = OptionsProductFixture.Parse();
+        RecordingOptionsAdapters adapters = OptionsProductFixture.Adapters(product);
+        adapters.Persistence.State = adapters.Persistence.State with
+        {
+            Global = adapters.Persistence.State.Global.SetItem(
+                "chat_bubbles_opacity",
+                OptionScalar.FromNumber(3)),
+        };
+        OptionsRuntime runtime = adapters.Create(product);
+
+        OptionsTransition opened = runtime.Open();
+
+        Assert.True(opened.Succeeded);
+        Assert.Equal(7, Row(runtime, "chat_bubbles_opacity").Draft.Number);
+        Assert.Contains(runtime.View.Warnings, warning => warning is
+        {
+            Code: OptionsIssueCode.InvalidStoredOption,
+            RelatedId: "chat_bubbles_opacity",
+        });
+    }
+
+    [Fact]
     public void ChatSettingsPublishOnlyAfterACompletedApply()
     {
         OptionsRuntime runtime = Open(out _, out _, out _);

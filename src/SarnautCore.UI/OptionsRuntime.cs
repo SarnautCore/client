@@ -694,6 +694,17 @@ public sealed class OptionsRuntime : IDisposable, IChatBubbleSettingsSource
             ImmutableDictionary<string, OptionScalar> owner = option.Storage == OptionStorage.Global
                 ? stored.Global
                 : stored.User;
+            ImmutableDictionary<string, OptionScalar> wrongOwner = option.Storage == OptionStorage.Global
+                ? stored.User
+                : stored.Global;
+            if (wrongOwner.ContainsKey(option.Id))
+            {
+                warnings.Add(new OptionsIssue(
+                    OptionsIssueCode.InvalidStoredOption,
+                    OptionsIssueSeverity.Warning,
+                    option.Id));
+            }
+
             if (owner.TryGetValue(option.Id, out OptionScalar persisted))
             {
                 if (ValidEffectiveValue(option, persisted, optionChoices))
