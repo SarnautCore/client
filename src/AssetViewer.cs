@@ -1,24 +1,18 @@
 using System;
 using System.Collections.Generic;
 using Godot;
+using SarnautCore.Content;
 
 namespace SarnautCore;
 
 public partial class AssetViewer : Control
 {
-    private const string ConvertedRoot = "res://converted";
-    private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".png",
-        ".tres",
-        ".tscn",
-        ".skmesh",
-    };
-
     private Tree _tree = null!;
     private Label _info = null!;
     private Label _emptyState = null!;
     private TextureRect _texturePreview = null!;
+    private SubViewportContainer _controlViewportContainer = null!;
+    private Control _controlPreviewRoot = null!;
     private SubViewportContainer _viewportContainer = null!;
     private Node3D _previewRoot = null!;
     private Node3D _orbitPivot = null!;
@@ -38,35 +32,36 @@ public partial class AssetViewer : Control
     public bool PreviewAsset(string path)
     {
         ClearPreview();
-        if (!FileAccess.FileExists(path))
+        if (!NativeAssetReference.TryCreate(
+                NativeContentSettings.NativeRoot,
+                path,
+                out NativeAssetReference asset,
+                out string pathError))
         {
-            SetInfo(path, "Missing", 0, "The file no longer exists.");
+            SetInfo(path, "Unsupported", 0, pathError);
             return false;
         }
 
-        long size = ReadFileSize(path);
-        string extension = System.IO.Path.GetExtension(path);
+        if (!ResourceLoader.Exists(asset.Path))
+        {
+            SetInfo(asset.Path, "Missing", 0, "The native resource no longer exists.");
+            return false;
+        }
+
+        long size = ReadFileSize(asset.Path);
         try
         {
-            switch (extension.ToLowerInvariant())
+            return asset.Kind switch
             {
-                case ".png":
-                    return PreviewTexture(path, size);
-                case ".skmesh":
-                    return PreviewSkinMesh(path, size);
-                case ".tscn":
-                    return PreviewScene(path, size);
-                case ".tres":
-                    return PreviewResource(path, size);
-                default:
-                    SetInfo(path, "Unsupported", size, "No preview is available for this file type.");
-                    return false;
-            }
+                NativeAssetKind.Scene => PreviewScene(asset.Path, size),
+                NativeAssetKind.Resource => PreviewResource(asset.Path, size),
+                _ => throw new InvalidOperationException($"Unknown native asset kind: {asset.Kind}"),
+            };
         }
         catch (Exception exception)
         {
-            GD.PushError($"Asset Viewer could not load {path}: {exception.Message}");
-            SetInfo(path, "Load error", size, exception.Message);
+            GD.PushError($"Asset Viewer could not load {asset.Path}: {exception.Message}");
+            SetInfo(asset.Path, "Load error", size, exception.Message);
             return false;
         }
     }
@@ -107,7 +102,7 @@ public partial class AssetViewer : Control
         heading.AddThemeFontSizeOverride("font_size", 22);
         toolbar.AddChild(heading);
 
-        var refresh = new Button { Text = "Refresh converted/" };
+        var refresh = new Button { Text = "Refresh native content" };
         refresh.Pressed += RefreshTree;
         toolbar.AddChild(refresh);
 
@@ -125,7 +120,7 @@ public partial class AssetViewer : Control
         browser.AddThemeConstantOverride("separation", 8);
         browserPanel.AddChild(browser);
 
-        var browserTitle = new Label { Text = "converted/" };
+        var browserTitle = new Label { Text = NativeContentSettings.NativeRoot };
         browserTitle.AddThemeFontSizeOverride("font_size", 16);
         browser.AddChild(browserTitle);
 
@@ -148,7 +143,7 @@ public partial class AssetViewer : Control
 
         _info = new Label
         {
-            Text = "Select a converted asset.",
+            Text = "Select a native Godot scene or resource.",
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
             CustomMinimumSize = new Vector2(0, 52),
         };
@@ -164,7 +159,7 @@ public partial class AssetViewer : Control
 
         _emptyState = new Label
         {
-            Text = "Choose a .png, .tres, .tscn, or .skmesh file.",
+            Text = "Choose a .scn, .tscn, .res, or .tres file.",
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             Modulate = new Color("8d99a8"),
@@ -181,7 +176,32 @@ public partial class AssetViewer : Control
         _texturePreview.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         previewHost.AddChild(_texturePreview);
 
+        BuildControlPreview(previewHost);
         BuildThreeDimensionalPreview(previewHost);
+    }
+
+    private void BuildControlPreview(Control previewHost)
+    {
+        _controlViewportContainer = new SubViewportContainer
+        {
+            Stretch = true,
+            Visible = false,
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        _controlViewportContainer.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+        previewHost.AddChild(_controlViewportContainer);
+
+        var viewport = new SubViewport
+        {
+            Size = new Vector2I(900, 650),
+            RenderTargetUpdateMode = SubViewport.UpdateMode.Always,
+            TransparentBg = true,
+        };
+        _controlViewportContainer.AddChild(viewport);
+
+        _controlPreviewRoot = new Control { Name = "NativeUiAsset" };
+        _controlPreviewRoot.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+        viewport.AddChild(_controlPreviewRoot);
     }
 
     private void BuildThreeDimensionalPreview(Control previewHost)
@@ -250,11 +270,23 @@ public partial class AssetViewer : Control
     {
         _tree.Clear();
         var root = _tree.CreateItem();
-        root.SetText(0, "converted");
-        root.SetTooltipText(0, ConvertedRoot);
+        if (!NativeAssetReference.TryValidateRoot(
+                NativeContentSettings.NativeRoot,
+                out string nativeRoot,
+                out string rootError))
+        {
+            root.SetText(0, "invalid native content root");
+            var error = _tree.CreateItem(root);
+            error.SetText(0, rootError);
+            error.SetCustomColor(0, new Color("d65f5f"));
+            return;
+        }
+
+        root.SetText(0, "native content");
+        root.SetTooltipText(0, nativeRoot);
         root.Collapsed = false;
 
-        int fileCount = PopulateDirectory(ConvertedRoot, root);
+        int fileCount = PopulateDirectory(nativeRoot, root);
         if (fileCount == 0)
         {
             var empty = _tree.CreateItem(root);
@@ -283,7 +315,7 @@ public partial class AssetViewer : Control
                 {
                     directoryNames.Add(name);
                 }
-                else if (SupportedExtensions.Contains(System.IO.Path.GetExtension(name)))
+                else if (NativeAssetReference.IsSupportedFile(name))
                 {
                     fileNames.Add(name);
                 }
@@ -339,51 +371,16 @@ public partial class AssetViewer : Control
         }
     }
 
-    private bool PreviewTexture(string path, long size)
-    {
-        Texture2D? texture = SarnautCore.UpscaledTextures.Load(path) ?? ResourceLoader.Load<Texture2D>(path);
-        if (texture == null)
-        {
-            SetInfo(path, "Texture load error", size, "Godot could not load the texture.");
-            return false;
-        }
-
-        _texturePreview.Texture = texture;
-        _texturePreview.Visible = true;
-        _emptyState.Visible = false;
-        CurrentPreviewKind = "Texture2D";
-        SetInfo(path, CurrentPreviewKind, size, $"{texture.GetWidth()} x {texture.GetHeight()} px");
-        return true;
-    }
-
-    private bool PreviewSkinMesh(string path, long size)
-    {
-        ArrayMesh? mesh = ConvertedSkinnedMesh.LoadPreviewMesh(path);
-        if (mesh == null || mesh.GetSurfaceCount() == 0)
-        {
-            SetInfo(path, "Mesh load error", size, "The .skmesh file has no readable surfaces.");
-            return false;
-        }
-
-        return ShowMesh(path, size, mesh, "Converted skinned mesh");
-    }
-
     private bool PreviewScene(string path, long size)
     {
         PackedScene? scene = ResourceLoader.Load<PackedScene>(path);
-        Node? instance = scene?.Instantiate();
-        if (instance is not Node3D node3D)
+        if (scene == null)
         {
-            instance?.QueueFree();
-            SetInfo(path, "Scene", size, "Only scenes with a Node3D root have a visual preview.");
+            SetInfo(path, "Scene load error", size, "Godot could not load the native scene.");
             return false;
         }
 
-        DisableImportedCameras(node3D);
-        ShowNode3D(node3D);
-        CurrentPreviewKind = "3D scene";
-        SetInfo(path, CurrentPreviewKind, size, $"Root: {node3D.GetClass()}");
-        return true;
+        return PreviewPackedScene(path, size, scene);
     }
 
     private bool PreviewResource(string path, long size)
@@ -391,6 +388,8 @@ public partial class AssetViewer : Control
         Resource? resource = ResourceLoader.Load(path);
         switch (resource)
         {
+            case PackedScene scene:
+                return PreviewPackedScene(path, size, scene);
             case Texture2D texture:
                 _texturePreview.Texture = texture;
                 _texturePreview.Visible = true;
@@ -406,6 +405,45 @@ public partial class AssetViewer : Control
             default:
                 CurrentPreviewKind = resource.GetClass();
                 SetInfo(path, CurrentPreviewKind, size, "Loaded resource. This type has no visual preview.");
+                return true;
+        }
+    }
+
+    private bool PreviewPackedScene(string path, long size, PackedScene scene)
+    {
+        Node? instance;
+        try
+        {
+            instance = scene.Instantiate();
+        }
+        finally
+        {
+            scene.Dispose();
+        }
+
+        switch (instance)
+        {
+            case Node3D node3D:
+                DisableImportedCameras(node3D);
+                ShowNode3D(node3D);
+                CurrentPreviewKind = "3D scene";
+                SetInfo(path, CurrentPreviewKind, size, $"Root: {node3D.GetClass()}");
+                return true;
+            case Control control:
+                _controlPreviewRoot.AddChild(control);
+                _controlViewportContainer.Visible = true;
+                _emptyState.Visible = false;
+                CurrentPreviewKind = "UI scene";
+                SetInfo(path, CurrentPreviewKind, size, $"Root: {control.GetClass()}");
+                return true;
+            case null:
+                SetInfo(path, "Scene load error", size, "Godot could not instantiate the native scene.");
+                return false;
+            default:
+                string rootClass = instance.GetClass();
+                instance.Free();
+                CurrentPreviewKind = "Scene resource";
+                SetInfo(path, CurrentPreviewKind, size, $"Root: {rootClass}; no visual preview.");
                 return true;
         }
     }
@@ -433,12 +471,19 @@ public partial class AssetViewer : Control
         CurrentPreviewKind = "None";
         _texturePreview.Texture = null;
         _texturePreview.Visible = false;
+        _controlViewportContainer.Visible = false;
         _viewportContainer.Visible = false;
         _emptyState.Visible = true;
         _previewRoot.Position = Vector3.Zero;
         foreach (Node child in _previewRoot.GetChildren())
         {
             _previewRoot.RemoveChild(child);
+            child.QueueFree();
+        }
+
+        foreach (Node child in _controlPreviewRoot.GetChildren())
+        {
+            _controlPreviewRoot.RemoveChild(child);
             child.QueueFree();
         }
     }

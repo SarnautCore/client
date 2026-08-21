@@ -29,8 +29,7 @@ Call sites, all of which fall back to the original on `null`:
 - `ConvertedImporterMesh` — `Retexture` on the `ArrayMesh` that `GetMesh()`
   returns, because `GetMesh` may copy surface materials.
 - `ZoneLoader` static visual objects, `ConvertedChrome` / `ConvertedHudChrome`,
-  native character scenes, `GameplayHudControl` portrait mask,
-  `AssetViewer.PreviewTexture`.
+  native character scenes, `GameplayHudControl` portrait mask.
 
 Terrain is deliberately untouched: `ZoneLoader`'s splat-layer load is not routed,
 and `MapPath` refuses `Maps/` anyway.

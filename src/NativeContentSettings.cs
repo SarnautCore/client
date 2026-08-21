@@ -3,8 +3,7 @@ using Godot;
 namespace SarnautCore;
 
 /// <summary>
-/// Project settings for native terrain and content loading.
-/// Follows the pattern of <see cref="UpscaledTextures"/> for setting registration.
+/// Project settings for offline-materialized native content loading.
 /// </summary>
 public static class NativeContentSettings
 {

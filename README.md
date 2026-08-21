@@ -13,7 +13,7 @@ dotnet build SarnautCore.sln
 godot --editor --path .
 ```
 
-The default scene opens a small development hub. Choose **Asset Viewer** to inspect development assets, **Zone Walkabout** for the offline walkabout, or **Play** for the session shell.
+The default scene opens a small development hub. Choose **Asset Viewer** to inspect mounted native Godot content, **Zone Walkabout** for the offline walkabout, or **Play** for the session shell.
 
 ### The session shell
 
@@ -109,7 +109,7 @@ godot_console --path . --scene res://tests/directional_lighting_probe.tscn
 dotnet run --project tools/SarnautCore.EntityBench -c Release -- --entities 288
 ```
 
-The Asset Viewer smoke scene expects local samples under `converted/samples/`. The Zone Walkabout smoke scene expects the private League-slice content mount and prints the native terrain, static, and character placement counts. These files are intentionally absent from the public Git repository.
+The Asset Viewer smoke scene expects the private native-content mount and checks one Godot scene, one Godot resource, path confinement, and unsupported-file rejection. The Zone Walkabout smoke scene expects the private League-slice content mount and prints the native terrain, static, and character placement counts. These files are intentionally absent from the public Git repository.
 
 The directional-lighting probe needs the compiled native League content and a Forward+ display. It compares the production scene with shadows on, shadows off and the sun off, then fails on crushed blacks, washed highlights or missing rendered shadows. Set `SARNAUT_LIGHTING_PROBE_PREFIX` to an absolute path to keep its three PNG frames.
 
