@@ -11,9 +11,9 @@ public partial class StaticVisualCompletenessProbe : Node
     private const int ExpectedPlacements = 41;
     private const int ExpectedVisualPlacements = 36;
     private const int ExpectedNonVisualPlacements = 5;
+    private const int ExpectedSceneResources = 24;
+    private const int ExpectedReceiverMeshes = 4;
     private const int ExpectedTexturelessMarkers = 16;
-    private const string AiMarkerTemplate = "InstLeague1_AI_2X2.(StaticObject).xdb";
-    private const string MapRegionSuffix = "_MapRegion.xdb.placements.json";
 
     public override void _Ready()
     {
@@ -21,75 +21,90 @@ public partial class StaticVisualCompletenessProbe : Node
         Node3D objects = loader.GetNode<Node3D>("StaticObjects");
         Node3D[] placements = objects.GetChildren().OfType<Node3D>().ToArray();
         Node3D[] rendered = placements.Where(placement => MeshesBelow(placement).Length > 0).ToArray();
+        NativePlacement[] baked = ReadBakedPlacements(loader).ToArray();
 
-        if (System.Environment.GetEnvironmentVariable("SARNAUT_EXPECT_STATIC_IMPORT_FAILURE") == "1")
-        {
-            bool expectedFailure = loader.VisualObjectCount == 0
-                && loader.NonVisualObjectCount == ExpectedNonVisualPlacements
-                && loader.UnresolvedObjectCount == ExpectedVisualPlacements
-                && rendered.Length == 0
-                && loader.StaticModelFailures.Count > 0
-                && loader.LastError.Contains("Import", StringComparison.OrdinalIgnoreCase);
-            GD.Print(
-                $"STATIC_IMPORT_PRECONDITION visual={loader.VisualObjectCount} "
-                + $"non_visual={loader.NonVisualObjectCount} unresolved={loader.UnresolvedObjectCount} "
-                + $"failures={loader.StaticModelFailures.Count} error_reported={!string.IsNullOrWhiteSpace(loader.LastError)} "
-                + $"result={(expectedFailure ? "PASS" : "FAIL")}");
-            GetTree().Quit(expectedFailure ? 0 : 1);
-            return;
-        }
-
-        AuthoredPlacement[] authored = ReadAuthoredPlacements(loader).ToArray();
-        int transformMismatches = CountTransformMismatches(authored, placements);
+        int orderOrTransformMismatches = CountManifestMismatches(baked, placements);
         int invalidTransforms = placements.Count(HasInvalidTransform);
-        int missingTemplates = placements.Count(placement =>
-            !placement.HasMeta("allods_template")
-            || string.IsNullOrWhiteSpace(placement.GetMeta("allods_template").AsString()));
+        int missingNativeMetadata = placements.Count(placement =>
+            !placement.GetMeta("native_static", false).AsBool()
+            || !placement.HasMeta("native_visual")
+            || !placement.HasMeta("native_collision")
+            || !placement.HasMeta("native_classification"));
+        int retiredMetadata = placements.Count(placement =>
+            placement.HasMeta("allods_template") || placement.HasMeta("allods_resolution"));
         int emptyMeshes = rendered.Count(placement => MeshesBelow(placement).Any(mesh => mesh.Mesh == null));
         int unmaterialedMeshes = rendered.Count(placement => MeshesBelow(placement).Any(MeshHasNoMaterial));
-        int sceneResolved = rendered.Count(placement =>
-            placement.GetMeta("allods_resolution", string.Empty).AsString() == "scene");
-        int geometryFallbacks = rendered.Count(placement =>
-            placement.GetMeta("allods_resolution", string.Empty).AsString() == "geometry_fallback");
+        int nativeSceneInstances = rendered.Count(placement =>
+            placement.GetMeta("native_scene", string.Empty).AsString().StartsWith(
+                NativeContentSettings.NativeRoot,
+                StringComparison.Ordinal));
+        int nativeSceneResources = rendered
+            .Select(placement => placement.GetMeta("native_scene", string.Empty).AsString())
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+        MeshInstance3D[] meshes = rendered.SelectMany(MeshesBelow).ToArray();
+        int bakedSurfaces = meshes.Sum(mesh => CountSurfaces(mesh, unshaded: true));
+        int runtimeLitSurfaces = meshes.Sum(mesh => CountSurfaces(mesh, unshaded: false));
+        int lightingLayerMismatches = meshes.Count(mesh =>
+        {
+            bool hasRuntimeLitSurface = CountSurfaces(mesh, unshaded: false) > 0;
+            uint expectedLayers = hasRuntimeLitSurface
+                ? DynamicEntityLighting.ReceiverLayers
+                : DynamicEntityLighting.BakedOnlyLayers;
+            return mesh.Layers != expectedLayers;
+        });
+        int receiverMeshes = meshes.Count(mesh =>
+            (mesh.Layers & DynamicEntityLighting.ReceiverLayerMask) != 0);
+        int collisionMismatches = placements.Count(placement =>
+        {
+            bool expectsCollision = placement.GetMeta("native_collision", false).AsBool()
+                && placement.GetMeta("native_visual", false).AsBool();
+            bool hasCollision = placement.FindChildren("*", "StaticBody3D", true, false).Count > 0;
+            return expectsCollision != hasCollision;
+        });
         Node3D[] textureless = rendered.Where(placement =>
             MeshesBelow(placement).Sum(mesh => mesh.Mesh?.GetSurfaceCount() ?? 0) > 0
             && MeshesBelow(placement).Sum(CountTexturedSurfaces) == 0).ToArray();
-        int unexpectedTextureless = textureless.Count(placement =>
-            !placement.GetMeta("allods_template").AsString()
-                .Contains(AiMarkerTemplate, StringComparison.OrdinalIgnoreCase));
-        int partiallyUntexturedModels = rendered.Count(placement =>
-            !placement.GetMeta("allods_template").AsString()
-                .Contains(AiMarkerTemplate, StringComparison.OrdinalIgnoreCase)
-            && MeshesBelow(placement).Any(mesh =>
-                CountTexturedSurfaces(mesh) != (mesh.Mesh?.GetSurfaceCount() ?? 0)));
 
-        bool passed = authored.Length == ExpectedPlacements
+        bool passed = baked.Length == ExpectedPlacements
             && placements.Length == ExpectedPlacements
             && loader.PlacedObjectCount == ExpectedPlacements
+            && loader.NativeStaticPlacementCount == ExpectedPlacements
             && loader.VisualObjectCount == ExpectedVisualPlacements
+            && loader.NativeStaticVisualCount == ExpectedVisualPlacements
             && loader.NonVisualObjectCount == ExpectedNonVisualPlacements
+            && loader.NativeStaticNonVisualCount == ExpectedNonVisualPlacements
             && loader.UnresolvedObjectCount == 0
+            && loader.BakedLightFileCount == 0
             && loader.StaticModelFailures.Count == 0
             && rendered.Length == ExpectedVisualPlacements
-            && sceneResolved == ExpectedVisualPlacements
-            && geometryFallbacks == 0
+            && nativeSceneInstances == ExpectedVisualPlacements
+            && nativeSceneResources == ExpectedSceneResources
+            && bakedSurfaces > 0
+            && runtimeLitSurfaces > 0
+            && receiverMeshes == ExpectedReceiverMeshes
+            && receiverMeshes == loader.NativeStaticReceiverMeshCount
             && textureless.Length == ExpectedTexturelessMarkers
-            && unexpectedTextureless == 0
-            && partiallyUntexturedModels == 0
-            && transformMismatches == 0
+            && orderOrTransformMismatches == 0
             && invalidTransforms == 0
-            && missingTemplates == 0
+            && missingNativeMetadata == 0
+            && retiredMetadata == 0
+            && lightingLayerMismatches == 0
+            && collisionMismatches == 0
             && emptyMeshes == 0
             && unmaterialedMeshes == 0;
 
         GD.Print(
-            $"STATIC_VISUAL_PROBE authored={authored.Length} placements={loader.PlacedObjectCount} "
-            + $"visual={loader.VisualObjectCount} non_visual={loader.NonVisualObjectCount} "
-            + $"unresolved={loader.UnresolvedObjectCount} rendered={rendered.Length} "
-            + $"scene={sceneResolved} geometry_fallback={geometryFallbacks} "
-            + $"textureless_markers={textureless.Length} unexpected_textureless={unexpectedTextureless} "
-            + $"partially_untextured={partiallyUntexturedModels} transform_mismatches={transformMismatches} "
-            + $"invalid_transforms={invalidTransforms} missing_templates={missingTemplates} "
+            $"STATIC_VISUAL_PROBE baked={baked.Length} placements={loader.PlacedObjectCount} "
+            + $"native={loader.NativeStaticPlacementCount} visual={loader.VisualObjectCount} "
+            + $"non_visual={loader.NonVisualObjectCount} unresolved={loader.UnresolvedObjectCount} "
+            + $"baked_light_files={loader.BakedLightFileCount} rendered={rendered.Length} "
+            + $"native_scenes={nativeSceneInstances}/{nativeSceneResources} "
+            + $"baked_surfaces={bakedSurfaces} runtime_lit_surfaces={runtimeLitSurfaces} "
+            + $"receiver_meshes={receiverMeshes} lighting_layer_mismatches={lightingLayerMismatches} "
+            + $"collision_mismatches={collisionMismatches} textureless_markers={textureless.Length} "
+            + $"order_transform_mismatches={orderOrTransformMismatches} invalid_transforms={invalidTransforms} "
+            + $"missing_native_metadata={missingNativeMetadata} retired_metadata={retiredMetadata} "
             + $"empty_meshes={emptyMeshes} unmaterialed={unmaterialedMeshes} "
             + $"result={(passed ? "PASS" : "FAIL")}");
         if (!passed && !string.IsNullOrWhiteSpace(loader.LastError))
@@ -100,106 +115,70 @@ public partial class StaticVisualCompletenessProbe : Node
         GetTree().Quit(passed ? 0 : 1);
     }
 
-    private static IReadOnlyList<AuthoredPlacement> ReadAuthoredPlacements(ZoneLoader loader)
+    private static IReadOnlyList<NativePlacement> ReadBakedPlacements(ZoneLoader loader)
     {
-        string mapRoot = $"{loader.ConvertedRoot.TrimEnd('/')}/assets/Maps/{loader.MapName}";
-        var result = new List<AuthoredPlacement>();
-        foreach (string path in EnumerateFiles(mapRoot)
-                     .Where(path => path.EndsWith(MapRegionSuffix, StringComparison.OrdinalIgnoreCase)))
+        string root = $"{NativeContentSettings.NativeRoot}/maps/"
+            + $"{MapNameTransform.ToKebabCase(loader.MapName)}/statics";
+        var result = new List<NativePlacement>();
+        using JsonDocument bake = JsonDocument.Parse(FileAccess.GetFileAsString($"{root}/bake.json"));
+        foreach (JsonElement cell in bake.RootElement.GetProperty("cells").EnumerateArray())
         {
-            Vector3 tileOrigin = ZoneLoader.TileOrigin(path);
+            string path = $"{root}/{cell.GetProperty("placements").GetString()}";
             using JsonDocument document = JsonDocument.Parse(FileAccess.GetFileAsString(path));
-            foreach (JsonElement placement in document.RootElement.GetProperty("objects").EnumerateArray())
+            foreach (JsonElement placement in document.RootElement.GetProperty("placements").EnumerateArray())
             {
                 float[] position = placement.GetProperty("position").EnumerateArray()
                     .Select(value => value.GetSingle()).ToArray();
-                float[] rotation = placement.GetProperty("rotation_yaw_pitch_roll").EnumerateArray()
+                float[] rotation = placement.GetProperty("rotation").EnumerateArray()
                     .Select(value => value.GetSingle()).ToArray();
                 float scale = placement.GetProperty("scale").GetSingle();
-                result.Add(new AuthoredPlacement(
-                    placement.GetProperty("template_href").GetString() ?? string.Empty,
-                    tileOrigin + new Vector3(position[0], position[2], -position[1]),
-                    ConvertRotation(rotation),
-                    Vector3.One * (scale <= 0 ? 1.0f : scale)));
+                result.Add(new NativePlacement(
+                    placement.GetProperty("name").GetString() ?? string.Empty,
+                    new Vector3(position[0], position[1], position[2]),
+                    new Quaternion(rotation[0], rotation[1], rotation[2], rotation[3]),
+                    Vector3.One * scale,
+                    placement.GetProperty("collision").GetBoolean(),
+                    placement.GetProperty("visual").GetBoolean(),
+                    placement.GetProperty("classification").GetString() ?? string.Empty));
             }
         }
 
         return result;
     }
 
-    private static int CountTransformMismatches(AuthoredPlacement[] authored, Node3D[] instances)
+    private static int CountManifestMismatches(NativePlacement[] baked, Node3D[] instances)
     {
-        if (authored.Length != instances.Length)
+        if (baked.Length != instances.Length)
         {
-            return Math.Max(authored.Length, instances.Length);
+            return Math.Max(baked.Length, instances.Length);
         }
 
         int mismatches = 0;
-        for (int index = 0; index < authored.Length; index++)
+        for (int index = 0; index < baked.Length; index++)
         {
-            AuthoredPlacement expected = authored[index];
+            NativePlacement expected = baked[index];
             Node3D actual = instances[index];
-            bool templateMatches = actual.GetMeta("allods_template", string.Empty).AsString()
-                .Equals(expected.Template, StringComparison.Ordinal);
+            bool nameMatches = actual.Name.ToString().Equals(expected.Name, StringComparison.Ordinal);
             bool positionMatches = actual.Position.IsEqualApprox(expected.Position);
             bool scaleMatches = actual.Scale.IsEqualApprox(expected.Scale);
             bool rotationMatches = MathF.Abs(actual.Quaternion.Dot(expected.Rotation)) >= 0.99999f;
-            if (!templateMatches || !positionMatches || !scaleMatches || !rotationMatches)
+            bool classificationMatches = actual.GetMeta("native_visual", false).AsBool() == expected.Visual;
+            bool classificationNameMatches = actual.GetMeta("native_classification", string.Empty).AsString()
+                .Equals(expected.Classification, StringComparison.Ordinal);
+            bool collisionMatches = actual.GetMeta("native_collision", false).AsBool() == expected.Collision;
+            if (!nameMatches
+                || !positionMatches
+                || !scaleMatches
+                || !rotationMatches
+                || !classificationMatches
+                || !classificationNameMatches
+                || !collisionMatches)
             {
                 mismatches++;
             }
         }
 
         return mismatches;
-    }
-
-    private static Quaternion ConvertRotation(float[] source)
-    {
-        var yaw = new Quaternion(Vector3.Up, source[0]);
-        var pitch = new Quaternion(Vector3.Right, source[1]);
-        var roll = new Quaternion(new Vector3(0, 0, -1), source[2]);
-        return yaw * pitch * roll;
-    }
-
-    private static List<string> EnumerateFiles(string root)
-    {
-        var result = new List<string>();
-        var pending = new Stack<string>();
-        pending.Push(root);
-        while (pending.Count > 0)
-        {
-            string directoryPath = pending.Pop();
-            using DirAccess? directory = DirAccess.Open(directoryPath);
-            if (directory == null)
-            {
-                continue;
-            }
-
-            directory.ListDirBegin();
-            string name = directory.GetNext();
-            while (!string.IsNullOrEmpty(name))
-            {
-                if (!name.StartsWith('.'))
-                {
-                    string path = $"{directoryPath}/{name}";
-                    if (directory.CurrentIsDir())
-                    {
-                        pending.Push(path);
-                    }
-                    else
-                    {
-                        result.Add(path);
-                    }
-                }
-
-                name = directory.GetNext();
-            }
-
-            directory.ListDirEnd();
-        }
-
-        result.Sort(StringComparer.OrdinalIgnoreCase);
-        return result;
     }
 
     private static bool HasInvalidTransform(Node3D placement)
@@ -235,8 +214,20 @@ public partial class StaticVisualCompletenessProbe : Node
         }
 
         return Enumerable.Range(0, mesh.Mesh.GetSurfaceCount())
-            .All(surface => mesh.GetSurfaceOverrideMaterial(surface) == null
+            .Any(surface => mesh.GetSurfaceOverrideMaterial(surface) == null
                 && mesh.Mesh.SurfaceGetMaterial(surface) == null);
+    }
+
+    private static int CountSurfaces(MeshInstance3D mesh, bool unshaded)
+    {
+        if (mesh.Mesh == null)
+        {
+            return 0;
+        }
+
+        return Enumerable.Range(0, mesh.Mesh.GetSurfaceCount())
+            .Count(surface => mesh.GetActiveMaterial(surface) is BaseMaterial3D material
+                && (material.ShadingMode == BaseMaterial3D.ShadingModeEnum.Unshaded) == unshaded);
     }
 
     private static int CountTexturedSurfaces(MeshInstance3D mesh)
@@ -250,9 +241,12 @@ public partial class StaticVisualCompletenessProbe : Node
             .Count(surface => mesh.GetActiveMaterial(surface) is BaseMaterial3D { AlbedoTexture: not null });
     }
 
-    private sealed record AuthoredPlacement(
-        string Template,
+    private sealed record NativePlacement(
+        string Name,
         Vector3 Position,
         Quaternion Rotation,
-        Vector3 Scale);
+        Vector3 Scale,
+        bool Collision,
+        bool Visual,
+        string Classification);
 }

@@ -27,7 +27,8 @@ public partial class P3RockDiagProbe : Node
         foreach (Node child in loader.GetNode<Node3D>("StaticObjects").GetChildren())
         {
             if (child is not Node3D instance
-                || !((string)instance.GetMeta("allods_template", "")).Contains("A_Stones"))
+                || !instance.GetMeta("native_scene", string.Empty).AsString()
+                    .EndsWith("/A_Stones.tscn", System.StringComparison.Ordinal))
             {
                 continue;
             }

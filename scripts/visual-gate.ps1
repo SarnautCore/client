@@ -6,8 +6,8 @@
     The machine has a single serialized Godot slot, so every scene runs on its
     own process with stdout/stderr redirected to files (piping the console
     output hangs the editor binary). A probe fails the gate when its process
-    exits non-zero, times out, or its stderr reports leaked instances or an
-    ERROR line.
+    exits non-zero, times out, omits result=PASS, or either output stream
+    reports leaked instances or an unexpected ERROR line.
 
     player_appearance_pixel_probe saves its front/back PNG evidence only when
     SARNAUT_APPEARANCE_PROBE names a prefix, so the gate provides one under the
@@ -30,6 +30,7 @@ if ($OutputDirectory.Length -eq 0) {
     $OutputDirectory = Join-Path $projectRoot ".cache\visual-gate"
 }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
+. (Join-Path $PSScriptRoot "visual-gate-diagnostics.ps1")
 
 # Scene, timeout seconds, and any environment the probe needs.
 $probes = @(
@@ -41,7 +42,7 @@ $probes = @(
     @{ Scene = "gameplay_hud_layout_smoke"; Timeout = 240 },
     @{ Scene = "live_zone_player_animation_probe"; Timeout = 240 },
     @{ Scene = "online_coordinate_frame_smoke"; Timeout = 120 },
-    @{ Scene = "origin_applied_manifest_probe"; Timeout = 240; ExpectsInjectedErrors = $true },
+    @{ Scene = "origin_applied_manifest_probe"; Timeout = 240 },
     @{ Scene = "partial_native_terrain_fallback_probe"; Timeout = 240 },
     @{ Scene = "player_appearance_pixel_probe"; Timeout = 600; Environment = @{
             SARNAUT_APPEARANCE_PROBE = (Join-Path $OutputDirectory "player-appearance")
@@ -49,7 +50,7 @@ $probes = @(
     },
     @{ Scene = "static_visual_completeness_probe"; Timeout = 240 },
     @{ Scene = "terrain_structure_diagnostic_probe"; Timeout = 240 },
-    @{ Scene = "unrecoverable_terrain_failure_probe"; Timeout = 240; ExpectsInjectedErrors = $true },
+    @{ Scene = "unrecoverable_terrain_failure_probe"; Timeout = 240 },
     @{ Scene = "zone_camera_spawn_smoke"; Timeout = 240 },
     @{ Scene = "zone_presentation_pixel_probe"; Timeout = 400 }
 )
@@ -68,7 +69,7 @@ foreach ($probe in $probes) {
     Write-Output ("== {0} (budget {1}s) ==" -f $scene, $probe.Timeout)
     $startParameters = @{
         FilePath = $Godot
-        ArgumentList = @("--path", $projectRoot, "res://tests/$scene.tscn")
+        ArgumentList = @("--audio-driver", "Dummy", "--path", $projectRoot, "res://tests/$scene.tscn")
         WorkingDirectory = $projectRoot
         RedirectStandardOutput = $stdout
         RedirectStandardError = $stderr
@@ -94,18 +95,18 @@ foreach ($probe in $probes) {
         }
     }
 
+    $stdoutText = Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue
+    if ($null -eq $stdoutText) { $stdoutText = "" }
     $stderrText = Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue
     if ($null -eq $stderrText) { $stderrText = "" }
     $reasons = @()
     if ($timedOut) { $reasons += "timed out after $($probe.Timeout)s" }
     elseif ($process.ExitCode -ne 0) { $reasons += "exit code $($process.ExitCode)" }
-    if ($stderrText -match "leaked") { $reasons += "stderr reports leaked instances" }
-    # Fault-injection probes deliberately drive the loader through its error
-    # path, so their expected diagnostics are exempt from the ERROR sweep; the
-    # leak check above still applies to them.
-    if ($stderrText -match "ERROR" -and -not $probe.ContainsKey("ExpectsInjectedErrors")) {
-        $reasons += "stderr reports ERROR lines"
-    }
+    $allowedErrorPatterns = @(Get-VisualGateAllowedErrorPatterns -Scene $scene)
+    $reasons += @(Get-VisualGateDiagnosticReasons `
+        -Stdout $stdoutText `
+        -Stderr $stderrText `
+        -AllowedErrorPatterns $allowedErrorPatterns)
 
     if ($reasons.Count -gt 0) {
         $failures += "{0}: {1}" -f $scene, ($reasons -join "; ")

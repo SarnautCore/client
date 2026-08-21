@@ -44,8 +44,14 @@ public partial class GameplayHudLayoutSmoke : Node
         };
         AddChild(viewport);
 
-        PackedScene scene = GD.Load<PackedScene>("res://scenes/zone_walkabout.tscn");
-        Node zone = scene.Instantiate();
+        Node zone;
+        // The loaded scene owns the walker's embedded CapsuleShape3D. This
+        // async smoke used to retain the PackedScene wrapper through engine
+        // shutdown, leaving that Shape3D RID alive after result=PASS.
+        using (PackedScene scene = GD.Load<PackedScene>("res://scenes/zone_walkabout.tscn"))
+        {
+            zone = scene.Instantiate();
+        }
         CanvasLayer interfaceLayer = zone.GetNode<CanvasLayer>("Interface");
         zone.RemoveChild(interfaceLayer);
         zone.Free();

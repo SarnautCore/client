@@ -30,6 +30,11 @@ public partial class ZoneLoader : Node3D
     };
     private const string BakedLightSuffix = "_MapRegion.xdb.lightvrt.json";
     private const string AuthoredLightsSuffix = "_MapRegion.xdb.lights.json";
+    private const string NativeStaticsBakeFormat = "sarnaut-native-statics-v2";
+    private const string NativeStaticsCellFormat = "sarnaut-native-statics-v1";
+    private const string NativeStaticsFrameId = "godot-world-v1";
+    private const string NativeStaticsCoordinateScope = "world";
+    private const string NativeStaticsCellPolicy = "nonempty_placements_only";
     private readonly HashSet<string> _npcModelFailures = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _staticModelFailures = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<PendingBakedLight> _pendingBakedLight = [];
@@ -45,7 +50,12 @@ public partial class ZoneLoader : Node3D
     private Node3D? _objectsRoot;
     private Node3D? _charactersRoot;
     private bool _terrainFatal;
+    private bool _authoredLightsPlaced;
     private int _nativeTerrainTileCount;
+    private int _nativeStaticPlacementCount;
+    private int _nativeStaticVisualCount;
+    private int _nativeStaticNonVisualCount;
+    private int _nativeStaticReceiverMeshCount;
 
     [Export] public string MapName { get; set; } = DefaultMapName;
     [Export(PropertyHint.Dir)] public string ConvertedRoot { get; set; } = DefaultConvertedRoot;
@@ -86,6 +96,10 @@ public partial class ZoneLoader : Node3D
     public int AuthoredAntiLightCount { get; private set; }
     public int LightProbeTileCount => _lightProbe.TileCount;
     public int NativeTerrainTileCount => _nativeTerrainTileCount;
+    public int NativeStaticPlacementCount => _nativeStaticPlacementCount;
+    public int NativeStaticVisualCount => _nativeStaticVisualCount;
+    public int NativeStaticNonVisualCount => _nativeStaticNonVisualCount;
+    public int NativeStaticReceiverMeshCount => _nativeStaticReceiverMeshCount;
     public bool UsedFlatTerrainFallback { get; private set; }
     public string LastError { get; private set; } = string.Empty;
 
@@ -200,9 +214,31 @@ public partial class ZoneLoader : Node3D
                 + $"root={NativeContentSettings.NativeRoot}");
         }
 
-        foreach (string placementPath in placementFiles)
+        NativeStaticsIndex? nativeStatics = TryIndexNativeStatics();
+        if (nativeStatics != null)
         {
-            LoadStaticPlacements(placementPath);
+            foreach (NativeStaticsRuntimeCell nativeCell in nativeStatics.Cells)
+            {
+                LoadNativeStaticPlacements(nativeCell, nativeStatics);
+            }
+        }
+        else
+        {
+            foreach (string placementPath in placementFiles)
+            {
+                LoadStaticPlacements(placementPath);
+            }
+        }
+
+        if (nativeStatics != null && _nativeStaticPlacementCount > 0)
+        {
+            GD.Print(
+                $"ZoneLoader: native statics | map={MapName} cells={nativeStatics.Cells.Count} "
+                + $"placements={_nativeStaticPlacementCount}/{PlacedObjectCount} "
+                + $"visual={_nativeStaticVisualCount}/{VisualObjectCount} "
+                + $"non_visual={_nativeStaticNonVisualCount}/{NonVisualObjectCount} "
+                + $"receiver_meshes={_nativeStaticReceiverMeshCount} "
+                + $"root={NativeContentSettings.NativeRoot}");
         }
 
         foreach (string serverPath in serverFiles)
@@ -247,6 +283,7 @@ public partial class ZoneLoader : Node3D
         _objectsRoot = null;
         _charactersRoot = null;
         _terrainFatal = false;
+        _authoredLightsPlaced = false;
         _npcModelFailures.Clear();
         _staticModelFailures.Clear();
         _pendingBakedLight.Clear();
@@ -269,6 +306,10 @@ public partial class ZoneLoader : Node3D
         _presentationSpawnHints.Clear();
         TerrainTileCount = 0;
         _nativeTerrainTileCount = 0;
+        _nativeStaticPlacementCount = 0;
+        _nativeStaticVisualCount = 0;
+        _nativeStaticNonVisualCount = 0;
+        _nativeStaticReceiverMeshCount = 0;
         TerrainVertexCount = 0;
         PlacedObjectCount = 0;
         VisualObjectCount = 0;
@@ -631,6 +672,431 @@ public partial class ZoneLoader : Node3D
             .First().Key;
     }
 
+    /// <summary>
+    /// Builds one validated native-static index for the zone. Native statics
+    /// are all-or-nothing: the aggregate owns ordered cell discovery, and
+    /// every referenced cell and scene must load before any instance is added.
+    /// A partial or malformed bake falls back to the complete converted route.
+    /// </summary>
+    private NativeStaticsIndex? TryIndexNativeStatics()
+    {
+        string staticsRoot = $"{NativeContentSettings.NativeRoot}/maps/"
+            + $"{MapNameTransform.ToKebabCase(MapName)}/statics";
+        string bakePath = $"{staticsRoot}/bake.json";
+        if (!FileAccess.FileExists(bakePath))
+        {
+            return null;
+        }
+
+        try
+        {
+            NativeStaticsBakeManifest? bake = JsonSerializer.Deserialize<NativeStaticsBakeManifest>(
+                FileAccess.GetFileAsString(bakePath), JsonOptions);
+            if (bake == null
+                || bake.Format != NativeStaticsBakeFormat
+                || bake.SchemaVersion != 2
+                || !bake.Map.Equals(MapName, StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(bake.Zone)
+                || bake.Frame?.Id != NativeStaticsFrameId
+                || bake.Frame.CoordinateScope != NativeStaticsCoordinateScope
+                || !bake.Frame.OriginApplied
+                || bake.CellPolicy != NativeStaticsCellPolicy
+                || bake.Report == null
+                || bake.Report.Unresolved != 0
+                || bake.Cells == null)
+            {
+                return DeclineNativeStatics(
+                    $"Native static bake manifest is incompatible or unresolved: {bakePath}");
+            }
+
+            var seenCells = new HashSet<NativeStaticCellKey>();
+            var runtimeCells = new List<NativeStaticsRuntimeCell>();
+            var scenes = new Dictionary<string, PackedScene>(StringComparer.Ordinal);
+            int manifestPlacements = 0;
+            int manifestVisual = 0;
+            int manifestNonVisual = 0;
+
+            NativeStaticsBakeCell[] orderedCells = bake.Cells
+                .OrderBy(cell => cell.Order)
+                .ToArray();
+            for (int cellIndex = 0; cellIndex < orderedCells.Length; cellIndex++)
+            {
+                NativeStaticsBakeCell bakeCell = orderedCells[cellIndex];
+                string manifestPath = string.Empty;
+                string manifestPathError = string.Empty;
+                if (bakeCell.Order != cellIndex
+                    || bakeCell.Cell?.Sector is not { Length: 2 }
+                    || bakeCell.Cell.Tile is not { Length: 2 }
+                    || bakeCell.Report == null
+                    || bakeCell.Report.Unresolved != 0
+                    || !TryResolveRelativeResourcePath(
+                        bakePath,
+                        bakeCell.Placements,
+                        staticsRoot,
+                        ".json",
+                        out manifestPath,
+                        out manifestPathError))
+                {
+                    return DeclineNativeStatics(
+                        $"Native static bake cell {cellIndex} is incompatible: "
+                        + (string.IsNullOrWhiteSpace(manifestPathError) ? bakePath : manifestPathError));
+                }
+
+                if (!FileAccess.FileExists(manifestPath))
+                {
+                    return DeclineNativeStatics($"Native static cell manifest is missing: {manifestPath}");
+                }
+
+                NativeStaticsManifest? manifest = JsonSerializer.Deserialize<NativeStaticsManifest>(
+                    FileAccess.GetFileAsString(manifestPath), JsonOptions);
+                if (!TryValidateNativeStaticsManifest(
+                        manifest,
+                        manifestPath,
+                        staticsRoot,
+                        MapName,
+                        bake.Zone,
+                        scenes,
+                        out NativeStaticCellKey cellKey,
+                        out string manifestError))
+                {
+                    return DeclineNativeStatics(manifestError);
+                }
+
+                NativeStaticCellKey declaredCellKey = NativeStaticCellKey.From(bakeCell.Cell);
+                NativeStaticPlacement[] placements = manifest!.Placements!;
+                int cellVisual = placements.Count(placement => placement.Visual);
+                int cellNonVisual = placements.Length - cellVisual;
+                if (cellKey != declaredCellKey
+                    || bakeCell.Report.Placements != placements.Length
+                    || bakeCell.Report.Visual != cellVisual
+                    || bakeCell.Report.NonVisual != cellNonVisual
+                    || bakeCell.Report.PointLights != 0
+                    || bakeCell.Report.AntiLights != 0
+                    || !string.IsNullOrWhiteSpace(bakeCell.AuthoredLights))
+                {
+                    return DeclineNativeStatics(
+                        $"Native static bake cell report does not match {manifestPath}");
+                }
+
+                if (!seenCells.Add(declaredCellKey))
+                {
+                    return DeclineNativeStatics(
+                        $"Native static bake has duplicate cell {declaredCellKey}: {manifestPath}");
+                }
+
+                manifestPlacements += placements.Length;
+                manifestVisual += cellVisual;
+                manifestNonVisual += cellNonVisual;
+                runtimeCells.Add(new NativeStaticsRuntimeCell(manifest));
+            }
+
+            if (runtimeCells.Count != bake.Report.Cells
+                || manifestPlacements != bake.Report.Placements
+                || manifestVisual != bake.Report.Visual
+                || manifestNonVisual != bake.Report.NonVisual
+                || bake.Report.PointLights != 0
+                || bake.Report.AntiLights != 0)
+            {
+                return DeclineNativeStatics(
+                    $"Native static bake report does not match its cell manifests: {bakePath}");
+            }
+
+            return new NativeStaticsIndex(runtimeCells, scenes, bake.Report);
+        }
+        catch (Exception exception)
+        {
+            return DeclineNativeStatics(
+                $"Native static bake could not be indexed: {bakePath}: {exception.Message}");
+        }
+    }
+
+    private NativeStaticsIndex? DeclineNativeStatics(string error)
+    {
+        GD.PushWarning($"ZoneLoader: {error}; using the converted static route for the whole zone.");
+        return null;
+    }
+
+    private static bool TryValidateNativeStaticsManifest(
+        NativeStaticsManifest? manifest,
+        string manifestPath,
+        string staticsRoot,
+        string expectedMap,
+        string expectedZone,
+        Dictionary<string, PackedScene> scenes,
+        out NativeStaticCellKey cellKey,
+        out string error)
+    {
+        cellKey = default;
+        if (manifest == null
+            || manifest.Format != NativeStaticsCellFormat
+            || !manifest.Map.Equals(expectedMap, StringComparison.Ordinal)
+            || !manifest.Zone.Equals(expectedZone, StringComparison.Ordinal)
+            || manifest.Cell?.Sector is not { Length: 2 }
+            || manifest.Cell.Tile is not { Length: 2 }
+            || manifest.Frame?.Id != NativeStaticsFrameId
+            || !manifest.Frame.OriginApplied
+            || manifest.Placements == null)
+        {
+            error = $"Native static cell manifest is incompatible: {manifestPath}";
+            return false;
+        }
+
+        cellKey = NativeStaticCellKey.From(manifest.Cell);
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        for (int placementIndex = 0; placementIndex < manifest.Placements.Length; placementIndex++)
+        {
+            NativeStaticPlacement placement = manifest.Placements[placementIndex];
+            if (placement.Order != placementIndex)
+            {
+                error = $"Native static placement order is not contiguous in {manifestPath}";
+                return false;
+            }
+
+            if (!TryReadNativeTransform(placement, out _, out _, out _, out string transformError))
+            {
+                error = $"Native static placement '{placement.Name}' is invalid in {manifestPath}: {transformError}";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(placement.Name) || !names.Add(placement.Name))
+            {
+                error = $"Native static placement names are empty or duplicated in {manifestPath}";
+                return false;
+            }
+
+            if (!placement.Visual)
+            {
+                if (!string.IsNullOrWhiteSpace(placement.Scene)
+                    || (placement.NonVisualReason != "collision_only"
+                        && placement.NonVisualReason != "invisible_portal")
+                    || placement.Classification != placement.NonVisualReason)
+                {
+                    error = $"Native nonvisual placement '{placement.Name}' is invalid in {manifestPath}";
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (placement.Classification != "visual")
+            {
+                error = $"Native visual placement '{placement.Name}' has an invalid classification in {manifestPath}";
+                return false;
+            }
+
+            if (!TryResolveRelativeResourcePath(
+                    manifestPath,
+                    placement.Scene,
+                    staticsRoot,
+                    ".tscn",
+                    out string scenePath,
+                    out string scenePathError))
+            {
+                error = $"Native static placement '{placement.Name}' has an invalid scene: {scenePathError}";
+                return false;
+            }
+
+            if (!scenes.TryGetValue(scenePath, out PackedScene? scene))
+            {
+                if (!FileAccess.FileExists(scenePath))
+                {
+                    error = $"Native static scene is missing: {scenePath}";
+                    return false;
+                }
+
+                scene = ResourceLoader.Load<PackedScene>(scenePath);
+                Node? probe = scene?.Instantiate();
+                bool validRoot = probe is Node3D;
+                probe?.Free();
+                if (scene == null || !validRoot)
+                {
+                    error = $"Native static scene does not instantiate as Node3D: {scenePath}";
+                    return false;
+                }
+
+                scenes.Add(scenePath, scene);
+            }
+
+            placement.ResolvedScenePath = scenePath;
+        }
+
+        manifest.SourcePath = manifestPath;
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryResolveRelativeResourcePath(
+        string ownerPath,
+        string? relativePath,
+        string allowedRoot,
+        string requiredExtension,
+        out string resolvedPath,
+        out string error)
+    {
+        resolvedPath = string.Empty;
+        string relative = (relativePath ?? string.Empty).Replace('\\', '/');
+        if (string.IsNullOrWhiteSpace(relative)
+            || relative.StartsWith('/')
+            || relative.Contains("://", StringComparison.Ordinal)
+            || !relative.EndsWith(requiredExtension, StringComparison.OrdinalIgnoreCase))
+        {
+            error = $"expected a relative '{requiredExtension}' resource path, got '{relativePath}'";
+            return false;
+        }
+
+        string ownerDirectory = ownerPath[..ownerPath.LastIndexOf('/')];
+        var parts = ownerDirectory.Split('/', StringSplitOptions.RemoveEmptyEntries).ToList();
+        foreach (string part in relative.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (part == ".")
+            {
+                continue;
+            }
+
+            if (part == "..")
+            {
+                if (parts.Count <= 1)
+                {
+                    error = $"relative path escapes the resource root: '{relativePath}'";
+                    return false;
+                }
+
+                parts.RemoveAt(parts.Count - 1);
+                continue;
+            }
+
+            if (part.IndexOfAny([':', '*', '?']) >= 0)
+            {
+                error = $"relative path contains an unsafe segment: '{relativePath}'";
+                return false;
+            }
+
+            parts.Add(part);
+        }
+
+        resolvedPath = "res://" + string.Join('/', parts.Skip(1));
+        string rootPrefix = allowedRoot.TrimEnd('/') + "/";
+        if (!resolvedPath.StartsWith(rootPrefix, StringComparison.Ordinal))
+        {
+            error = $"relative path escapes the native statics root: '{relativePath}'";
+            resolvedPath = string.Empty;
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryReadNativeTransform(
+        NativeStaticPlacement placement,
+        out Vector3 position,
+        out Quaternion rotation,
+        out Vector3 scale,
+        out string error)
+    {
+        position = Vector3.Zero;
+        rotation = Quaternion.Identity;
+        scale = Vector3.One;
+        if (placement.Position is not { Length: 3 }
+            || placement.Rotation is not { Length: 4 }
+            || !placement.Position.All(float.IsFinite)
+            || !placement.Rotation.All(float.IsFinite)
+            || !float.IsFinite(placement.Scale)
+            || placement.Scale <= 0)
+        {
+            error = "position, rotation, or scale is missing or non-finite";
+            return false;
+        }
+
+        position = new Vector3(placement.Position[0], placement.Position[1], placement.Position[2]);
+        rotation = new Quaternion(
+            placement.Rotation[0],
+            placement.Rotation[1],
+            placement.Rotation[2],
+            placement.Rotation[3]);
+        if (!Mathf.IsEqualApprox(rotation.LengthSquared(), 1.0f))
+        {
+            error = "rotation is not a unit quaternion";
+            return false;
+        }
+
+        scale = Vector3.One * placement.Scale;
+        error = string.Empty;
+        return true;
+    }
+
+    private void LoadNativeStaticPlacements(
+        NativeStaticsRuntimeCell cell,
+        NativeStaticsIndex index)
+    {
+        foreach (NativeStaticPlacement placement in cell.Manifest.Placements!)
+        {
+            _ = TryReadNativeTransform(placement, out Vector3 position, out Quaternion rotation, out Vector3 scale, out _);
+            Node3D instance;
+            if (placement.Visual)
+            {
+                PackedScene scene = index.Scenes[placement.ResolvedScenePath];
+                instance = (Node3D)scene.Instantiate();
+                ConfigureNativeStaticLighting(instance);
+                _nativeStaticVisualCount++;
+                VisualObjectCount++;
+            }
+            else
+            {
+                instance = new Node3D();
+                instance.SetMeta("native_nonvisual_reason", placement.NonVisualReason ?? string.Empty);
+                _nativeStaticNonVisualCount++;
+                NonVisualObjectCount++;
+            }
+
+            instance.Name = placement.Name;
+            instance.Position = position;
+            instance.Quaternion = rotation;
+            instance.Scale = scale;
+            instance.SetMeta("native_static", true);
+            instance.SetMeta("native_visual", placement.Visual);
+            instance.SetMeta("native_collision", placement.Collision);
+            instance.SetMeta("native_classification", placement.Classification);
+            if (placement.Visual)
+            {
+                instance.SetMeta("native_scene", placement.ResolvedScenePath);
+            }
+
+            _objectsRoot!.AddChild(instance);
+            _spawnHints.Add(position);
+            if (placement.Visual && placement.Collision)
+            {
+                AddStaticCollision(instance);
+            }
+
+            _nativeStaticPlacementCount++;
+            PlacedObjectCount++;
+        }
+    }
+
+    private void ConfigureNativeStaticLighting(Node node)
+    {
+        if (node is MeshInstance3D { Mesh: not null } mesh)
+        {
+            bool hasShadedSurface = Enumerable.Range(0, mesh.Mesh.GetSurfaceCount())
+                .Select(mesh.GetActiveMaterial)
+                .Any(material => material is not BaseMaterial3D baseMaterial
+                    || baseMaterial.ShadingMode != BaseMaterial3D.ShadingModeEnum.Unshaded);
+            mesh.Layers = hasShadedSurface
+                ? DynamicEntityLighting.ReceiverLayers
+                : DynamicEntityLighting.BakedOnlyLayers;
+            if (hasShadedSurface)
+            {
+                _nativeStaticReceiverMeshCount++;
+            }
+        }
+
+        foreach (Node child in node.GetChildren())
+        {
+            ConfigureNativeStaticLighting(child);
+        }
+    }
+
     private void LoadStaticPlacements(string placementPath)
     {
         MapPlacementDocument? document = ReadPlacementDocument(placementPath);
@@ -743,11 +1209,12 @@ public partial class ZoneLoader : Node3D
     /// </summary>
     private void PlaceAuthoredLights(Color directColor)
     {
-        if (_pendingAuthoredLights.Count == 0)
+        if (_authoredLightsPlaced || _pendingAuthoredLights.Count == 0)
         {
             return;
         }
 
+        _authoredLightsPlaced = true;
         var lightsRoot = new Node3D { Name = "AuthoredLights" };
         AddChild(lightsRoot);
         foreach (PendingAuthoredLights pending in _pendingAuthoredLights)
@@ -1452,6 +1919,112 @@ public partial class ZoneLoader : Node3D
         GD.PushError($"ZoneLoader: {message}");
         return false;
     }
+
+    private sealed class NativeStaticsBakeManifest
+    {
+        [JsonPropertyName("format")] public string Format { get; set; } = string.Empty;
+        [JsonPropertyName("schema_version")] public int SchemaVersion { get; set; }
+        [JsonPropertyName("map")] public string Map { get; set; } = string.Empty;
+        [JsonPropertyName("zone")] public string Zone { get; set; } = string.Empty;
+        [JsonPropertyName("frame")] public NativeStaticsBakeFrame? Frame { get; set; }
+        [JsonPropertyName("cell_policy")] public string CellPolicy { get; set; } = string.Empty;
+        [JsonPropertyName("report")] public NativeStaticsReport? Report { get; set; }
+        [JsonPropertyName("cells")] public NativeStaticsBakeCell[]? Cells { get; set; }
+    }
+
+    private sealed class NativeStaticsBakeFrame
+    {
+        [JsonPropertyName("id")] public string Id { get; set; } = string.Empty;
+        [JsonPropertyName("coordinate_scope")] public string CoordinateScope { get; set; } = string.Empty;
+        [JsonPropertyName("origin_applied")] public bool OriginApplied { get; set; }
+    }
+
+    private sealed class NativeStaticsBakeCell
+    {
+        [JsonPropertyName("order")] public int Order { get; set; } = -1;
+        [JsonPropertyName("cell")] public NativeStaticCell? Cell { get; set; }
+        [JsonPropertyName("placements")] public string Placements { get; set; } = string.Empty;
+        [JsonPropertyName("authored_lights")] public string? AuthoredLights { get; set; }
+        [JsonPropertyName("report")] public NativeStaticsReport? Report { get; set; }
+    }
+
+    private sealed class NativeStaticsReport
+    {
+        [JsonPropertyName("cells")] public int Cells { get; set; }
+        [JsonPropertyName("placements")] public int Placements { get; set; }
+        [JsonPropertyName("visual")] public int Visual { get; set; }
+        [JsonPropertyName("non_visual")] public int NonVisual { get; set; }
+        [JsonPropertyName("unresolved")] public int Unresolved { get; set; }
+        [JsonPropertyName("point_lights")] public int PointLights { get; set; }
+        [JsonPropertyName("anti_lights")] public int AntiLights { get; set; }
+    }
+
+    private sealed class NativeStaticsManifest
+    {
+        [JsonPropertyName("format")] public string Format { get; set; } = string.Empty;
+        [JsonPropertyName("map")] public string Map { get; set; } = string.Empty;
+        [JsonPropertyName("zone")] public string Zone { get; set; } = string.Empty;
+        [JsonPropertyName("cell")] public NativeStaticCell? Cell { get; set; }
+        [JsonPropertyName("frame")] public NativeStaticFrame? Frame { get; set; }
+        [JsonPropertyName("placements")] public NativeStaticPlacement[]? Placements { get; set; }
+        [JsonIgnore] public string SourcePath { get; set; } = string.Empty;
+    }
+
+    private sealed class NativeStaticCell
+    {
+        [JsonPropertyName("sector")] public long[]? Sector { get; set; }
+        [JsonPropertyName("tile")] public long[]? Tile { get; set; }
+    }
+
+    private sealed class NativeStaticFrame
+    {
+        [JsonPropertyName("id")] public string Id { get; set; } = string.Empty;
+        [JsonPropertyName("origin_applied")] public bool OriginApplied { get; set; }
+    }
+
+    private sealed class NativeStaticPlacement
+    {
+        [JsonPropertyName("order")] public int Order { get; set; } = -1;
+        [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
+        [JsonPropertyName("scene")] public string? Scene { get; set; }
+        [JsonPropertyName("position")] public float[]? Position { get; set; }
+        [JsonPropertyName("rotation")] public float[]? Rotation { get; set; }
+        [JsonPropertyName("scale")] public float Scale { get; set; }
+        [JsonPropertyName("collision")] public bool Collision { get; set; }
+        [JsonPropertyName("visual")] public bool Visual { get; set; }
+        [JsonPropertyName("classification")] public string Classification { get; set; } = string.Empty;
+        [JsonPropertyName("nonvisual_reason")] public string? NonVisualReason { get; set; }
+        [JsonIgnore] public string ResolvedScenePath { get; set; } = string.Empty;
+    }
+
+    private readonly record struct NativeStaticCellKey(
+        long SectorX,
+        long SectorY,
+        long TileX,
+        long TileY)
+    {
+        public static NativeStaticCellKey From(TileCoordinateManifest manifest) => new(
+            manifest.SectorIndices.X,
+            manifest.SectorIndices.Y,
+            manifest.TileIndices.X,
+            manifest.TileIndices.Y);
+
+        public static NativeStaticCellKey From(NativeStaticCell cell) => new(
+            cell.Sector![0],
+            cell.Sector[1],
+            cell.Tile![0],
+            cell.Tile[1]);
+
+        public override string ToString() =>
+            $"{SectorX:D3}_{SectorY:D3}/{TileX}_{TileY}";
+    }
+
+    private sealed record NativeStaticsRuntimeCell(NativeStaticsManifest Manifest);
+
+    private sealed record NativeStaticsIndex(
+        IReadOnlyList<NativeStaticsRuntimeCell> Cells,
+        IReadOnlyDictionary<string, PackedScene> Scenes,
+        NativeStaticsReport Report);
 
     private sealed class MapPlacementDocument
     {

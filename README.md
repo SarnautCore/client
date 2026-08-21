@@ -106,6 +106,8 @@ The client contains the converter's C# runtime resource classes and skinned-mesh
 ```powershell
 dotnet build SarnautCore.sln
 dotnet test SarnautCore.sln
+./scripts/test-visual-gate-diagnostics.ps1
+./scripts/visual-gate.ps1 -Godot <path to godot_console>
 godot_console --headless --import --path .
 godot_console --headless --path . --scene res://tests/asset_viewer_smoke.tscn
 godot_console --headless --path . --scene res://tests/zone_walkabout_smoke.tscn
@@ -117,6 +119,8 @@ dotnet run --project tools/SarnautCore.EntityBench -c Release -- --entities 288
 The Asset Viewer smoke scene expects local samples under `converted/samples/`. The Zone Walkabout smoke scene expects the classic conversion below `converted/assets/classic-1.1/` and prints the imported terrain and placement counts. These files are intentionally absent from Git because converted game assets must remain local.
 
 The directional-lighting probe also needs the classic conversion and a Forward+ display. It compares the production scene with shadows on, shadows off and the sun off, then fails on crushed blacks, washed highlights or missing rendered shadows. Set `SARNAUT_LIGHTING_PROBE_PREFIX` to an absolute path to keep its three PNG frames.
+
+The visual gate requires every probe to print `result=PASS` and rejects leak or unexpected `ERROR` diagnostics from either output stream. Captures taken at animated p4 and p5 moments are comparison evidence. They do not need to be byte-identical or pixel-identical unless the capture fixes animation time and every other render input. Compare composition and bounded image metrics when the frames are not deterministic.
 
 The Entity Binding smoke scene needs neither: it binds snapshots to visuals, picks one with a ray and retires one, and prints whether it ran on converted models or on capsules. Run it both ways. `SarnautCore.EntityBench` compares the entity update against the pre-registry loop; see `tools/SarnautCore.EntityBench/RESULTS.md`.
 
