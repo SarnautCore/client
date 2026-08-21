@@ -220,6 +220,18 @@ public static class NativeUiProductManifestParser
                     }
                 }
             }
+
+            foreach (UiActionEvent actionEvent in triggers
+                .Where(trigger => trigger.Role == button.Role)
+                .Select(trigger => trigger.Event))
+            {
+                if (!button.Variants.Any(variant =>
+                    variant.Inputs.Any(route => route.Event == actionEvent)))
+                {
+                    throw new InvalidDataException(
+                        $"{context} button role '{button.Role}' action event {actionEvent} is unreachable from every variant");
+                }
+            }
         }
 
         UiSelectionGroupDefinition[] selectionGroups = UiManifestJson.Array(

@@ -385,7 +385,7 @@ public sealed class NativeUiProductManifestParserTests
     }
 
     [Fact]
-    public void AcceptsADeclaredButtonActionWithoutAVariantInputRoute()
+    public void RejectsAButtonActionUnreachableFromEveryVariant()
     {
         string json = UiProductFixture.Json
             .Replace(
@@ -393,9 +393,7 @@ public sealed class NativeUiProductManifestParserTests
                 "\"inputs\": []",
                 StringComparison.Ordinal);
 
-        UiProductManifest manifest = UiProductFixture.Parse(json);
-
-        Assert.Empty(manifest.Screens[0].FindButton("options")!.Variants[0].Inputs);
+        Assert.Throws<InvalidDataException>(() => UiProductFixture.Parse(json));
     }
 
     [Fact]
