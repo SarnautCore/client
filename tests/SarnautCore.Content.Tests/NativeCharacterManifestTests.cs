@@ -38,7 +38,7 @@ public sealed class NativeCharacterManifestTests
         NativeCharacterAttachmentLod attachment = rat.Lod.Attachments["Attach_Test"];
         Assert.Equal(3, attachment.Levels);
         Assert.Equal([8.0f, 20.0f], attachment.SwitchDistances);
-        NativeCharacterAttachmentLod single = rat.Lod.Attachments["Attach_Single"];
+        NativeCharacterAttachmentLod single = rat.Lod.Attachments["Attach_Helm_Leather_D_01"];
         Assert.Equal(1, single.Levels);
         Assert.Empty(single.SwitchDistances);
 
@@ -71,6 +71,34 @@ public sealed class NativeCharacterManifestTests
             () => NativeCharacterManifest.Parse(json));
 
         Assert.Contains("missing identity", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Legacy_v1_manifest_is_rejected()
+    {
+        string json = File.ReadAllText(FixturePath)
+            .Replace("\"schema_version\": 2", "\"schema_version\": 1", StringComparison.Ordinal);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(
+            () => NativeCharacterManifest.Parse(json));
+
+        Assert.Contains("schema 1 is unsupported", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("expected 2", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Identity_without_lod_is_rejected()
+    {
+        string json = File.ReadAllText(FixturePath)
+            .Replace(
+                ",\n      \"lod\": {\n        \"levels\": 3,\n        \"switch_distances\": [14.0, 32.0],\n        \"attachments\": []\n      }",
+                string.Empty,
+                StringComparison.Ordinal);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(
+            () => NativeCharacterManifest.Parse(json));
+
+        Assert.Contains("has no authored LOD capability", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -118,13 +146,40 @@ public sealed class NativeCharacterManifestTests
     {
         string json = File.ReadAllText(FixturePath)
             .Replace(
-                "\"node\": \"Attach_Single\",\n            \"levels\": 1,\n            \"switch_distances\": []",
-                "\"node\": \"Attach_Single\",\n            \"levels\": 1,\n            \"switch_distances\": [9.0]",
+                "\"node\": \"Attach_Helm_Leather_D_01\",\n            \"levels\": 1,\n            \"switch_distances\": []",
+                "\"node\": \"Attach_Helm_Leather_D_01\",\n            \"levels\": 1,\n            \"switch_distances\": [9.0]",
                 StringComparison.Ordinal);
 
         InvalidDataException error = Assert.Throws<InvalidDataException>(
             () => NativeCharacterManifest.Parse(json));
 
         Assert.Contains("switch distances for 1 levels", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Attachment_must_declare_one_or_three_levels()
+    {
+        string json = File.ReadAllText(FixturePath)
+            .Replace(
+                "\"node\": \"Attach_Helm_Leather_D_01\",\n            \"levels\": 1,\n            \"switch_distances\": []",
+                "\"node\": \"Attach_Helm_Leather_D_01\",\n            \"levels\": 2,\n            \"switch_distances\": [9.0]",
+                StringComparison.Ordinal);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(
+            () => NativeCharacterManifest.Parse(json));
+
+        Assert.Contains("expected 1 or 3", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Single_level_attachment_must_be_an_audited_exception()
+    {
+        string json = File.ReadAllText(FixturePath)
+            .Replace("Attach_Helm_Leather_D_01", "Attach_Unreviewed", StringComparison.Ordinal);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(
+            () => NativeCharacterManifest.Parse(json));
+
+        Assert.Contains("not an audited single-level exception", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 }

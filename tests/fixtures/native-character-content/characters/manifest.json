@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "manifest_type": "sarnaut.characters",
   "counts": {
     "mob_keys": 2,
@@ -22,7 +22,7 @@
             "switch_distances": [8.0, 20.0]
           },
           {
-            "node": "Attach_Single",
+            "node": "Attach_Helm_Leather_D_01",
             "levels": 1,
             "switch_distances": []
           }
@@ -32,12 +32,22 @@
     "player.kania.female": {
       "scene": "player.kania.female/player.kania.female.tscn",
       "clips": ["idle", "run", "attack", "hit", "death"],
-      "combat_event_clips": ["attack"]
+      "combat_event_clips": ["attack"],
+      "lod": {
+        "levels": 3,
+        "switch_distances": [14.0, 32.0],
+        "attachments": []
+      }
     },
     "chargen.league.warrior": {
       "scene": "chargen.league.warrior/chargen.league.warrior.tscn",
       "clips": ["idle", "run", "attack", "hit", "death"],
-      "combat_event_clips": ["attack"]
+      "combat_event_clips": ["attack"],
+      "lod": {
+        "levels": 3,
+        "switch_distances": [16.0, 36.0],
+        "attachments": []
+      }
     }
   },
   "characters": {

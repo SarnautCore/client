@@ -12,7 +12,7 @@ public sealed record NativeCharacterModel(
     string ScenePath,
     IReadOnlyList<string> Clips,
     IReadOnlyList<string> CombatEventClips,
-    NativeCharacterLod? Lod)
+    NativeCharacterLod Lod)
 {
     /// <summary>The bake applies authored scale to the scene root.</summary>
     public float Scale => 1.0f;
@@ -55,8 +55,15 @@ public sealed record NativeCharacterAttachmentLod(
 /// </summary>
 public sealed class NativeCharacterManifest
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
     public const string ExpectedManifestType = "sarnaut.characters";
+
+    private static readonly HashSet<string> AuditedSingleLevelAttachments = new(StringComparer.Ordinal)
+    {
+        "Attach_Helm_Leather_D_01",
+        "Attach_Helm_Plate_D_06",
+        "Attach_Staff_2H_E_08",
+    };
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -198,7 +205,7 @@ public sealed class NativeCharacterManifest
                 identityId,
                 "combat_event_clips",
                 identity.CombatEventClips);
-            NativeCharacterLod? lod = ValidateLod(identityId, identity.Lod);
+            NativeCharacterLod lod = ValidateLod(identityId, identity.Lod);
             characters.Add(
                 characterKey,
                 new NativeCharacterModel(characterKey, kind, identityId, scene, clips, combatClips, lod));
@@ -329,11 +336,12 @@ public sealed class NativeCharacterManifest
         return clips.AsReadOnly();
     }
 
-    private static NativeCharacterLod? ValidateLod(string identityId, LodEntry? source)
+    private static NativeCharacterLod ValidateLod(string identityId, LodEntry? source)
     {
         if (source is null)
         {
-            return null;
+            throw new InvalidDataException(
+                $"Identity '{identityId}' has no authored LOD capability.");
         }
 
         if (source.Levels != 3)
@@ -361,20 +369,28 @@ public sealed class NativeCharacterManifest
                 || !node.StartsWith("Attach_", StringComparison.Ordinal)
                 || node.Contains('/')
                 || node.Contains('\\')
-                || !attachments.TryAdd(
-                    node,
-                    new NativeCharacterAttachmentLod(
-                        node,
-                        sourceAttachment!.Levels,
-                        ValidateSwitchDistances(
-                            identityId,
-                            $"attachment '{node}'",
-                            sourceAttachment.Levels,
-                            sourceAttachment.SwitchDistances))))
+                || attachments.ContainsKey(node))
             {
                 throw new InvalidDataException(
                     $"Identity '{identityId}' has an invalid or duplicate attachment LOD node '{node}'.");
             }
+
+            if (sourceAttachment!.Levels == 1 && !AuditedSingleLevelAttachments.Contains(node))
+            {
+                throw new InvalidDataException(
+                    $"Identity '{identityId}' attachment '{node}' is not an audited single-level exception.");
+            }
+
+            attachments.Add(
+                node,
+                new NativeCharacterAttachmentLod(
+                    node,
+                    sourceAttachment.Levels,
+                    ValidateSwitchDistances(
+                        identityId,
+                        $"attachment '{node}'",
+                        sourceAttachment.Levels,
+                        sourceAttachment.SwitchDistances)));
         }
 
         return new NativeCharacterLod(
