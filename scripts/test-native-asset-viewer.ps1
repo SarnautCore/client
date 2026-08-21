@@ -35,12 +35,15 @@ foreach ($retired in @(
 foreach ($retained in @(
     "src\GodotNative\ConvertedSkinnedMesh.cs",
     "src\GodotNative\ConvertedImporterMesh.cs",
-    "src\visual\UpscaledTextures.cs",
-    "src\zone\AllodsResourceTree.cs"
+    "src\visual\UpscaledTextures.cs"
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $retained))) {
         throw "shared runtime loader was removed by the Asset Viewer cutover: $retained"
     }
+}
+
+if (Test-Path -LiteralPath (Join-Path $root "src\zone\AllodsResourceTree.cs")) {
+    throw "retired Allods resource tree remains after the native zone presentation cutover"
 }
 
 Write-Output "native-asset-viewer: PASS"
