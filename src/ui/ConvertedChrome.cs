@@ -47,6 +47,7 @@ public static class ConvertedChrome
                 : $"converted chrome unavailable: {error}";
         }
 
+        UpscaledTextures.Retexture(instance);
         instance.Name = "ConvertedChrome";
         instance.Visible = true;
         instance.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);

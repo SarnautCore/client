@@ -37,9 +37,20 @@ msbuild.binlog
 .env
 .env.local
 
-# User-local converted Allods output
+# User-local converted Allods output. Mounted as a junction by
+# scripts/mount-assets.ps1; the .gdignore keeps the editor from stat-scanning
+# ~415k converted files on startup and on every focus regain. Runtime loads
+# never needed the editor's filesystem database: imported types resolve
+# through their .import sidecars and the rest goes through FileAccess.
 converted/*
 !converted/.gitkeep
+!converted/.gdignore
+
+# User-local upscaled texture variants. Mounted as a junction by
+# scripts/mount-assets.ps1; the .gdignore keeps Godot from importing 35 GB of
+# 4x PNGs that UpscaledTextures reads through FileAccess instead.
+upscaled/*
+!upscaled/.gdignore
 
 # OS
 .DS_Store

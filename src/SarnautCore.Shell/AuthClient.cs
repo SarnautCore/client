@@ -204,12 +204,24 @@ public sealed class AuthClient
                 option.NameKey,
                 option.DescriptionKey,
                 option.VisualRef,
-                option.SpawnZoneId,
+                SessionZoneId(option.SpawnZoneId),
                 option.StartingLevel,
                 option.SpawnX,
                 option.SpawnY,
                 option.SpawnZ)),
         ];
+    }
+
+    // Implements specs/protocol/session.md rule 5.4.9. Content rows use
+    // canonical ids such as `zone.inst-league1`; the session
+    // protocol identifies the running zone instance by its slug. Adapt at the
+    // boundary where a content id becomes an EnterZoneRequest value.
+    private static string SessionZoneId(string contentZoneId)
+    {
+        const string canonicalPrefix = "zone.";
+        return contentZoneId.StartsWith(canonicalPrefix, StringComparison.Ordinal)
+            ? contentZoneId[canonicalPrefix.Length..]
+            : contentZoneId;
     }
 
     private async Task<TDocument> SendAsync<TDocument>(

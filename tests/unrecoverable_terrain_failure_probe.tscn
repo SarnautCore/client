@@ -1,0 +1,13 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://tests/UnrecoverableTerrainFailureProbe.cs" id="1_probe"]
+[ext_resource type="Script" path="res://tests/UnrecoverableTerrainFailureLoader.cs" id="2_loader"]
+
+[node name="UnrecoverableTerrainFailureProbe" type="Node"]
+script = ExtResource("1_probe")
+
+[node name="ZoneLoader" type="Node3D" parent="."]
+script = ExtResource("2_loader")
+AutoLoad = false
+CreateTerrainCollision = false
+

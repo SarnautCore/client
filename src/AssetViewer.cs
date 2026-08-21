@@ -341,7 +341,7 @@ public partial class AssetViewer : Control
 
     private bool PreviewTexture(string path, long size)
     {
-        Texture2D? texture = ResourceLoader.Load<Texture2D>(path);
+        Texture2D? texture = SarnautCore.UpscaledTextures.Load(path) ?? ResourceLoader.Load<Texture2D>(path);
         if (texture == null)
         {
             SetInfo(path, "Texture load error", size, "Godot could not load the texture.");

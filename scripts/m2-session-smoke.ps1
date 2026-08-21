@@ -164,8 +164,9 @@ try {
     }
 
     # An account per run, so a rerun does not depend on what the last one left
-    # behind. A character name is 3 to 16 ASCII letters (ADR 0032 §3).
-    $runId = -join ((1..6) | ForEach-Object { [char](97 + (Get-Random -Maximum 26)) })
+    # behind. Restrict the suffix to a-f so random test names can never contain
+    # the reserved substrings gm, admin, or sarnaut (ADR 0032 §3).
+    $runId = -join ((1..10) | ForEach-Object { [char](97 + (Get-Random -Maximum 6)) })
     $email = "shell-$runId@example.invalid"
     $password = "shell-password-$runId"
     $characterName = "Shell" + $runId
@@ -239,8 +240,28 @@ try {
         & dotnet build (Join-Path $clientRoot "SarnautCore.csproj") --configuration Debug
         if ($LASTEXITCODE -ne 0) { throw "Building the Godot project failed." }
 
-        $probe = & $Godot --headless --path $clientRoot --scene res://tests/zone_online_probe.tscn 2>&1
+        $probeStdout = Join-Path $temporaryRoot "zone-probe.stdout.log"
+        $probeStderr = Join-Path $temporaryRoot "zone-probe.stderr.log"
+        $probeStart = @{
+            FilePath = $Godot
+            ArgumentList = @("--headless", "--path", $clientRoot, "--scene", "res://tests/zone_online_probe.tscn")
+            WorkingDirectory = $clientRoot
+            RedirectStandardOutput = $probeStdout
+            RedirectStandardError = $probeStderr
+            PassThru = $true
+        }
+        if ($IsWindows) { $probeStart.WindowStyle = "Hidden" }
+        $probeProcess = Start-Process @probeStart
+        $processes += $probeProcess
+        Wait-Process -Id $probeProcess.Id -Timeout 90 -ErrorAction Stop
+        $probe = @(
+            Get-Content -LiteralPath $probeStdout -ErrorAction SilentlyContinue
+            Get-Content -LiteralPath $probeStderr -ErrorAction SilentlyContinue
+        )
         $probe | ForEach-Object { Write-Output $_ }
+        if ($probeProcess.ExitCode -ne 0) {
+            throw "The entity binding probe exited with code $($probeProcess.ExitCode)."
+        }
         $line = $probe | Select-String -Pattern "ZONE_ONLINE_PROBE .* result=(\w+)"
         if ($null -eq $line -or $line.Matches[0].Groups[1].Value -ne "PASS") {
             throw "The entity binding probe did not pass."

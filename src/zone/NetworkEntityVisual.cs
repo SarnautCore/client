@@ -98,6 +98,12 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
     /// <summary>True when a converted model loaded, false when this is a capsule.</summary>
     public bool HasModel { get; private set; }
 
+    /// <summary>True when the converted model is actively evaluating a clip.</summary>
+    public bool IsAnimationPlaying => _character?.IsAnimationPlaying == true;
+
+    /// <summary>The converted clip currently selected for this entity.</summary>
+    public string ActiveClip => _character?.ActiveClip ?? string.Empty;
+
     /// <summary>The pick capsule's radius, height, and the height of its centre.</summary>
     public float PickRadius { get; private set; }
 
@@ -196,6 +202,9 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
             },
             Position = new Vector3(0, CapsuleHeight * 0.5f, 0),
         };
+        // Capsules are dynamic entities too: the zone's runtime point lights
+        // reach them through the receiver layer.
+        DynamicEntityLighting.MarkReceiver(_capsule);
         AddChild(_capsule);
     }
 
@@ -362,7 +371,7 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
 
     public void Apply(SampledEntity sample)
     {
-        Position = new Vector3(sample.X, sample.Z, sample.Y);
+        Position = OnlineCoordinateFrame.ToGodot(sample);
         Rotation = new Vector3(0, sample.Heading, 0);
         _character?.SetMoving(sample.AnimationState == AnimationState.Moving);
         ApplyIdentity(sample);

@@ -25,6 +25,10 @@ project/assembly_name="SarnautCore"
 [sarnaut]
 
 ui/converted_theme="res://converted/assets/classic-1.1/assets/Interface/System/Fonts/FontAlias.(WidgetFontAlias).theme.tres"
+visual/prefer_upscaled_textures=true
+visual/upscaled_root="res://upscaled/assets"
+visual/upscaled_mipmaps=false
+visual/upscaled_vram_compression=true
 
 [input]
 

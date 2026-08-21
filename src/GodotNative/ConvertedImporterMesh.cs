@@ -57,21 +57,35 @@ public partial class ConvertedImporterMesh : Node3D
                 continue;
             }
 
+            ArrayMesh runtimeMesh = importerMesh.GetMesh();
+            // GetMesh may hand back copies of the surface materials, so the
+            // substitution is reapplied to what actually renders. Cached, so
+            // repeating it for an already-swapped material costs a lookup.
+            SarnautCore.UpscaledTextures.Retexture(runtimeMesh);
+            NormalizeConvertedMaterials(runtimeMesh);
             var instance = new MeshInstance3D
             {
                 Name = level == 0 ? "Mesh" : $"MeshLOD{level}",
-                Mesh = importerMesh.GetMesh(),
+                Mesh = runtimeMesh,
                 VisibilityRangeBegin = level > 0 && level - 1 < distances.Length
                     ? distances[level - 1]
                     : 0.0f,
                 VisibilityRangeEnd = level < distances.Length ? distances[level] : 0.0f,
             };
+            // Every converted mesh starts as a runtime-lit receiver; the zone
+            // loader's baked pass demotes the meshes its bake covers, so only
+            // dynamic entities and unbaked props stay on the receiver layer.
+            SarnautCore.DynamicEntityLighting.MarkReceiver(instance);
             if (skeleton == null)
             {
                 AddChild(instance);
             }
             else
             {
+                // Code-built MeshInstance3D nodes start with an empty skeleton
+                // NodePath in this Godot build; without ".." they never attach
+                // to the skeleton and render the bind pose forever.
+                instance.Skeleton = new NodePath("..");
                 instance.Skin = skin;
                 skeleton.AddChild(instance);
             }
@@ -88,15 +102,48 @@ public partial class ConvertedImporterMesh : Node3D
             if (fallback != null)
             {
                 var instance = new MeshInstance3D { Name = "Mesh", Mesh = fallback };
+                SarnautCore.DynamicEntityLighting.MarkReceiver(instance);
                 if (skeleton == null)
                 {
                     AddChild(instance);
                 }
                 else
                 {
+                    instance.Skeleton = new NodePath("..");
                     instance.Skin = skin;
                     skeleton.AddChild(instance);
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Repairs authored blend semantics on converted mesh materials. Older
+    /// converter artifacts emit additive surfaces (BLEND_EFFECT_ADD on a
+    /// transparent part: crystal glows, flares, wing glows) as alpha-blended
+    /// SHADED materials, which the scene's dim ambient collapses to nothing.
+    /// The source engine draws them as emissive additive geometry, so they
+    /// render unshaded with additive blending here. Idempotent, and applied at
+    /// the one place every converted static and character mesh materializes.
+    /// </summary>
+    public static void NormalizeConvertedMaterials(ArrayMesh mesh)
+    {
+        for (int surface = 0; surface < mesh.GetSurfaceCount(); surface++)
+        {
+            if (mesh.SurfaceGetMaterial(surface) is not BaseMaterial3D material)
+            {
+                continue;
+            }
+
+            string blendEffect = (string)material.GetMeta("allods_blend_effect", "");
+            bool authoredTransparent =
+                material.Transparency == BaseMaterial3D.TransparencyEnum.Alpha
+                || material.BlendMode == BaseMaterial3D.BlendModeEnum.Add;
+            if (authoredTransparent && blendEffect.Contains("ADD"))
+            {
+                material.BlendMode = BaseMaterial3D.BlendModeEnum.Add;
+                material.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded;
+                material.Transparency = BaseMaterial3D.TransparencyEnum.Alpha;
             }
         }
     }

@@ -6,12 +6,17 @@ namespace SarnautCore;
 /// <summary>Converted Ingame scene references used as HUD chrome.</summary>
 public static class ConvertedHudChrome
 {
-    public const string TargetSelection = "Interface/Ingame/TargetSelection/MainForm.(WidgetForm).ui.tscn";
+    public const string TargetPlate =
+        "Interface/Ingame/ContextPlates/TargetsPlate.(WidgetPanel).ui.tscn";
     public const string Character = "Interface/Ingame/ContextCharacter/MainForm.(WidgetForm).ui.tscn";
+    public const string AbilityBar =
+        "Interface/Ingame/ContextCharacter/SkillPlate.(WidgetPanel).ui.tscn";
     public const string DamageVisualization =
         "Interface/Ingame/ContextDamageVisualization/MainForm.(WidgetForm).ui.tscn";
     public const string LootBag = "Interface/Ingame/ContextLootBag/MainForm.(WidgetForm).ui.tscn";
     public const string Multibag = "Interface/Ingame/ContextMultibag/MainForm.(WidgetForm).ui.tscn";
+    public const string Inventory =
+        "Interface/Ingame/ContextMultibag/MainPanel.(WidgetPanel).ui.tscn";
     public const string QuestLog = "Interface/Ingame/ContextQuestLog/MainForm.(WidgetForm).ui.tscn";
     public const string QuestTracker =
         "Interface/Ingame/ContextQuestTrackerNew/MainForm.(WidgetForm).ui.tscn";
@@ -30,7 +35,9 @@ public static class ConvertedHudChrome
             return false;
         }
 
+        UpscaledTextures.Retexture(chrome);
         chrome.Name = "ConvertedChrome";
+        chrome.Visible = true;
         chrome.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
         MakeDecorative(chrome);
         host.AddChild(chrome);

@@ -49,8 +49,10 @@ public static class EntityNaming
     }
 
     /// <summary>
-    /// A readable stand-in built from the key: the last meaningful segment,
-    /// stripped of its variant suffix and split into words.
+    /// A readable stand-in built from the key. Classic creature resource paths
+    /// use the creature family immediately below <c>Creatures</c>; other path-shaped
+    /// content ids extract and humanize their last segment. Authored variants and
+    /// field suffixes are omitted before the remaining text is split into words.
     /// </summary>
     public static string Slug(string? nameKey)
     {
@@ -60,11 +62,57 @@ public static class EntityNaming
             return string.Empty;
         }
 
-        string segment = LastMeaningfulSegment(key);
+        // Try creatures family extraction first (highest priority).
+        string? segment = CreatureFamilySegment(key);
+
+        // If not a creatures path but is a path-shaped id (either separator),
+        // extract the last segment so no path separator leaks into display text.
+        if (segment == null && (key.Contains('/') || key.Contains('\\')))
+        {
+            key = ExtractLastPathSegment(key);
+        }
+
+        // Use last meaningful segment if we haven't found a creatures family.
+        segment ??= LastMeaningfulSegment(key);
+
         segment = StripFieldSuffix(segment, '_');
         segment = StripVariantSuffix(segment);
         string words = SplitWords(segment);
         return words.Length == 0 ? key : words;
+    }
+
+    /// <summary>
+    /// Extracts the last segment from a path-shaped string, handling both '/'
+    /// and '\' as separators. Ensures the result never contains path separators.
+    /// </summary>
+    private static string ExtractLastPathSegment(string path)
+    {
+        // Trailing separators would otherwise survive the LastIndexOf slice
+        // and leak a '/' into display text.
+        string normalized = path.Replace('\\', '/').TrimEnd('/');
+        int lastSlash = normalized.LastIndexOf('/');
+        return lastSlash >= 0 ? normalized[(lastSlash + 1)..] : normalized;
+    }
+
+    /// <summary>
+    /// A classic entity key is a resource path such as
+    /// <c>Creatures/ZombieWarrior/Instances/.../ZombieWarriorStartInst_Name</c>.
+    /// The instance leaf is an editor identity, not a display name. The family
+    /// segment is the only safe deterministic fallback when locale data is not
+    /// mounted in the client.
+    /// </summary>
+    private static string? CreatureFamilySegment(string key)
+    {
+        string[] segments = key.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (int index = 0; index + 1 < segments.Length; index++)
+        {
+            if (segments[index].Equals("Creatures", StringComparison.OrdinalIgnoreCase))
+            {
+                return segments[index + 1];
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

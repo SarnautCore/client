@@ -70,6 +70,7 @@ public partial class GameplayHudFallbackSmoke : Node
         Expect(hud.FindChildren("ConvertedChrome").Count == 0, "no converted chrome loaded");
         Expect(hud.FindChildren("*", "PanelContainer", true, false).Count >= 8, "fallback panels built");
 
+        network.Free();
         bool passed = _failures.Count == 0;
         GD.Print($"GAMEPLAY_HUD_FALLBACK widgets=9 converted_chrome=0 result={(passed ? "PASS" : "FAIL")}");
         foreach (string failure in _failures)

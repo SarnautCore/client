@@ -62,6 +62,9 @@ public partial class ZoneNetworkLoop : Node
     /// <summary>The entity this client is playing.</summary>
     public ulong OwnEntityId => _ownEntityId;
 
+    /// <summary>The unmodified canonical spawn returned by EnterZoneResponse.</summary>
+    public Vec3? EnteredSpawnPosition { get; private set; }
+
     /// <summary>The entity the player has selected, or 0 for none.</summary>
     public ulong TargetEntityId { get; private set; }
 
@@ -109,8 +112,8 @@ public partial class ZoneNetworkLoop : Node
         }
 
         _cadence.Accumulate(delta);
-        Vector3 direction = _walker.NetworkMoveDirection;
-        while (_cadence.TryDequeue(direction.X, direction.Z, _walker.Rotation.Y, out ClientMoveIntent intent))
+        Vector2 direction = OnlineCoordinateFrame.ToServerGround(_walker.NetworkMoveDirection);
+        while (_cadence.TryDequeue(direction.X, direction.Y, _walker.Rotation.Y, out ClientMoveIntent intent))
         {
             _moveIntents.Writer.TryWrite(intent);
         }
@@ -243,7 +246,7 @@ public partial class ZoneNetworkLoop : Node
         }
 
         Camera3D? camera = GetViewport().GetCamera3D();
-        Vector3 worldPosition = new(entity.Latest.X, entity.Latest.Z + 2.2f, entity.Latest.Y);
+        Vector3 worldPosition = OnlineCoordinateFrame.ToGodot(entity.Latest) + (Vector3.Up * 2.2f);
         if (camera is null || camera.IsPositionBehind(worldPosition))
         {
             return false;
@@ -421,10 +424,11 @@ public partial class ZoneNetworkLoop : Node
             }
 
             _ownEntityId = update.OwnEntityId;
+            EnteredSpawnPosition = update.SpawnPosition!.Clone();
             _hud.SetOwnEntityId(_ownEntityId);
             // The response's spawn is authoritative: it is the server's answer,
             // not a confirmation of a client request (session spec rule 5.4.6).
-            _walker.Position = ToGodot(update.SpawnPosition!);
+            _walker.ApplyAuthoritativePosition(OnlineCoordinateFrame.ToGodot(EnteredSpawnPosition));
             _connected = true;
             _setStatus($"Online: joined as entity {_ownEntityId} | server {update.ServerBuildId} | QUIC stream");
             _onAdmitted?.Invoke();
@@ -449,7 +453,7 @@ public partial class ZoneNetworkLoop : Node
         if (Entities.HasLocalSample)
         {
             SampledEntity local = Entities.LocalSample;
-            _walker.Position = new Vector3(local.X, local.Z, local.Y);
+            _walker.ApplyAuthoritativePosition(OnlineCoordinateFrame.ToGodot(local));
             // The local player deliberately has no registry visual. Observe its
             // one authoritative sample here so a death followed by Alive=true
             // can produce respawn feedback without walking all 288 entities.
@@ -540,8 +544,6 @@ public partial class ZoneNetworkLoop : Node
         sample.Health,
         sample.MaxHealth,
         sample.Alive);
-
-    private static Vector3 ToGodot(Sarnaut.Protocol.V1.Vec3 value) => new(value.X, value.Z, value.Y);
 
     private sealed record ConnectionUpdate(
         ulong OwnEntityId,

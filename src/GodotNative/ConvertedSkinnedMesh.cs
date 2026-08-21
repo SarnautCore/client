@@ -1,5 +1,6 @@
 // Ported from ao-godot-converter runtime templates (Apache-2.0).
 using System.Collections.Generic;
+using System.Linq;
 using Godot;
 
 /// <summary>
@@ -16,6 +17,8 @@ public partial class ConvertedSkinnedMesh : Node3D
 {
     private static readonly Dictionary<string, LoadedSkinMesh?> MeshCache = new();
     private static readonly Dictionary<string, Texture2D?> TextureCache = new();
+    private LoadedSkinMesh? _loaded;
+    private MeshInstance3D? _runtimeMesh;
 
     public override void _EnterTree()
     {
@@ -51,10 +54,21 @@ public partial class ConvertedSkinnedMesh : Node3D
 
         var skeleton = GetNodeOrNull<Skeleton3D>("Skeleton3D");
         var instance = new MeshInstance3D { Mesh = loaded.DefaultMesh };
+        // Skinned meshes are dynamic entities: the zone's runtime point lights
+        // (authored placements and the sampled-bake fill) reach them through
+        // the receiver layer while baked statics stay outside it.
+        SarnautCore.DynamicEntityLighting.MarkReceiver(instance);
+        _loaded = loaded;
+        _runtimeMesh = instance;
         instance.SetMeta("allods_source_mesh", loaded.FullMesh);
         instance.SetMeta("allods_surfaces", loaded.SurfacesJson);
         if (skeleton != null)
         {
+            // A MeshInstance3D constructed in code has an EMPTY skeleton
+            // NodePath in this Godot build (serialized scenes write ".."), so
+            // without this line the instance never attaches to the skeleton and
+            // renders its bind pose forever — the T-pose bug.
+            instance.Skeleton = new NodePath("..");
             instance.Skin = BuildSkin(loaded, skeleton);
             skeleton.AddChild(instance);
         }
@@ -64,6 +78,63 @@ public partial class ConvertedSkinnedMesh : Node3D
         }
 
         GetNodeOrNull<MeshInstance3D>("Mesh")?.Hide();
+    }
+
+    /// <summary>
+    /// Selects one authored geoset per body slot and applies an assembled body
+    /// atlas. Converter artifacts contain every face, hair and armor surface at
+    /// once, so a class appearance must make that choice explicitly.
+    /// </summary>
+    public bool ApplyAppearance(
+        IEnumerable<string> visibleSurfaces,
+        IReadOnlyDictionary<string, Texture2D> surfaceTextures,
+        string appearanceId)
+    {
+        if (_loaded == null || _runtimeMesh == null)
+        {
+            return false;
+        }
+
+        var visible = new HashSet<string>(visibleSurfaces, System.StringComparer.OrdinalIgnoreCase);
+        var selected = new ArrayMesh();
+        for (int surface = 0; surface < _loaded.FullMesh.GetSurfaceCount(); surface++)
+        {
+            string name = _loaded.FullMesh.SurfaceGetName(surface);
+            if (!visible.Contains(name))
+            {
+                continue;
+            }
+
+            selected.AddSurfaceFromArrays(
+                _loaded.FullMesh.SurfaceGetPrimitiveType(surface),
+                _loaded.FullMesh.SurfaceGetArrays(surface));
+            int destination = selected.GetSurfaceCount() - 1;
+            selected.SurfaceSetName(destination, name);
+            Material? material = _loaded.FullMesh.SurfaceGetMaterial(surface)?.Duplicate() as Material;
+            if (material is BaseMaterial3D baseMaterial && surfaceTextures.TryGetValue(name, out Texture2D? texture))
+            {
+                baseMaterial.AlbedoTexture = texture;
+            }
+
+            if (material != null)
+            {
+                selected.SurfaceSetMaterial(destination, material);
+            }
+        }
+
+        if (selected.GetSurfaceCount() != visible.Count)
+        {
+            string[] missing = visible
+                .Where(name => !Enumerable.Range(0, selected.GetSurfaceCount())
+                    .Any(surface => selected.SurfaceGetName(surface).Equals(name, System.StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
+            GD.PushWarning($"ConvertedSkinnedMesh: appearance '{appearanceId}' is missing surfaces: {string.Join(", ", missing)}");
+            return false;
+        }
+
+        _runtimeMesh.Mesh = selected;
+        _runtimeMesh.SetMeta("sarnaut_body_atlas", appearanceId);
+        return true;
     }
 
     /// <summary>Loads the default-visible surfaces for tools such as the asset viewer.</summary>
@@ -428,6 +499,15 @@ public partial class ConvertedSkinnedMesh : Node3D
         if (TextureCache.TryGetValue(path, out Texture2D? cached))
         {
             return cached;
+        }
+
+        // The upscaled variant, when the batch produced one, outranks both
+        // routes below; SarnautCore.UpscaledTextures returns null otherwise.
+        Texture2D? upscaled = SarnautCore.UpscaledTextures.Load(path);
+        if (upscaled != null)
+        {
+            TextureCache[path] = upscaled;
+            return upscaled;
         }
 
         if (SarnautCore.ConvertedSceneLoader.IsLoadable(path))

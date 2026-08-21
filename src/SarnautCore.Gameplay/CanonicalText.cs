@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using SarnautCore.Networking;
 
 namespace SarnautCore.Gameplay;
 
@@ -23,7 +24,15 @@ public static partial class CanonicalText
         }
 
         string normalized = canonicalId.Trim().Replace('\\', '/');
-        normalized = normalized[(normalized.LastIndexOf('/') + 1)..];
+
+        // For any path-shaped id (containing '/'), use EntityNaming.Slug to ensure
+        // consistent handling and prevent path separators from leaking into display text.
+        if (normalized.Contains('/'))
+        {
+            return EntityNaming.Slug(normalized);
+        }
+
+        // For non-path ids, process as before: split on dots and extract meaningful segment.
         string[] segments = normalized.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         string slug = segments.LastOrDefault(segment => !MetadataSegments.Contains(segment)) ?? normalized;
         foreach (string suffix in new[] { "-item-resource", "_item_resource", "-resource", "_resource" })
