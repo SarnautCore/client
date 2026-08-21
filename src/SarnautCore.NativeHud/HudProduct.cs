@@ -15,28 +15,28 @@ public readonly record struct HudCursorCatalog(HudId Default, HudId Hover, HudId
 }
 
 public readonly record struct HudTimelineCatalog(
-    int AvatarVisibleMilliseconds,
-    int AvatarMovementMilliseconds,
-    int EnemyVisibleMilliseconds,
-    int ExperienceVisibleMilliseconds,
-    int PreemptFadeMilliseconds,
-    int MoveMilliseconds,
-    int GlowMilliseconds,
-    int TextFadeMilliseconds,
-    int TextScaleMilliseconds,
-    int VerticalMilliseconds,
-    int HorizontalMilliseconds,
-    int DropMilliseconds,
-    int DamageOutMilliseconds,
+    int EntryFadeMilliseconds,
+    int MessageMoveMilliseconds,
+    int MessagePreemptFadeInMilliseconds,
+    int MessageSolidMilliseconds,
+    int MessageFadeOutMilliseconds,
+    int GlowResizeMilliseconds,
+    int GlowFadeInMilliseconds,
+    int TextFadeInMilliseconds,
+    int DamageTextScaleMilliseconds,
+    int DamageVerticalShiftMilliseconds,
+    int DamageHorizontalShiftMilliseconds,
+    int DamageDropShiftMilliseconds,
+    int DamageFadeOutMilliseconds,
     int CriticalGlowMilliseconds)
 {
     public static HudTimelineCatalog Retail => new(
-        1410,
-        1510,
-        2110,
-        2110,
+        10,
         350,
         350,
+        1200,
+        900,
+        560,
         560,
         350,
         300,
@@ -45,6 +45,14 @@ public readonly record struct HudTimelineCatalog(
         300,
         200,
         1680);
+
+    public int AvatarVisibleMilliseconds => EntryFadeMilliseconds + MessageSolidMilliseconds + DamageFadeOutMilliseconds;
+
+    public int AvatarMovementMilliseconds => EntryFadeMilliseconds + MessageSolidMilliseconds + DamageDropShiftMilliseconds;
+
+    public int EnemyVisibleMilliseconds => EntryFadeMilliseconds + MessageSolidMilliseconds + MessageFadeOutMilliseconds;
+
+    public int ExperienceVisibleMilliseconds => EntryFadeMilliseconds + MessageSolidMilliseconds + MessageFadeOutMilliseconds;
 
     internal int VisibleFor(HudFeedbackKind kind) => kind switch
     {
@@ -60,11 +68,13 @@ public readonly record struct HudTimelineCatalog(
 
     internal void Validate()
     {
-        if (AvatarVisibleMilliseconds != 1410 || AvatarMovementMilliseconds != 1510 ||
-            EnemyVisibleMilliseconds != 2110 || ExperienceVisibleMilliseconds != 2110 ||
-            PreemptFadeMilliseconds != 350 || MoveMilliseconds != 350 || GlowMilliseconds != 560 ||
-            TextFadeMilliseconds != 350 || TextScaleMilliseconds != 300 || VerticalMilliseconds != 150 ||
-            HorizontalMilliseconds != 150 || DropMilliseconds != 300 || DamageOutMilliseconds != 200 ||
+        if (EntryFadeMilliseconds != 10 || MessageMoveMilliseconds != 350 ||
+            MessagePreemptFadeInMilliseconds != 350 || MessageSolidMilliseconds != 1200 ||
+            MessageFadeOutMilliseconds != 900 || GlowResizeMilliseconds != 560 ||
+            GlowFadeInMilliseconds != 560 || TextFadeInMilliseconds != 350 ||
+            DamageTextScaleMilliseconds != 300 || DamageVerticalShiftMilliseconds != 150 ||
+            DamageHorizontalShiftMilliseconds != 150 || DamageDropShiftMilliseconds != 300 ||
+            DamageFadeOutMilliseconds != 200 ||
             CriticalGlowMilliseconds != 1680)
         {
             throw new ArgumentException("HUD feedback timings must match the authored retail constants.");
