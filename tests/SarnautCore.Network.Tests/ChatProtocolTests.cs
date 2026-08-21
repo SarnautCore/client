@@ -51,6 +51,8 @@ public sealed class ChatProtocolTests
     [Fact]
     public void DeliveryPreservesEveryClosedBodyAndContextCase()
     {
+        Assert.Null(ChatDelivery.Descriptor.FindFieldByNumber(9));
+
         ChatBody[] bodies =
         [
             new() { UserText = "hello" },
@@ -79,14 +81,13 @@ public sealed class ChatProtocolTests
                 ChatDelivery = new ChatDelivery
                 {
                     MessageId = 11,
-                    RequestId = 3,
+                    RequestId = 0,
                     Channel = ChatChannel.Whisper,
                     SentAtUnixMilliseconds = 1234,
                     SenderEntityId = 55,
                     SenderName = "Sender",
                     SenderAlive = true,
                     Body = body,
-                    IsEcho = true,
                     WhisperPeerName = "Peer",
                 },
             };
@@ -94,6 +95,7 @@ public sealed class ChatProtocolTests
             ServerMessage decoded = ServerMessage.Parser.ParseFrom(envelope.ToByteArray());
 
             Assert.Equal(ServerMessage.PayloadOneofCase.ChatDelivery, decoded.PayloadCase);
+            Assert.Equal((ulong)0, decoded.ChatDelivery.RequestId);
             Assert.Equal(body.ValueCase, decoded.ChatDelivery.Body.ValueCase);
             Assert.Equal(ChatDelivery.ContextOneofCase.WhisperPeerName, decoded.ChatDelivery.ContextCase);
             Assert.Equal("Peer", decoded.ChatDelivery.WhisperPeerName);
