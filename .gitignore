@@ -41,6 +41,12 @@ msbuild.binlog
 converted/*
 !converted/.gitkeep
 
+# User-local upscaled texture variants. Mounted as a junction by
+# scripts/mount-assets.ps1; the .gdignore keeps Godot from importing 35 GB of
+# 4x PNGs that UpscaledTextures reads through FileAccess instead.
+upscaled/*
+!upscaled/.gdignore
+
 # OS
 .DS_Store
 Thumbs.db

@@ -68,6 +68,16 @@ public partial class SessionHost : Node
         GD.Print($"Session: theme={UiTheme.Source}");
     }
 
+    public override void _ExitTree()
+    {
+        // Every Resource read during a texture-preference walk left a managed
+        // wrapper behind. Their finalizers are harmless while the engine is up
+        // and fatal once it is not, so the queue is drained here — this autoload
+        // outlives every scene, which makes it the one place that can.
+        UpscaledTextures.Release();
+        GD.Print($"Session: {UpscaledTextures.StatsLine()}");
+    }
+
     /// <summary>Moves the shell to a screen and swaps to the scene that shows it.</summary>
     public void Show(Screen screen)
     {
