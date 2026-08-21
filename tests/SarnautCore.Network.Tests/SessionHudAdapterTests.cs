@@ -96,6 +96,43 @@ public sealed class SessionHudAdapterTests
         Assert.Equal(HudFeedbackKind.Avatar, events[2].FeedbackKind);
         Assert.Equal(20, events[2].Value);
         Assert.Equal(60, events[3].Value);
+        Assert.Equal(new HudPlateAssignment(new HudId("avatar")), events[3].UnitPresentation.Plate);
+        Assert.False(events[3].UnitPresentation.OvertipCandidate);
+    }
+
+    [Fact]
+    public void UnitProjectionAssignsOnlyTheAdmittedEntityToTheAvatarPlate()
+    {
+        var adapter = NewAdapter(ownEntityId: 9);
+
+        adapter.Observe(Snapshot(1, Entity(9), Entity(10)));
+
+        HudEvent[] events = Read(adapter, 4, out _);
+        HudEvent avatar = Assert.Single(events, item => item.EntityId == 9);
+        HudEvent worldUnit = Assert.Single(events, item => item.EntityId == 10);
+        Assert.Equal(new HudPlateAssignment(new HudId("avatar")), avatar.UnitPresentation.Plate);
+        Assert.False(avatar.UnitPresentation.OvertipCandidate);
+        Assert.True(worldUnit.UnitPresentation.Plate.IsNone);
+        Assert.True(worldUnit.UnitPresentation.OvertipCandidate);
+    }
+
+    [Fact]
+    public void DeathRefreshPreservesTheUnitPresentationAssignment()
+    {
+        var adapter = NewAdapter(ownEntityId: 9);
+        adapter.Observe(Spawn(1, Entity(9)));
+        _ = Read(adapter, 2, out _);
+
+        adapter.Observe(new ServerMessage
+        {
+            ServerTick = 2,
+            DeathEvent = new DeathEvent { VictimEntityId = 9 },
+        });
+
+        HudEvent item = Assert.Single(Read(adapter, 2, out _));
+        Assert.Equal(0, item.Value);
+        Assert.Equal(new HudPlateAssignment(new HudId("avatar")), item.UnitPresentation.Plate);
+        Assert.False(item.UnitPresentation.OvertipCandidate);
     }
 
     [Fact]

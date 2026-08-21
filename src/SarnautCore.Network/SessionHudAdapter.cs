@@ -57,6 +57,10 @@ public readonly record struct SessionHudFault(SessionHudFaultCode Code, string D
 /// </summary>
 public sealed class SessionHudAdapter : IHudSession
 {
+    private static readonly HudUnitPresentation AvatarPresentation = new(
+        new HudPlateAssignment(new HudId("avatar")),
+        OvertipCandidate: false);
+
     private static readonly HudSessionCapabilities SupportedCapabilities = new(
         HudEventFamilies.Units | HudEventFamilies.CombatFeedback | HudEventFamilies.QuestTracker,
         HudCommandFamilies.ActivateAction |
@@ -429,7 +433,8 @@ public sealed class SessionHudAdapter : IHudSession
                 combat.TargetId,
                 authority.Name,
                 combat.TargetHealth,
-                combat.TargetMaxHealth);
+                combat.TargetMaxHealth,
+                authority.Presentation);
             mapped.Add(unitChange.Value);
         }
 
@@ -469,7 +474,13 @@ public sealed class SessionHudAdapter : IHudSession
             return SessionHudObservation.Terminal;
         }
 
-        HudEvent item = HudEvent.UnitChanged(stamp, entityId, authority.Name, 0, authority.MaximumHealth);
+        HudEvent item = HudEvent.UnitChanged(
+            stamp,
+            entityId,
+            authority.Name,
+            0,
+            authority.MaximumHealth,
+            authority.Presentation);
         if (!TryEnqueueReliable(item))
         {
             return SessionHudObservation.Terminal;
@@ -623,7 +634,13 @@ public sealed class SessionHudAdapter : IHudSession
             authority.Stamp.CompareTo(item.Stamp) <= 0)
         {
             _unitAuthorities[item.EntityId] = removed
-                ? new UnitAuthority(item.Stamp, authority.Name, authority.Health, authority.MaximumHealth, true)
+                ? new UnitAuthority(
+                    item.Stamp,
+                    authority.Name,
+                    authority.Health,
+                    authority.MaximumHealth,
+                    authority.Presentation,
+                    true)
                 : UnitAuthority.From(item, false);
         }
     }
@@ -707,12 +724,13 @@ public sealed class SessionHudAdapter : IHudSession
         }
     }
 
-    private static HudEvent MapUnit(EntitySnapshot entity, HudStamp stamp) => HudEvent.UnitChanged(
+    private HudEvent MapUnit(EntitySnapshot entity, HudStamp stamp) => HudEvent.UnitChanged(
         stamp,
         entity.EntityId,
         new HudId(string.IsNullOrWhiteSpace(entity.NameKey) ? entity.ContentId : entity.NameKey),
         entity.Health,
-        entity.MaxHealth);
+        entity.MaxHealth,
+        entity.EntityId == _ownEntityId ? AvatarPresentation : HudUnitPresentation.OvertipOnly);
 
     private static HudId EventId(
         string family,
@@ -728,9 +746,10 @@ public sealed class SessionHudAdapter : IHudSession
         HudId Name,
         int Health,
         int MaximumHealth,
+        HudUnitPresentation Presentation,
         bool Removed)
     {
         public static UnitAuthority From(HudEvent item, bool removed) =>
-            new(item.Stamp, item.ContentId, item.Value, item.Auxiliary, removed);
+            new(item.Stamp, item.ContentId, item.Value, item.Auxiliary, item.UnitPresentation, removed);
     }
 }
