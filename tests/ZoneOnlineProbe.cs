@@ -101,7 +101,7 @@ public partial class ZoneOnlineProbe : Node
         Expect(
             loader.VisualObjectCount == expectedVisuals,
             $"all non-NPC map visuals loaded: {loader.VisualObjectCount} of {expectedVisuals}");
-        Expect(!loader.UsedFlatTerrainFallback, "the converted terrain loaded without the flat fallback");
+        Expect(!loader.UsedFlatTerrainFallback, "native terrain loaded without a flat fallback");
         int layeredTerrain = CountLayeredTerrainTiles(loader);
         Expect(
             layeredTerrain == expectedTerrain,

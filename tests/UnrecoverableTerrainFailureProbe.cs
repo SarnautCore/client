@@ -10,10 +10,11 @@ public partial class UnrecoverableTerrainFailureProbe : Node
         ZoneLoader loader = GetNode<ZoneLoader>("ZoneLoader");
         bool loaded = loader.LoadZone(ZoneLoader.DefaultMapName);
         bool passed = !loaded
-            && loader.TerrainTileCount == 3
-            && loader.LastError.Contains("1 terrain tile(s) could not load", StringComparison.Ordinal)
-            && loader.LastError.Contains("1_2", StringComparison.Ordinal)
-            && loader.LastError.Contains("legacy fallback failed", StringComparison.Ordinal);
+            && loader.TerrainTileCount == 0
+            && loader.NativeTerrainTileCount == 0
+            && !loader.UsedFlatTerrainFallback
+            && loader.LastError.Contains("listed more than once", StringComparison.Ordinal)
+            && loader.LastError.Contains("0_2_terrain.tscn", StringComparison.Ordinal);
 
         GD.Print(
             $"UNRECOVERABLE_TERRAIN_FAILURE loaded={loaded} terrain={loader.TerrainTileCount} "
@@ -21,4 +22,3 @@ public partial class UnrecoverableTerrainFailureProbe : Node
         GetTree().Quit(passed ? 0 : 1);
     }
 }
-

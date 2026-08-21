@@ -14,15 +14,10 @@ public partial class ZoneLoader : Node3D
     public const string DefaultMapName = "Inst_LeagueStart";
 
     private const string DefaultConvertedRoot = "res://converted/assets/classic-1.1";
-    private const string NativeTerrainSuffix = ".terrain.tscn";
-    private const string LegacyTerrainSuffix = ".terrain.obj";
     private const string MapRegionSuffix = "_MapRegion.xdb.placements.json";
     private const string ServerObjectsSuffix = "_ServerObjects.xdb.placements.json";
-    private const string ClientTerrainShaderPath = "res://src/zone/terrain_splat.gdshader";
     private const string TileCoordinateFrameId = "allods-tile-local-v1";
     private const string TileCoordinateScope = "tile-local";
-    private const string TerrainManifestMetadata = "allods_coordinate_manifest_json";
-    private const string ObjManifestPrefix = "# allods_coordinate_manifest ";
     private const float TerrainTilePitch = 256.0f;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -35,16 +30,15 @@ public partial class ZoneLoader : Node3D
     private const string NativeStaticsFrameId = "godot-world-v1";
     private const string NativeStaticsCoordinateScope = "world";
     private const string NativeStaticsCellPolicy = "nonempty_placements_only";
+    private const string NativeTerrainFrameId = "godot-world-v1";
     private readonly HashSet<string> _npcModelFailures = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _staticModelFailures = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<PendingBakedLight> _pendingBakedLight = [];
     private readonly List<PendingAuthoredLights> _pendingAuthoredLights = [];
     private BakedLightProbe _lightProbe = new();
-    private readonly List<ShaderMaterial> _terrainSplatMaterials = [];
     private readonly List<Aabb> _terrainSpawnBounds = [];
     private readonly List<Vector3> _spawnHints = [];
     private readonly List<Vector3> _presentationSpawnHints = [];
-    private static Shader? _clientTerrainShader;
     private AllodsResourceTree _tree = new(DefaultConvertedRoot);
     private Node3D? _terrainRoot;
     private Node3D? _objectsRoot;
@@ -86,8 +80,6 @@ public partial class ZoneLoader : Node3D
     public int NpcPlaceholderCount { get; private set; }
     public int PlacementFileCount { get; private set; }
     public int ServerPlacementFileCount { get; private set; }
-    public int SplatMapCount { get; private set; }
-    public int LightmapCount { get; private set; }
     public int BakedLightFileCount { get; private set; }
     public int BakedLitObjectCount { get; private set; }
     public int BakedLitSurfaceCount { get; private set; }
@@ -132,15 +124,10 @@ public partial class ZoneLoader : Node3D
         MapName = mapName.Trim();
         if (!IsSafeMapName(MapName))
         {
-            return Fail($"Invalid map name '{MapName}'. Use a directory name below the converted Maps folder.");
+            return Fail($"Invalid map name '{MapName}'.");
         }
 
         string mapRoot = $"{ConvertedRoot.TrimEnd('/')}/assets/Maps/{MapName}";
-        if (DirAccess.Open(mapRoot) == null)
-        {
-            return Fail($"Converted map not found: {mapRoot}");
-        }
-
         _terrainRoot = new Node3D { Name = "Terrain" };
         _objectsRoot = new Node3D { Name = "StaticObjects" };
         _charactersRoot = new Node3D { Name = "NpcCharacters" };
@@ -148,62 +135,16 @@ public partial class ZoneLoader : Node3D
         AddChild(_objectsRoot);
         AddChild(_charactersRoot);
 
-        var files = EnumerateFiles(mapRoot);
-        var nativeTerrainFiles = files.Where(path => path.EndsWith(NativeTerrainSuffix, StringComparison.OrdinalIgnoreCase)).ToArray();
-        var legacyTerrainFiles = files.Where(path => path.EndsWith(LegacyTerrainSuffix, StringComparison.OrdinalIgnoreCase)).ToArray();
+        var files = DirAccess.Open(mapRoot) == null ? [] : EnumerateFiles(mapRoot);
         var placementFiles = files.Where(path => path.EndsWith(MapRegionSuffix, StringComparison.OrdinalIgnoreCase)).ToArray();
         var serverFiles = files.Where(path => path.EndsWith(ServerObjectsSuffix, StringComparison.OrdinalIgnoreCase)).ToArray();
 
         PlacementFileCount = placementFiles.Length;
         ServerPlacementFileCount = serverFiles.Length;
-        SplatMapCount = files.Count(path => System.IO.Path.GetFileName(path).Contains("_SplatMap_", StringComparison.OrdinalIgnoreCase));
-        LightmapCount = files.Count(path => path.EndsWith("_lightmap.png", StringComparison.OrdinalIgnoreCase));
-
-        var terrainFailures = new List<string>();
-        IReadOnlyList<string>? terrainLayerTextures = null;
-        var terrainSources = nativeTerrainFiles
-            .Concat(legacyTerrainFiles)
-            .GroupBy(TerrainSourceStem, StringComparer.OrdinalIgnoreCase)
-            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase);
-        foreach (IGrouping<string, string> sources in terrainSources)
+        if (!TryLoadNativeTerrain(out string terrainError))
         {
-            string? nativePath = sources.FirstOrDefault(path =>
-                path.EndsWith(NativeTerrainSuffix, StringComparison.OrdinalIgnoreCase));
-            string? legacyPath = sources.FirstOrDefault(path =>
-                path.EndsWith(LegacyTerrainSuffix, StringComparison.OrdinalIgnoreCase));
-            string nativeError = string.Empty;
-            bool loaded = nativePath != null
-                && TryAddNativeTerrainTile(nativePath, out nativeError);
-            string failure = loaded || nativePath == null ? string.Empty : nativeError;
-
-            if (!loaded && legacyPath != null)
-            {
-                terrainLayerTextures ??= LoadTerrainLayerTextures();
-                loaded = TryAddLegacyTerrainTile(legacyPath, terrainLayerTextures, out string legacyError);
-                if (!loaded)
-                {
-                    failure = string.IsNullOrWhiteSpace(failure)
-                        ? legacyError
-                        : $"{failure}; legacy fallback failed: {legacyError}";
-                }
-            }
-
-            if (!loaded)
-            {
-                terrainFailures.Add($"{sources.Key}: {failure}");
-            }
-        }
-
-        if (terrainFailures.Count > 0)
-        {
-            // Terrain failure is the one fatal path: a zone without its floor
-            // is not walkable, while an unresolved prop is a visual gap.
             _terrainFatal = true;
-            Fail($"{terrainFailures.Count} terrain tile(s) could not load. {string.Join(" | ", terrainFailures)}");
-        }
-        else if (TerrainTileCount == 0)
-        {
-            AddFlatTerrainFallback(placementFiles);
+            Fail(terrainError);
         }
 
         if (_nativeTerrainTileCount > 0)
@@ -288,7 +229,6 @@ public partial class ZoneLoader : Node3D
         _staticModelFailures.Clear();
         _pendingBakedLight.Clear();
         _pendingAuthoredLights.Clear();
-        _terrainSplatMaterials.Clear();
         if (BakedLightProbe.Active == _lightProbe)
         {
             BakedLightProbe.Activate(null);
@@ -321,65 +261,147 @@ public partial class ZoneLoader : Node3D
         NpcPlaceholderCount = 0;
         PlacementFileCount = 0;
         ServerPlacementFileCount = 0;
-        SplatMapCount = 0;
-        LightmapCount = 0;
         UsedFlatTerrainFallback = false;
         HasTerrainBounds = false;
         TerrainBounds = default;
         LastError = string.Empty;
     }
 
-    protected virtual bool TryAddNativeTerrainTile(string terrainPath, out string error)
-    {
-        // Try native content first, then fall back to converted route.
-        if (TryAddNativeTerrainTileImpl(terrainPath, out error))
-        {
-            return true;
-        }
-
-        // Fallback to converted terrain (kept for backward compatibility).
-        return TryAddConvertedTerrainTile(terrainPath, out error);
-    }
-
     /// <summary>
-    /// Loads native terrain from the native content root.
-    /// Overridable for fault-injection loaders (ADR 0038 gate item 5).
+    /// Loads the complete native terrain inventory. The manifest is the only
+    /// runtime authority for which tiles exist and which scenes represent them.
     /// </summary>
-    protected virtual bool TryAddNativeTerrainTileImpl(string convertedPath, out string error)
+    protected virtual bool TryLoadNativeTerrain(out string error)
     {
-        error = string.Empty;
-
-        // Extract the tile coordinates from the converted path: the stem of
-        // ".../0_2.terrain.tscn" is "0_2". GetFileNameWithoutExtension would
-        // only strip ".tscn" and leave "0_2.terrain".
-        string fileName = System.IO.Path.GetFileName(TerrainSourceStem(convertedPath));
-
-        // Build native path: <native_root>/maps/<kebab-map-name>/<coords>/<coords>_terrain.tscn
-        string kebabMapName = MapNameTransform.ToKebabCase(MapName);
-        string nativePath = $"{NativeContentSettings.NativeRoot}/maps/{kebabMapName}/{fileName}/{fileName}_terrain.tscn";
-
-        // Check if native file exists without relying on ResourceLoader (which requires import).
-        if (!FileAccess.FileExists(nativePath))
+        string terrainRoot = $"{NativeContentSettings.NativeRoot}/maps/"
+            + MapNameTransform.ToKebabCase(MapName);
+        string manifestPath = $"{terrainRoot}/terrain-manifest.json";
+        if (!FileAccess.FileExists(manifestPath))
         {
+            error = $"Native terrain manifest is missing: {manifestPath}";
             return false;
         }
 
-        // Load native scene directly.
-        PackedScene? scene = ResourceLoader.Load<PackedScene>(nativePath);
-        Node? instance = scene?.Instantiate();
+        NativeTerrainManifest? manifest;
+        try
+        {
+            manifest = JsonSerializer.Deserialize<NativeTerrainManifest>(
+                ReadNativeTerrainManifestText(manifestPath), JsonOptions);
+        }
+        catch (Exception exception)
+        {
+            error = $"Native terrain manifest is invalid: {manifestPath}. {exception.Message}";
+            return false;
+        }
+
+        string expectedMapId = MapNameTransform.ToKebabCase(MapName);
+        if (manifest == null
+            || manifest.SchemaVersion != 1
+            || !manifest.MapId.Equals(expectedMapId, StringComparison.Ordinal)
+            || manifest.Frame?.Id != NativeTerrainFrameId
+            || !manifest.Frame.OriginApplied
+            || manifest.Tiles is not { Length: > 0 })
+        {
+            error = $"Native terrain manifest is incompatible: {manifestPath}";
+            return false;
+        }
+
+        var seenTileIds = new HashSet<string>(StringComparer.Ordinal);
+        var seenScenes = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new List<NativeTerrainRuntimeTile>(manifest.Tiles.Length);
+        foreach (NativeTerrainTile entry in manifest.Tiles)
+        {
+            string pathError = string.Empty;
+            if (string.IsNullOrWhiteSpace(entry.TileId)
+                || entry.TileId.IndexOfAny(['/', '\\', ':']) >= 0
+                || !seenTileIds.Add(entry.TileId)
+                || entry.Origin == null
+                || !entry.Origin.IsFinite
+                || entry.ScenePath.Replace('\\', '/').Split('/').Contains("..", StringComparer.Ordinal)
+                || !TryResolveRelativeResourcePath(
+                    manifestPath,
+                    entry.ScenePath,
+                    terrainRoot,
+                    ".tscn",
+                    out string scenePath,
+                    out pathError))
+            {
+                error = $"Native terrain entry is incompatible: {entry.TileId}. {pathError}".Trim();
+                return false;
+            }
+
+            if (!FileAccess.FileExists(scenePath))
+            {
+                error = $"Native terrain scene is missing: {scenePath}";
+                return false;
+            }
+
+            if (!seenScenes.Add(scenePath))
+            {
+                error = $"Native terrain scene is listed more than once: {scenePath}";
+                return false;
+            }
+
+            PackedScene? scene = ResourceLoader.Load<PackedScene>(scenePath);
+            if (scene == null)
+            {
+                error = $"Native terrain scene is not loadable: {scenePath}";
+                return false;
+            }
+
+            pending.Add(new NativeTerrainRuntimeTile(entry, scenePath, scene));
+        }
+
+        foreach (NativeTerrainRuntimeTile runtime in pending)
+        {
+            if (!TryAddNativeTerrainTile(runtime, out error))
+            {
+                ClearNativeTerrainAfterFailure();
+                return false;
+            }
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private void ClearNativeTerrainAfterFailure()
+    {
+        foreach (Node child in _terrainRoot!.GetChildren())
+        {
+            _terrainRoot.RemoveChild(child);
+            child.Free();
+        }
+
+        TerrainTileCount = 0;
+        _nativeTerrainTileCount = 0;
+        TerrainVertexCount = 0;
+        _terrainSpawnBounds.Clear();
+        TerrainBounds = default;
+        HasTerrainBounds = false;
+        _lightProbe = new BakedLightProbe();
+    }
+
+    protected virtual string ReadNativeTerrainManifestText(string manifestPath) =>
+        FileAccess.GetFileAsString(manifestPath);
+
+    private bool TryAddNativeTerrainTile(NativeTerrainRuntimeTile runtime, out string error)
+    {
+        Node? instance = runtime.Scene.Instantiate();
         if (instance is not Node3D tile)
         {
             instance?.Free();
-            error = $"Native terrain scene failed to instantiate: {nativePath}";
-            GD.PushWarning($"ZoneLoader: {error}");
+            error = $"Native terrain scene failed to instantiate: {runtime.ScenePath}";
             return false;
         }
 
-        // Native scenes have position already baked; don't read manifest or set Position.
-        tile.SetMeta("source_path", nativePath);
-        tile.SetMeta("layered_terrain", true);
-        tile.SetMeta("native_terrain", true);  // Mark as native for ApplyZoneLighting to skip.
-        _terrainRoot!.AddChild(tile);
+        Vector3 expectedOrigin = runtime.Entry.Origin!.ToVector3();
+        if (!tile.Position.IsEqualApprox(expectedOrigin))
+        {
+            tile.Free();
+            error = $"Native terrain scene origin does not match its manifest: {runtime.ScenePath}";
+            return false;
+        }
 
         MeshInstance3D? up = tile.GetNodeOrNull<MeshInstance3D>("Up");
         MeshInstance3D? down = tile.GetNodeOrNull<MeshInstance3D>("Down");
@@ -387,21 +409,23 @@ public partial class ZoneLoader : Node3D
         MeshInstance3D[] sides = candidates.Where(side => side?.Mesh != null).Cast<MeshInstance3D>().ToArray();
         if (sides.Length == 0)
         {
-            tile.QueueFree();
-            error = $"Native terrain scene has no mesh sides: {nativePath}";
-            GD.PushWarning($"ZoneLoader: {error}");
+            tile.Free();
+            error = $"Native terrain scene has no mesh sides: {runtime.ScenePath}";
             return false;
         }
 
-        // Native materials already have baked uniforms; do NOT override them.
-        // Just register for lightmap probe.
+        tile.Name = SafeNodeName(runtime.Entry.TileId);
+        tile.SetMeta("native_scene", runtime.ScenePath);
+        tile.SetMeta("layered_terrain", true);
+        tile.SetMeta("native_terrain", true);
+        _terrainRoot!.AddChild(tile);
+
         MeshInstance3D? upSide = up != null && sides.Contains(up) ? up : sides.FirstOrDefault();
         if (upSide != null)
         {
             _lightProbe.TryAddTile(upSide, tile.Position + upSide.Position);
         }
 
-        // Collect bounds and collision, same as converted route.
         foreach (MeshInstance3D side in sides)
         {
             Mesh mesh = side.Mesh!;
@@ -422,254 +446,8 @@ public partial class ZoneLoader : Node3D
 
         TerrainTileCount++;
         _nativeTerrainTileCount++;
-        return true;
-    }
-
-    /// <summary>
-    /// Loads converted terrain using the existing converted route.
-    /// Fallback when native is unavailable. Overridable for fault-injection.
-    /// </summary>
-    protected virtual bool TryAddConvertedTerrainTile(string terrainPath, out string error)
-    {
-        PackedScene? scene = ConvertedSceneLoader.Load(ConvertedRoot, terrainPath, out string loadError);
-        Node? instance = scene?.Instantiate();
-        if (instance is not Node3D tile)
-        {
-            instance?.Free();
-            error = $"Native terrain scene is not loadable: {terrainPath}. {loadError}".Trim();
-            GD.PushWarning($"ZoneLoader: {error}");
-            return false;
-        }
-
-        string manifestJson = ReadTileManifestJson(tile, terrainPath);
-        if (!TryReadTileOrigin(manifestJson, terrainPath, out Vector3 tileOrigin, out string manifestError))
-        {
-            tile.QueueFree();
-            error = manifestError;
-            GD.PushWarning($"ZoneLoader: {error}");
-            return false;
-        }
-
-        MeshInstance3D? up = tile.GetNodeOrNull<MeshInstance3D>("Up");
-        MeshInstance3D? down = tile.GetNodeOrNull<MeshInstance3D>("Down");
-        MeshInstance3D?[] candidates = [up, down];
-        MeshInstance3D[] sides = candidates.Where(side => side?.Mesh != null).Cast<MeshInstance3D>().ToArray();
-        if (sides.Length == 0)
-        {
-            tile.QueueFree();
-            error = $"Native terrain scene has no mesh sides: {terrainPath}";
-            GD.PushWarning($"ZoneLoader: {error}");
-            return false;
-        }
-
-        tile.Name = SafeNodeName(System.IO.Path.GetFileNameWithoutExtension(terrainPath));
-        tile.Position = tileOrigin;
-        tile.SetMeta("source_path", terrainPath);
-        tile.SetMeta("layered_terrain", true);
-        _terrainRoot!.AddChild(tile);
-
-        foreach (MeshInstance3D side in sides)
-        {
-            // The converter's terrain shader collapses the baked lightmap to a
-            // grey scalar and then the scene sun re-lights the result; the
-            // client-owned copy applies the baked light as authored color.
-            if (side.MaterialOverride is ShaderMaterial splat)
-            {
-                _clientTerrainShader ??= ResourceLoader.Load<Shader>(ClientTerrainShaderPath);
-                if (_clientTerrainShader != null)
-                {
-                    splat.Shader = _clientTerrainShader;
-                }
-
-                _terrainSplatMaterials.Add(splat);
-            }
-        }
-
-        MeshInstance3D? upSide = up != null && sides.Contains(up) ? up : sides.FirstOrDefault();
-        if (upSide != null)
-        {
-            // The walkable side's lightmap doubles as the zone's light probe:
-            // dynamic entities sample it to receive the baked direct term.
-            _lightProbe.TryAddTile(upSide, tile.Position + upSide.Position);
-        }
-
-        foreach (MeshInstance3D side in sides)
-        {
-            Mesh mesh = side.Mesh!;
-            Aabb localBounds = side.GetAabb();
-            var worldBounds = new Aabb(localBounds.Position + tile.Position + side.Position, localBounds.Size);
-            _terrainSpawnBounds.Add(worldBounds);
-            TerrainBounds = HasTerrainBounds ? TerrainBounds.Merge(worldBounds) : worldBounds;
-            HasTerrainBounds = true;
-            TerrainVertexCount += CountMeshVertices(mesh);
-
-            if (CreateTerrainCollision)
-            {
-                var body = new StaticBody3D { Name = $"{side.Name}Collision" };
-                body.AddChild(new CollisionShape3D { Shape = mesh.CreateTrimeshShape() });
-                side.AddChild(body);
-            }
-        }
-
-        TerrainTileCount++;
         error = string.Empty;
         return true;
-    }
-    /// <summary>
-    /// Reads one tile's coordinate manifest. Overridable so fault-injection
-    /// loaders can serve a corrupted manifest (ADR 0038 gate item 5).
-    /// </summary>
-    protected virtual string ReadTileManifestJson(Node3D tile, string terrainPath) =>
-        tile.GetMeta(TerrainManifestMetadata, string.Empty).AsString();
-
-    protected virtual bool TryAddLegacyTerrainTile(
-        string terrainPath,
-        IReadOnlyList<string> layerTextures,
-        out string error)
-    {
-        if (!TryReadObjTileOrigin(terrainPath, out Vector3 tileOrigin, out string manifestError))
-        {
-            error = manifestError;
-            GD.PushWarning($"ZoneLoader: {error}");
-            return false;
-        }
-
-        if (!ConvertedSceneLoader.IsLoadable(terrainPath, "Mesh"))
-        {
-            error = $"Legacy terrain mesh is not imported or loadable: {terrainPath}";
-            GD.PushWarning($"ZoneLoader: {error}");
-            return false;
-        }
-
-        Mesh? mesh = ResourceLoader.Load<Mesh>(terrainPath);
-        if (mesh == null || mesh.GetSurfaceCount() == 0)
-        {
-            error = $"Legacy terrain mesh has no surfaces: {terrainPath}";
-            GD.PushWarning($"ZoneLoader: {error}");
-            return false;
-        }
-
-        var tile = new MeshInstance3D
-        {
-            Name = SafeNodeName(System.IO.Path.GetFileNameWithoutExtension(terrainPath)),
-            Mesh = mesh,
-            Position = tileOrigin,
-        };
-
-        int dominantLayer = FindDominantTerrainLayer(terrainPath);
-        Material? material = CreateTerrainMaterial(dominantLayer, layerTextures);
-        if (material != null)
-        {
-            tile.MaterialOverride = material;
-        }
-
-        tile.SetMeta("source_path", terrainPath);
-        tile.SetMeta("dominant_layer", dominantLayer);
-        _terrainRoot!.AddChild(tile);
-
-        Aabb localBounds = tile.GetAabb();
-        var bounds = new Aabb(localBounds.Position + tile.Position, localBounds.Size);
-        _terrainSpawnBounds.Add(bounds);
-        TerrainBounds = HasTerrainBounds ? TerrainBounds.Merge(bounds) : bounds;
-        HasTerrainBounds = true;
-        TerrainTileCount++;
-        TerrainVertexCount += CountMeshVertices(mesh);
-
-        if (CreateTerrainCollision)
-        {
-            var body = new StaticBody3D { Name = "Collision" };
-            body.AddChild(new CollisionShape3D { Shape = mesh.CreateTrimeshShape() });
-            tile.AddChild(body);
-        }
-
-        error = string.Empty;
-        return true;
-    }
-
-    private Material? CreateTerrainMaterial(int dominantLayer, IReadOnlyList<string> layerTextures)
-    {
-        // TODO: Replace this single dominant-layer material with the converter's layered terrain material.
-        if (dominantLayer < 0 || dominantLayer >= layerTextures.Count)
-        {
-            return new StandardMaterial3D
-            {
-                AlbedoColor = new Color("566348"),
-                Roughness = 0.95f,
-            };
-        }
-
-        Texture2D? texture = ResourceLoader.Load<Texture2D>(layerTextures[dominantLayer]);
-        if (texture == null)
-        {
-            return null;
-        }
-
-        return new StandardMaterial3D
-        {
-            AlbedoTexture = texture,
-            Roughness = 0.95f,
-            Uv1Scale = new Vector3(24, 24, 24),
-        };
-    }
-
-    private IReadOnlyList<string> LoadTerrainLayerTextures()
-    {
-        string resourcePath = $"{ConvertedRoot.TrimEnd('/')}/resources/Maps/{MapName}/layers.xdb.tres";
-        AllodsResource? layers = ResourceLoader.Load<AllodsResource>(resourcePath);
-        if (layers == null || string.IsNullOrWhiteSpace(layers.raw_xml))
-        {
-            return [];
-        }
-
-        try
-        {
-            XDocument document = XDocument.Parse(layers.raw_xml);
-            XElement? layerList = document.Descendants().FirstOrDefault(element => element.Name.LocalName == "Layers");
-            if (layerList == null)
-            {
-                return [];
-            }
-
-            return layerList.Elements()
-                .Where(element => element.Name.LocalName == "Item")
-                .Select(item => item.Descendants().FirstOrDefault(element => element.Name.LocalName == "DiffuseTexture"))
-                .Select(element => element?.Attribute("href")?.Value ?? string.Empty)
-                .Select(TextureHrefToAssetPath)
-                .ToArray();
-        }
-        catch (Exception exception)
-        {
-            GD.PushWarning($"ZoneLoader could not parse terrain layers for {MapName}: {exception.Message}");
-            return [];
-        }
-    }
-
-    private string TextureHrefToAssetPath(string href)
-    {
-        string sourcePath = NormalizeHref(string.Empty, href);
-        int classMarker = sourcePath.LastIndexOf(".(Texture).xdb", StringComparison.OrdinalIgnoreCase);
-        if (classMarker < 0)
-        {
-            return string.Empty;
-        }
-
-        return $"{ConvertedRoot.TrimEnd('/')}/assets/{sourcePath[..classMarker]}.png";
-    }
-
-    private int FindDominantTerrainLayer(string terrainPath)
-    {
-        string placementPath = terrainPath[..^LegacyTerrainSuffix.Length] + MapRegionSuffix;
-        MapPlacementDocument? document = ReadPlacementDocument(placementPath);
-        if (document?.UsedLayers == null || document.UsedLayers.Length == 0)
-        {
-            return -1;
-        }
-
-        return document.UsedLayers
-            .GroupBy(layer => layer)
-            .OrderByDescending(group => group.Count())
-            .ThenBy(group => group.Key)
-            .First().Key;
     }
 
     /// <summary>
@@ -978,7 +756,7 @@ public partial class ZoneLoader : Node3D
         string rootPrefix = allowedRoot.TrimEnd('/') + "/";
         if (!resolvedPath.StartsWith(rootPrefix, StringComparison.Ordinal))
         {
-            error = $"relative path escapes the native statics root: '{relativePath}'";
+            error = $"relative path escapes the allowed native root: '{relativePath}'";
             resolvedPath = string.Empty;
             return false;
         }
@@ -1257,19 +1035,6 @@ public partial class ZoneLoader : Node3D
     {
         Color ambient = settings.BakedAmbientLight;
         Color direct = settings.DirectLightColor;
-        var ambientVector = new Vector3(ambient.R, ambient.G, ambient.B);
-        var directVector = new Vector3(direct.R, direct.G, direct.B);
-        // Only converted-route materials are collected here. Native-baked tiles
-        // never register their splat materials: the bake pre-sets ambient_light
-        // and direct_light from the same authored ZoneLights values, and the
-        // baked uniforms are authoritative — a mismatch is a bake bug, not
-        // something to patch at runtime.
-        foreach (ShaderMaterial splat in _terrainSplatMaterials)
-        {
-            splat.SetShaderParameter("ambient_light", ambientVector);
-            splat.SetShaderParameter("direct_light", directVector);
-        }
-
         int litObjects = 0;
         int litSurfaces = 0;
         foreach (PendingBakedLight pending in _pendingBakedLight)
@@ -1297,7 +1062,7 @@ public partial class ZoneLoader : Node3D
         GD.Print(
             $"ZoneLoader: baked lighting | files={BakedLightFileCount} lit_objects={litObjects}/"
             + $"{_pendingBakedLight.Count} lit_surfaces={litSurfaces} ambient={ambient} direct={direct} "
-            + $"terrain_materials={_terrainSplatMaterials.Count} probe_tiles={_lightProbe.TileCount} "
+            + $"probe_tiles={_lightProbe.TileCount} "
             + $"authored_lights={AuthoredLightCount}/{AuthoredLightFileCount} anti_lights={AuthoredAntiLightCount}");
     }
 
@@ -1622,55 +1387,6 @@ public partial class ZoneLoader : Node3D
 
     private static IReadOnlyList<string> ReadHrefs(string xml) => AllodsResourceTree.ReadHrefs(xml);
 
-    private void AddFlatTerrainFallback(IEnumerable<string> placementFiles)
-    {
-        var positions = placementFiles
-            .SelectMany(path =>
-            {
-                MapPlacementDocument? document = ReadPlacementDocument(path);
-                Vector3 origin = Vector3.Zero;
-                string error = string.Empty;
-                if (document == null
-                    || !TryReadTileOrigin(document.CoordinateManifest, path, out origin, out error))
-                {
-                    Fail(document == null ? $"Converted placement cache could not be read: {path}" : error);
-                    return Enumerable.Empty<Vector3>();
-                }
-
-                return document?.Objects?.Select(placement => origin + ConvertPosition(placement.Position))
-                    ?? Enumerable.Empty<Vector3>();
-            })
-            .ToArray();
-
-        Vector3 center = positions.Length == 0 ? Vector3.Zero : positions.Aggregate(Vector3.Zero, (sum, value) => sum + value) / positions.Length;
-        float size = positions.Length == 0
-            ? 256.0f
-            : Mathf.Max(64.0f, positions.Max(position => Mathf.Max(Mathf.Abs(position.X - center.X), Mathf.Abs(position.Z - center.Z))) * 2.2f);
-
-        var mesh = new PlaneMesh { Size = new Vector2(size, size) };
-        var tile = new MeshInstance3D
-        {
-            Name = "FlatTerrainFallback",
-            Mesh = mesh,
-            Position = new Vector3(center.X, positions.Length == 0 ? 0 : positions.Min(position => position.Y), center.Z),
-            MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color("566348"), Roughness = 1.0f },
-        };
-        _terrainRoot!.AddChild(tile);
-
-        if (CreateTerrainCollision)
-        {
-            var body = new StaticBody3D { Name = "Collision" };
-            body.AddChild(new CollisionShape3D { Shape = new BoxShape3D { Size = new Vector3(size, 0.2f, size) } });
-            tile.AddChild(body);
-        }
-
-        TerrainBounds = new Aabb(tile.Position - new Vector3(size * 0.5f, 0.1f, size * 0.5f), new Vector3(size, 0.2f, size));
-        _terrainSpawnBounds.Add(TerrainBounds);
-        HasTerrainBounds = true;
-        TerrainTileCount = 1;
-        UsedFlatTerrainFallback = true;
-    }
-
     private static MapPlacementDocument? ReadPlacementDocument(string path)
     {
         try
@@ -1755,46 +1471,6 @@ public partial class ZoneLoader : Node3D
         }
 
         return origin;
-    }
-
-    private static bool TryReadObjTileOrigin(
-        string resourcePath,
-        out Vector3 origin,
-        out string error)
-    {
-        string text = FileAccess.GetFileAsString(resourcePath);
-        string? manifestJson = text.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Take(8)
-            .FirstOrDefault(line => line.StartsWith(ObjManifestPrefix, StringComparison.Ordinal))
-            ?[ObjManifestPrefix.Length..]
-            .Trim();
-        return TryReadTileOrigin(manifestJson ?? string.Empty, resourcePath, out origin, out error);
-    }
-
-    private static bool TryReadTileOrigin(
-        string manifestJson,
-        string resourcePath,
-        out Vector3 origin,
-        out string error)
-    {
-        if (string.IsNullOrWhiteSpace(manifestJson))
-        {
-            origin = Vector3.Zero;
-            error = $"Tile-local cache is missing {TileCoordinateFrameId} metadata: {resourcePath}";
-            return false;
-        }
-
-        try
-        {
-            TileCoordinateManifest? manifest = JsonSerializer.Deserialize<TileCoordinateManifest>(manifestJson, JsonOptions);
-            return TryReadTileOrigin(manifest, resourcePath, out origin, out error);
-        }
-        catch (Exception exception)
-        {
-            origin = Vector3.Zero;
-            error = $"Tile-local coordinate metadata is invalid for {resourcePath}: {exception.Message}";
-            return false;
-        }
     }
 
     private static bool TryReadTileOrigin(
@@ -1897,18 +1573,6 @@ public partial class ZoneLoader : Node3D
                 && property.Value.EndsWith("_PlayerPos", StringComparison.OrdinalIgnoreCase));
     }
 
-    private static string TerrainSourceStem(string path)
-    {
-        if (path.EndsWith(NativeTerrainSuffix, StringComparison.OrdinalIgnoreCase))
-        {
-            return path[..^NativeTerrainSuffix.Length];
-        }
-
-        return path.EndsWith(LegacyTerrainSuffix, StringComparison.OrdinalIgnoreCase)
-            ? path[..^LegacyTerrainSuffix.Length]
-            : path;
-    }
-
     private bool Fail(string message)
     {
         // First error wins; later failures append rather than clobber, so the
@@ -1919,6 +1583,43 @@ public partial class ZoneLoader : Node3D
         GD.PushError($"ZoneLoader: {message}");
         return false;
     }
+
+    private sealed class NativeTerrainManifest
+    {
+        [JsonPropertyName("schema_version")] public int SchemaVersion { get; set; }
+        [JsonPropertyName("map_id")] public string MapId { get; set; } = string.Empty;
+        [JsonPropertyName("frame")] public NativeTerrainFrame? Frame { get; set; }
+        [JsonPropertyName("tiles")] public NativeTerrainTile[]? Tiles { get; set; }
+    }
+
+    private sealed class NativeTerrainFrame
+    {
+        [JsonPropertyName("id")] public string Id { get; set; } = string.Empty;
+        [JsonPropertyName("origin_applied")] public bool OriginApplied { get; set; }
+    }
+
+    private sealed class NativeTerrainTile
+    {
+        [JsonPropertyName("tile_id")] public string TileId { get; set; } = string.Empty;
+        [JsonPropertyName("origin")] public NativeTerrainPosition? Origin { get; set; }
+        [JsonPropertyName("scene_path")] public string ScenePath { get; set; } = string.Empty;
+    }
+
+    private sealed class NativeTerrainPosition
+    {
+        [JsonPropertyName("x")] public float X { get; set; }
+        [JsonPropertyName("y")] public float Y { get; set; }
+        [JsonPropertyName("z")] public float Z { get; set; }
+
+        [JsonIgnore] public bool IsFinite => float.IsFinite(X) && float.IsFinite(Y) && float.IsFinite(Z);
+
+        public Vector3 ToVector3() => new(X, Y, Z);
+    }
+
+    private sealed record NativeTerrainRuntimeTile(
+        NativeTerrainTile Entry,
+        string ScenePath,
+        PackedScene Scene);
 
     private sealed class NativeStaticsBakeManifest
     {

@@ -9,5 +9,5 @@ script = ExtResource("1_probe")
 [node name="ZoneLoader" type="Node3D" parent="."]
 script = ExtResource("2_loader")
 MapName = "Inst_LeagueStart"
+AutoLoad = false
 CreateTerrainCollision = false
-

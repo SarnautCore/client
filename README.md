@@ -33,7 +33,7 @@ Passwords and tokens are carried in `Secret`, whose every conversion returns `[r
 
 ### Zone Walkabout
 
-The Boot menu defaults the zone field to `Inst_LeagueStart`, the classic League tutorial map. Choose **Zone Walkabout** to assemble the map from converted terrain OBJ files and MapRegion placement JSON.
+The Boot menu defaults the zone field to `Inst_LeagueStart`, the classic League tutorial map. Choose **Zone Walkabout** to assemble its baked native terrain and statics.
 
 Controls are named input actions in `project.godot`'s `[input]` section, so they are rebindable and correct on a non-QWERTY layout. The defaults:
 
@@ -52,7 +52,7 @@ Controls are named input actions in `project.godot`'s `[input]` section, so they
 | `inventory` | `I` | inventory |
 | `ui_cancel` | `Esc` | release the mouse; press it again to leave the zone |
 
-The native terrain path loads separate Up and Down meshes for each tile, decodes the converted splat parameters, applies layered textures and light maps, and keeps back-face culling enabled. A tile whose native scene cannot load may use its matching legacy OBJ; if both representations fail, zone loading fails instead of presenting a partial world.
+`terrain-manifest.json` is the sole terrain inventory. It names each baked Godot scene and its world origin. The runtime rejects a missing, partial, or incompatible aggregate; there is no converted or flat terrain fallback.
 
 Zone lighting runs two retail-faithful models split by render layer (`DynamicEntityLighting`). Statics whose geometry authors `vertexBakedLight` carry their offline bake — lightvrt vertex colors on placed objects, the two-term lightmap combine on terrain — rendered unshaded, and are demoted off the runtime-lit receiver layer so no runtime light can double-light them. Dynamic entities and unbaked props stay on the receiver layer and get the dynamic model: the zone's authored ambient at its 1x base, the authored sun, the map's placed `client.Scene.LightComponent` point lights (converted to `X_Y_MapRegion.xdb.lights.json` companions, colored with the zone's `PointLightColor`, culled to the receiver layer), and a per-character `SampledEntityLight` that reads the terrain lightmap under the entity (`BakedLightProbe`) and carries the baked combine's surplus — so characters go warm amber inside torch-lit halls and cool blue in astral shade. The League tutorial ships zero placed lights (its Maya sources never shipped), which makes the sampled term the zone's only authored local-light record.
 

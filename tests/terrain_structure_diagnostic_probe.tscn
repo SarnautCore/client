@@ -11,3 +11,4 @@ script = ExtResource("2_loader")
 MapName = "Inst_LeagueStart"
 SpawnNpcVisuals = false
 CreateTerrainCollision = false
+ConvertedRoot = "res://__missing_converted_tree__"

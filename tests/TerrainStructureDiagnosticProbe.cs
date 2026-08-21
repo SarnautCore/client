@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Godot;
@@ -15,14 +16,25 @@ public partial class TerrainStructureDiagnosticProbe : Node
         int lit = tiles.Count(tile => HasLitLayer(tile, "Up") && HasLitLayer(tile, "Down"));
         var expectedOrigins = new Dictionary<string, Vector3>
         {
-            ["0_2_terrain"] = new(0, 0, -5632),
-            ["1_2_terrain"] = new(256, 0, -5632),
-            ["1_3_terrain"] = new(256, 0, -5888),
-            ["4_3_terrain"] = new(1024, 0, -5888),
+            ["0_2"] = new(0, 0, -5632),
+            ["1_2"] = new(256, 0, -5632),
+            ["1_3"] = new(256, 0, -5888),
+            ["4_3"] = new(1024, 0, -5888),
         };
         int positioned = tiles.Count(tile =>
             expectedOrigins.TryGetValue(tile.Name, out Vector3 expected)
             && tile.Position.IsEqualApprox(expected));
+        string[] expectedOrder = ["0_2", "1_2", "1_3", "4_3"];
+        int ordered = tiles.Select(tile => tile.Name.ToString()).SequenceEqual(expectedOrder) ? 4 : 0;
+        int manifestScenes = tiles.Count(tile =>
+        {
+            string path = tile.GetMeta("native_scene", string.Empty).AsString();
+            return path.StartsWith(
+                    $"{NativeContentSettings.NativeRoot}/maps/inst-league-start/",
+                    StringComparison.Ordinal)
+                && path.EndsWith($"/{tile.Name}_terrain.tscn", StringComparison.Ordinal)
+                && !path.Contains("res://converted", StringComparison.OrdinalIgnoreCase);
+        });
         bool globalBounds = loader.HasTerrainBounds
             && loader.TerrainBounds.Position.X >= 199.9f
             && loader.TerrainBounds.End.X >= 1239.9f
@@ -37,6 +49,8 @@ public partial class TerrainStructureDiagnosticProbe : Node
             && layered == 4
             && lit == 4
             && positioned == 4
+            && ordered == 4
+            && manifestScenes == 4
             && globalBounds
             && !loader.UsedFlatTerrainFallback
             && loader.NativeTerrainTileCount == 4;
@@ -44,6 +58,7 @@ public partial class TerrainStructureDiagnosticProbe : Node
         GD.Print(
             $"TERRAIN_STRUCTURE_DIAGNOSTIC reported={loader.TerrainTileCount} roots={tiles.Length} "
             + $"layered={layered} lit={lit} positioned={positioned} bounds={loader.TerrainBounds} "
+            + $"ordered={ordered} manifest_scenes={manifestScenes} "
             + $"global_bounds={globalBounds} flat_fallback={loader.UsedFlatTerrainFallback} "
             + $"native={loader.NativeTerrainTileCount} "
             + $"result={(passed ? "PASS" : "FAIL")}");
