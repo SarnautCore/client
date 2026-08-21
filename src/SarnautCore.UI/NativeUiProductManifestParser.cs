@@ -4,7 +4,7 @@ namespace SarnautCore.UI;
 
 public static class NativeUiProductManifestParser
 {
-    public const string SchemaId = "sarnaut.ui-product/v1";
+    public const string SchemaId = "sarnaut.ui-product/v2";
 
     public static UiProductManifest Parse(Stream json)
     {
@@ -31,21 +31,26 @@ public static class NativeUiProductManifestParser
             JsonValueKind.Object,
             "manifest");
         UiManifestJson.Only(catalogs, "catalogs", "cursors", "sounds");
+        string cursorCatalogValue = UiManifestJson.String(catalogs, "cursors", "catalogs");
+        UiProductResourceEncoding resourceEncoding = CatalogEncoding(cursorCatalogValue);
+        string catalogExtension = resourceEncoding == UiProductResourceEncoding.Compiled
+            ? ".res"
+            : ".tres";
         NativeContentPath cursorCatalog = UiManifestJson.Path(
             catalogs,
             "cursors",
-            ".tres",
+            catalogExtension,
             "catalogs");
         NativeContentPath soundCatalog = UiManifestJson.Path(
             catalogs,
             "sounds",
-            ".tres",
+            catalogExtension,
             "catalogs");
 
         UiScreenDefinition[] screens = UiManifestJson.Array(
             root,
             "screens",
-            ReadScreen,
+            item => ReadScreen(item, resourceEncoding),
             "manifest");
         if (screens.Length == 0)
         {
@@ -53,10 +58,12 @@ public static class NativeUiProductManifestParser
         }
 
         UiManifestJson.Unique(screens.Select(screen => screen.Id), "screen id");
-        return new UiProductManifest(cursorCatalog, soundCatalog, screens);
+        return new UiProductManifest(cursorCatalog, soundCatalog, resourceEncoding, screens);
     }
 
-    private static UiScreenDefinition ReadScreen(JsonElement element)
+    private static UiScreenDefinition ReadScreen(
+        JsonElement element,
+        UiProductResourceEncoding resourceEncoding)
     {
         UiManifestJson.Object(element, "screen");
         UiManifestJson.Only(
@@ -71,6 +78,7 @@ public static class NativeUiProductManifestParser
             "values",
             "collections",
             "buttons",
+            "selection_groups",
             "focus_order");
 
         string id = UiManifestJson.Key(element, "id", "screen");
@@ -89,7 +97,9 @@ public static class NativeUiProductManifestParser
             "actions",
             item => ReadAction(item, context),
             context);
-        UiManifestJson.Unique(actions.Select(action => action.Id), $"{context} action id");
+        UiManifestJson.Unique(
+            actions.Select(ActionSignature),
+            $"{context} action signature");
         UiManifestJson.Unique(
             actions.SelectMany(action => action.Triggers)
                 .Select(trigger => $"{trigger.Role}.{trigger.Event}"),
@@ -118,7 +128,7 @@ public static class NativeUiProductManifestParser
         UiCollectionBinding[] collections = UiManifestJson.Array(
             element,
             "collections",
-            item => ReadCollection(item, context),
+            item => ReadCollection(item, context, resourceEncoding),
             context);
         UiManifestJson.Unique(
             collections.Select(collection => collection.Id),
@@ -126,9 +136,43 @@ public static class NativeUiProductManifestParser
         UiManifestJson.Unique(
             collections.Select(collection => collection.Role),
             $"{context} collection owner");
+        UiManifestJson.Unique(
+            collections.Select(collection => collection.ItemRole),
+            $"{context} collection item role");
         foreach (UiCollectionBinding collection in collections)
         {
             RequireRole(roleIds, collection.Role, $"{context} collection");
+            RequireRole(roleIds, collection.ItemRole, $"{context} collection item");
+        }
+
+        var collectionsById = collections.ToDictionary(
+            collection => collection.Id,
+            StringComparer.Ordinal);
+        foreach (UiActionDefinition action in actions)
+        {
+            foreach (string collectionId in action.Arguments
+                .Where(argument => argument.Kind == UiActionArgumentKind.CollectionItemId)
+                .Select(argument => argument.Collection!)
+                .Distinct(StringComparer.Ordinal))
+            {
+                if (!collectionsById.TryGetValue(collectionId, out UiCollectionBinding? collection))
+                {
+                    throw new InvalidDataException(
+                        $"{context} action '{action.Id}' references unknown collection '{collectionId}'");
+                }
+
+                if (collection.Selection != UiCollectionSelection.Single)
+                {
+                    throw new InvalidDataException(
+                        $"{context} action '{action.Id}' collection '{collectionId}' is not single-selection");
+                }
+
+                if (!action.Triggers.Any(trigger => trigger.Role == collection.ItemRole))
+                {
+                    throw new InvalidDataException(
+                        $"{context} action '{action.Id}' has no trigger on collection '{collectionId}' item role '{collection.ItemRole}'");
+                }
+            }
         }
 
         UiButtonDefinition[] buttons = UiManifestJson.Array(
@@ -143,23 +187,83 @@ public static class NativeUiProductManifestParser
         }
 
         var buttonsByRole = buttons.ToDictionary(button => button.Role, StringComparer.Ordinal);
+        foreach (UiCollectionBinding collection in collections.Where(
+            collection => collection.Selection == UiCollectionSelection.Single))
+        {
+            if (!buttonsByRole.TryGetValue(collection.ItemRole, out UiButtonDefinition? itemButton)
+                || !itemButton.Toggle
+                || itemButton.Variants.Count != 2)
+            {
+                throw new InvalidDataException(
+                    $"{context} single-selection collection '{collection.Id}' item role '{collection.ItemRole}' must be a two-variant toggle button");
+            }
+        }
+
+        var valueOwners = values.Select(value => value.Role).ToHashSet(StringComparer.Ordinal);
         foreach (UiActionTrigger trigger in actions.SelectMany(action => action.Triggers))
         {
-            if (trigger.Event == UiActionEvent.Pressed
-                && (!buttonsByRole.TryGetValue(trigger.Role, out UiButtonDefinition? pressedButton)
-                    || pressedButton.Toggle))
+            ValidateTriggerReachability(context, trigger, buttonsByRole, valueOwners);
+        }
+
+        var triggers = actions.SelectMany(action => action.Triggers).ToArray();
+        foreach (UiButtonDefinition button in buttons)
+        {
+            foreach (UiButtonVariant variant in button.Variants)
+            {
+                foreach (UiInputRoute route in variant.Inputs)
+                {
+                    if (!triggers.Any(trigger =>
+                        trigger.Role == button.Role && trigger.Event == route.Event))
+                    {
+                        throw new InvalidDataException(
+                            $"{context} button role '{button.Role}' variant '{variant.Id}' maps {route.Input} to undeclared event {route.Event}");
+                    }
+                }
+            }
+        }
+
+        UiSelectionGroupDefinition[] selectionGroups = UiManifestJson.Array(
+            element,
+            "selection_groups",
+            item => ReadSelectionGroup(item, context),
+            context);
+        UiManifestJson.Unique(
+            selectionGroups.Select(group => group.Id),
+            $"{context} selection group id");
+        var groupedRoles = new HashSet<string>(StringComparer.Ordinal);
+        foreach (UiSelectionGroupDefinition group in selectionGroups)
+        {
+            if (group.Roles.Count < 2)
             {
                 throw new InvalidDataException(
-                    $"{context} pressed trigger role '{trigger.Role}' is not a momentary button");
+                    $"{context} selection group '{group.Id}' must contain at least two roles");
             }
 
-            if (trigger.Event == UiActionEvent.Toggled
-                && (!buttonsByRole.TryGetValue(trigger.Role, out UiButtonDefinition? toggledButton)
-                    || !toggledButton.Toggle))
+            foreach (string role in group.Roles)
+            {
+                RequireRole(roleIds, role, $"{context} selection group '{group.Id}'");
+                if (!groupedRoles.Add(role))
+                {
+                    throw new InvalidDataException(
+                        $"{context} role '{role}' belongs to more than one selection group");
+                }
+
+                if (!buttonsByRole.TryGetValue(role, out UiButtonDefinition? button)
+                    || !button.Toggle
+                    || button.Variants.Count != 2)
+                {
+                    throw new InvalidDataException(
+                        $"{context} selection group '{group.Id}' role '{role}' is not a two-variant toggle button");
+                }
+            }
+
+            if (group.InitialRole is { } initialRole
+                && !group.Roles.Contains(initialRole, StringComparer.Ordinal))
             {
                 throw new InvalidDataException(
-                    $"{context} toggled trigger role '{trigger.Role}' is not a toggle button");
+                    $"{context} selection group '{group.Id}' initial role '{initialRole}' is not a member");
             }
+
         }
 
         string[] focusOrder = UiManifestJson.Array(
@@ -175,7 +279,11 @@ public static class NativeUiProductManifestParser
 
         return new UiScreenDefinition(
             id,
-            UiManifestJson.Path(element, "scene", ".tscn", context),
+            UiManifestJson.Path(
+                element,
+                "scene",
+                resourceEncoding == UiProductResourceEncoding.Compiled ? ".scn" : ".tscn",
+                context),
             UiManifestJson.Bool(element, "initially_visible", context),
             ReadCues(element, context),
             roles,
@@ -183,6 +291,7 @@ public static class NativeUiProductManifestParser
             values,
             collections,
             buttons,
+            selectionGroups,
             focusOrder);
     }
 
@@ -191,9 +300,17 @@ public static class NativeUiProductManifestParser
         string context = $"{screenContext} role";
         UiManifestJson.Object(element, context);
         UiManifestJson.Only(element, context, "id", "node", "initially_visible", "cursor", "cues");
+        string id = UiManifestJson.Key(element, "id", context);
+        string node = UiManifestJson.Node(element, "node", context, allowRoot: id == "screen-input");
+        if ((id == "screen-input") != (node == "."))
+        {
+            throw new InvalidDataException(
+                $"{screenContext} role 'screen-input' must exclusively address the scene root '.'");
+        }
+
         return new UiRoleDefinition(
-            UiManifestJson.Key(element, "id", context),
-            UiManifestJson.Node(element, "node", context),
+            id,
+            node,
             UiManifestJson.Bool(element, "initially_visible", context),
             UiManifestJson.OptionalCatalogKey(element, "cursor", context),
             ReadCues(element, context));
@@ -203,8 +320,16 @@ public static class NativeUiProductManifestParser
     {
         string context = $"{screenContext} action";
         UiManifestJson.Object(element, context);
-        UiManifestJson.Only(element, context, "id", "triggers");
+        UiManifestJson.Only(element, context, "id", "arguments", "triggers");
         string id = UiManifestJson.Key(element, "id", context);
+        UiActionArgument[] arguments = UiManifestJson.Array(
+            element,
+            "arguments",
+            item => ReadActionArgument(item, id),
+            $"action '{id}'");
+        UiManifestJson.Unique(
+            arguments.Select(argument => argument.Name),
+            $"action '{id}' argument name");
         UiActionTrigger[] triggers = UiManifestJson.Array(
             element,
             "triggers",
@@ -218,7 +343,33 @@ public static class NativeUiProductManifestParser
         UiManifestJson.Unique(
             triggers.Select(trigger => $"{trigger.Role}.{trigger.Event}"),
             $"action '{id}' trigger");
-        return new UiActionDefinition(id, triggers);
+        return new UiActionDefinition(id, arguments, triggers);
+    }
+
+    private static UiActionArgument ReadActionArgument(JsonElement element, string actionId)
+    {
+        string context = $"action '{actionId}' argument";
+        UiManifestJson.Object(element, context);
+        UiActionArgumentKind kind = UiManifestJson.Enum<UiActionArgumentKind>(
+            element,
+            "kind",
+            context);
+        if (kind == UiActionArgumentKind.ProductId)
+        {
+            UiManifestJson.Only(element, context, "name", "kind", "value");
+            return new UiActionArgument(
+                UiManifestJson.Key(element, "name", context),
+                kind,
+                UiManifestJson.Key(element, "value", context),
+                null);
+        }
+
+        UiManifestJson.Only(element, context, "name", "kind", "collection");
+        return new UiActionArgument(
+            UiManifestJson.Key(element, "name", context),
+            kind,
+            null,
+            UiManifestJson.Key(element, "collection", context));
     }
 
     private static UiActionTrigger ReadTrigger(JsonElement element, string actionId)
@@ -244,15 +395,30 @@ public static class NativeUiProductManifestParser
             UiManifestJson.Bool(element, "secret", context));
     }
 
-    private static UiCollectionBinding ReadCollection(JsonElement element, string screenContext)
+    private static UiCollectionBinding ReadCollection(
+        JsonElement element,
+        string screenContext,
+        UiProductResourceEncoding resourceEncoding)
     {
         string context = $"{screenContext} collection";
         UiManifestJson.Object(element, context);
-        UiManifestJson.Only(element, context, "id", "role", "item_scene", "selection");
+        UiManifestJson.Only(
+            element,
+            context,
+            "id",
+            "role",
+            "item_role",
+            "item_scene",
+            "selection");
         return new UiCollectionBinding(
             UiManifestJson.Key(element, "id", context),
             UiManifestJson.Key(element, "role", context),
-            UiManifestJson.Path(element, "item_scene", ".tscn", context),
+            UiManifestJson.Key(element, "item_role", context),
+            UiManifestJson.Path(
+                element,
+                "item_scene",
+                resourceEncoding == UiProductResourceEncoding.Compiled ? ".scn" : ".tscn",
+                context),
             UiManifestJson.Enum<UiCollectionSelection>(element, "selection", context));
     }
 
@@ -298,11 +464,86 @@ public static class NativeUiProductManifestParser
     {
         string context = $"button role '{role}' variant";
         UiManifestJson.Object(element, context);
-        UiManifestJson.Only(element, context, "id", "visual_state", "cues");
+        UiManifestJson.Only(element, context, "id", "visual_state", "cues", "inputs");
+        UiInputRoute[] inputs = UiManifestJson.Array(
+            element,
+            "inputs",
+            item => ReadInputRoute(item, context),
+            context);
+        UiManifestJson.Unique(
+            inputs.Select(route => route.Input.ToString()),
+            $"{context} physical input");
         return new UiButtonVariant(
             UiManifestJson.Key(element, "id", context),
             UiManifestJson.Key(element, "visual_state", context),
-            ReadCues(element, context));
+            ReadCues(element, context),
+            inputs);
+    }
+
+    private static UiInputRoute ReadInputRoute(JsonElement element, string variantContext)
+    {
+        string context = $"{variantContext} input";
+        UiManifestJson.Object(element, context);
+        UiManifestJson.Only(element, context, "input", "event");
+        var route = new UiInputRoute(
+            UiManifestJson.Enum<UiPhysicalInput>(element, "input", context),
+            UiManifestJson.Enum<UiActionEvent>(element, "event", context));
+        bool compatible = route.Input switch
+        {
+            UiPhysicalInput.PrimaryPressed
+                or UiPhysicalInput.PrimaryReleased
+                or UiPhysicalInput.SecondaryPressed
+                or UiPhysicalInput.SecondaryReleased =>
+                route.Event is UiActionEvent.Pressed or UiActionEvent.Toggled,
+            UiPhysicalInput.DoublePressed => route.Event == UiActionEvent.DoublePressed,
+            UiPhysicalInput.HoverEntered => route.Event == UiActionEvent.HoverEntered,
+            UiPhysicalInput.HoverExited => route.Event == UiActionEvent.HoverExited,
+            _ => false,
+        };
+        if (!compatible)
+        {
+            throw new InvalidDataException(
+                $"{context} cannot map physical input {route.Input} to logical event {route.Event}");
+        }
+
+        return route;
+    }
+
+    private static UiSelectionGroupDefinition ReadSelectionGroup(
+        JsonElement element,
+        string screenContext)
+    {
+        string context = $"{screenContext} selection group";
+        UiManifestJson.Object(element, context);
+        UiManifestJson.Only(element, context, "id", "roles", "allow_empty", "initial_role");
+        string id = UiManifestJson.Key(element, "id", context);
+        string[] roles = UiManifestJson.Array(
+            element,
+            "roles",
+            item => UiManifestJson.Key(item, $"selection group '{id}' role"),
+            context);
+        UiManifestJson.Unique(roles, $"selection group '{id}' role");
+
+        JsonElement initialRoleElement = UiManifestJson.Required(
+            element,
+            "initial_role",
+            null,
+            context);
+        string? initialRole = initialRoleElement.ValueKind switch
+        {
+            JsonValueKind.Null => null,
+            JsonValueKind.String => UiManifestJson.Key(
+                initialRoleElement,
+                $"selection group '{id}'.initial_role"),
+            _ => throw new InvalidDataException(
+                $"selection group '{id}'.initial_role must be String or Null"),
+        };
+
+        return new UiSelectionGroupDefinition(
+            id,
+            roles,
+            UiManifestJson.Bool(element, "allow_empty", context),
+            initialRole);
     }
 
     private static UiCueSet ReadCues(JsonElement parent, string context)
@@ -329,4 +570,50 @@ public static class NativeUiProductManifestParser
             throw new InvalidDataException($"{context} role '{role}' is not declared");
         }
     }
+
+    private static string ActionSignature(UiActionDefinition action)
+    {
+        string arguments = string.Join(
+            ",",
+            action.Arguments
+                .OrderBy(argument => argument.Name, StringComparer.Ordinal)
+                .Select(argument =>
+                    $"{argument.Name}:{argument.Kind}:{argument.Value ?? argument.Collection}"));
+        return $"{action.Id}({arguments})";
+    }
+
+    private static void ValidateTriggerReachability(
+        string context,
+        UiActionTrigger trigger,
+        IReadOnlyDictionary<string, UiButtonDefinition> buttonsByRole,
+        IReadOnlySet<string> valueOwners)
+    {
+        buttonsByRole.TryGetValue(trigger.Role, out UiButtonDefinition? button);
+        bool reachable = trigger.Event switch
+        {
+            UiActionEvent.Pressed => button is { Toggle: false },
+            UiActionEvent.Toggled => button is { Toggle: true },
+            UiActionEvent.DoublePressed => button is not null,
+            UiActionEvent.Submitted or UiActionEvent.Cancelled =>
+                trigger.Role == "screen-input" || valueOwners.Contains(trigger.Role),
+            UiActionEvent.Changed => valueOwners.Contains(trigger.Role),
+            UiActionEvent.NavigatePrevious or UiActionEvent.NavigateNext =>
+                trigger.Role == "screen-input",
+            _ => true,
+        };
+
+        if (!reachable)
+        {
+            throw new InvalidDataException(
+                $"{context} {trigger.Event} trigger role '{trigger.Role}' cannot emit that event");
+        }
+    }
+
+    private static UiProductResourceEncoding CatalogEncoding(string path) =>
+        path.EndsWith(".tres", StringComparison.Ordinal)
+            ? UiProductResourceEncoding.Plain
+            : path.EndsWith(".res", StringComparison.Ordinal)
+                ? UiProductResourceEncoding.Compiled
+                : throw new InvalidDataException(
+                    "catalogs.cursors must be a confined .tres or .res resource path");
 }

@@ -3,7 +3,14 @@ namespace SarnautCore.UI;
 public sealed record UiProductManifest(
     NativeContentPath CursorCatalog,
     NativeContentPath SoundCatalog,
+    UiProductResourceEncoding ResourceEncoding,
     IReadOnlyList<UiScreenDefinition> Screens);
+
+public enum UiProductResourceEncoding
+{
+    Plain,
+    Compiled,
+}
 
 public sealed record UiScreenDefinition(
     string Id,
@@ -15,6 +22,7 @@ public sealed record UiScreenDefinition(
     IReadOnlyList<UiValueBinding> Values,
     IReadOnlyList<UiCollectionBinding> Collections,
     IReadOnlyList<UiButtonDefinition> Buttons,
+    IReadOnlyList<UiSelectionGroupDefinition> SelectionGroups,
     IReadOnlyList<string> FocusOrder)
 {
     public UiRoleDefinition GetRole(string roleId) =>
@@ -24,12 +32,43 @@ public sealed record UiScreenDefinition(
     public UiButtonDefinition? FindButton(string roleId) =>
         Buttons.FirstOrDefault(button => button.Role == roleId);
 
-    public IReadOnlyList<string> ActionsFor(string roleId, UiActionEvent actionEvent) =>
+    public UiSelectionGroupDefinition? FindSelectionGroup(string roleId) =>
+        SelectionGroups.FirstOrDefault(group => group.Roles.Contains(roleId, StringComparer.Ordinal));
+
+    public UiCollectionBinding? FindCollectionByItemRole(string roleId) =>
+        Collections.FirstOrDefault(collection => collection.ItemRole == roleId);
+
+    public IReadOnlyList<UiActionInvocation> ActionsFor(
+        string roleId,
+        UiActionEvent actionEvent,
+        UiCollectionItemContext? itemContext = null) =>
         Actions
             .Where(action => action.Triggers.Any(
                 trigger => trigger.Role == roleId && trigger.Event == actionEvent))
-            .Select(action => action.Id)
+            .Select(action => ResolveAction(action, itemContext))
             .ToArray();
+
+    private static UiActionInvocation ResolveAction(
+        UiActionDefinition action,
+        UiCollectionItemContext? itemContext)
+    {
+        UiResolvedActionArgument[] arguments = action.Arguments.Select(argument =>
+        {
+            string value = argument.Kind switch
+            {
+                UiActionArgumentKind.ProductId => argument.Value!,
+                UiActionArgumentKind.CollectionItemId
+                    when itemContext is { } context
+                        && context.CollectionId == argument.Collection => context.ProductItemId,
+                UiActionArgumentKind.CollectionItemId => throw new InvalidOperationException(
+                    $"Action '{action.Id}' requires item identity from collection '{argument.Collection}'"),
+                _ => throw new InvalidOperationException(
+                    $"Action '{action.Id}' has unsupported argument kind '{argument.Kind}'"),
+            };
+            return new UiResolvedActionArgument(argument.Name, argument.Kind, value);
+        }).ToArray();
+        return new UiActionInvocation(action, arguments);
+    }
 }
 
 public sealed record UiRoleDefinition(
@@ -39,8 +78,48 @@ public sealed record UiRoleDefinition(
     string? Cursor,
     UiCueSet Cues);
 
-public sealed record UiActionDefinition(string Id, IReadOnlyList<UiActionTrigger> Triggers);
+public sealed record UiActionDefinition(
+    string Id,
+    IReadOnlyList<UiActionArgument> Arguments,
+    IReadOnlyList<UiActionTrigger> Triggers);
+public sealed record UiActionArgument(
+    string Name,
+    UiActionArgumentKind Kind,
+    string? Value,
+    string? Collection);
 public sealed record UiActionTrigger(string Role, UiActionEvent Event);
+
+public sealed record UiResolvedActionArgument(
+    string Name,
+    UiActionArgumentKind Kind,
+    string Value);
+
+public sealed record UiActionInvocation(
+    UiActionDefinition Definition,
+    IReadOnlyList<UiResolvedActionArgument> Arguments)
+{
+    public string Id => Definition.Id;
+}
+
+public readonly record struct UiCollectionItemContext
+{
+    public UiCollectionItemContext(string collectionId, string productItemId)
+    {
+        UiRuntimeKey.Validate(collectionId, nameof(collectionId));
+        UiRuntimeKey.Validate(productItemId, nameof(productItemId));
+        CollectionId = collectionId;
+        ProductItemId = productItemId;
+    }
+
+    public string CollectionId { get; }
+    public string ProductItemId { get; }
+}
+
+public enum UiActionArgumentKind
+{
+    ProductId,
+    CollectionItemId,
+}
 
 public enum UiActionEvent
 {
@@ -49,6 +128,19 @@ public enum UiActionEvent
     Submitted,
     Cancelled,
     Changed,
+    HoverEntered,
+    HoverExited,
+    DoublePressed,
+    PrimaryPressed,
+    PrimaryReleased,
+    SecondaryPressed,
+    SecondaryReleased,
+    HorizontalChanged,
+    VerticalChanged,
+    ZoomIn,
+    ZoomOut,
+    NavigatePrevious,
+    NavigateNext,
 }
 
 public sealed record UiValueBinding(
@@ -75,6 +167,7 @@ public enum UiValueAccess
 public sealed record UiCollectionBinding(
     string Id,
     string Role,
+    string ItemRole,
     NativeContentPath ItemScene,
     UiCollectionSelection Selection);
 
@@ -98,7 +191,34 @@ public sealed record UiButtonDefinition(
             .index;
 }
 
-public sealed record UiButtonVariant(string Id, string VisualState, UiCueSet Cues);
+public sealed record UiButtonVariant(
+    string Id,
+    string VisualState,
+    UiCueSet Cues,
+    IReadOnlyList<UiInputRoute> Inputs)
+{
+    public UiActionEvent? EventFor(UiPhysicalInput input) =>
+        Inputs.FirstOrDefault(route => route.Input == input)?.Event;
+}
+
+public sealed record UiInputRoute(UiPhysicalInput Input, UiActionEvent Event);
+
+public enum UiPhysicalInput
+{
+    PrimaryPressed,
+    PrimaryReleased,
+    SecondaryPressed,
+    SecondaryReleased,
+    DoublePressed,
+    HoverEntered,
+    HoverExited,
+}
+
+public sealed record UiSelectionGroupDefinition(
+    string Id,
+    IReadOnlyList<string> Roles,
+    bool AllowEmpty,
+    string? InitialRole);
 
 public sealed record UiCueSet(string? Show, string? Hide, string? Hover, string? Press)
 {

@@ -6,7 +6,7 @@ internal static class UiProductFixture
 {
     public const string Json = """
         {
-          "schema_id": "sarnaut.ui-product/v1",
+          "schema_id": "sarnaut.ui-product/v2",
           "catalogs": {
             "cursors": "ui/cursor_catalog.tres",
             "sounds": "ui/sound_catalog.tres"
@@ -39,11 +39,13 @@ internal static class UiProductFixture
                   "node": "Bottom/Local",
                   "initially_visible": false,
                   "cues": { "show": "ui_menu_open" }
-                }
+                },
+                { "id": "saved-row", "node": "SavedAccounts/Row", "initially_visible": true }
               ],
               "actions": [
                 {
                   "id": "submit-login",
+                  "arguments": [],
                   "triggers": [
                     { "role": "enter", "event": "pressed" },
                     { "role": "account", "event": "submitted" },
@@ -52,6 +54,7 @@ internal static class UiProductFixture
                 },
                 {
                   "id": "toggle-options",
+                  "arguments": [],
                   "triggers": [{ "role": "options", "event": "toggled" }]
                 }
               ],
@@ -60,7 +63,7 @@ internal static class UiProductFixture
                 { "id": "account-password", "role": "password", "kind": "text", "access": "write", "secret": true }
               ],
               "collections": [
-                { "id": "saved-accounts", "role": "account", "item_scene": "ui/SavedAccountRow.tscn", "selection": "single" }
+                { "id": "saved-accounts", "role": "account", "item_role": "saved-row", "item_scene": "ui/SavedAccountRow.tscn", "selection": "single" }
               ],
               "buttons": [
                 {
@@ -68,7 +71,7 @@ internal static class UiProductFixture
                   "toggle": false,
                   "initial_variant": "standard",
                   "variants": [
-                    { "id": "standard", "visual_state": "primary", "cues": { "press": "button_yes" } }
+                    { "id": "standard", "visual_state": "primary", "cues": { "press": "button_yes" }, "inputs": [{ "input": "primary-released", "event": "pressed" }] }
                   ]
                 },
                 {
@@ -76,12 +79,69 @@ internal static class UiProductFixture
                   "toggle": true,
                   "initial_variant": "open",
                   "variants": [
-                    { "id": "open", "visual_state": "options-open", "cues": { "show": "bag_open", "hide": "bag_close" } },
-                    { "id": "closed", "visual_state": "options-closed", "cues": { "press": "button_no" } }
+                    { "id": "open", "visual_state": "options-open", "cues": { "show": "bag_open", "hide": "bag_close" }, "inputs": [{ "input": "primary-released", "event": "toggled" }] },
+                    { "id": "closed", "visual_state": "options-closed", "cues": { "press": "button_no" }, "inputs": [{ "input": "primary-released", "event": "toggled" }] }
+                  ]
+                },
+                {
+                  "role": "saved-row",
+                  "toggle": true,
+                  "initial_variant": "clear",
+                  "variants": [
+                    { "id": "clear", "visual_state": "clear", "inputs": [] },
+                    { "id": "selected", "visual_state": "selected", "inputs": [] }
                   ]
                 }
               ],
+              "selection_groups": [],
               "focus_order": ["account", "password", "enter", "options", "local"]
+            }
+          ]
+        }
+        """;
+
+    public const string InteractionJson = """
+        {
+          "schema_id": "sarnaut.ui-product/v2",
+          "catalogs": {
+            "cursors": "catalogs/cursors.tres",
+            "sounds": "catalogs/sounds.tres"
+          },
+          "screens": [
+            {
+              "id": "selector",
+              "scene": "screens/selector.tscn",
+              "initially_visible": true,
+              "roles": [
+                { "id": "screen-input", "node": ".", "initially_visible": true },
+                { "id": "preview", "node": "Preview", "initially_visible": true, "cues": { "hover": "preview_hover" } },
+                { "id": "choice-a", "node": "Choices/A", "initially_visible": true },
+                { "id": "choice-b", "node": "Choices/B", "initially_visible": true },
+                { "id": "open", "node": "Open", "initially_visible": true }
+              ],
+              "actions": [
+                { "id": "preview", "arguments": [{ "name": "identity", "kind": "product-id", "value": "league-warrior" }], "triggers": [{ "role": "preview", "event": "hover-entered" }] },
+                { "id": "preview-end", "arguments": [], "triggers": [{ "role": "preview", "event": "hover-exited" }] },
+                { "id": "begin-preview-drag", "arguments": [], "triggers": [{ "role": "preview", "event": "primary-pressed" }] },
+                { "id": "open", "arguments": [{ "name": "character", "kind": "collection-item-id", "collection": "characters" }], "triggers": [{ "role": "open", "event": "double-pressed" }] },
+                { "id": "select", "arguments": [{ "name": "character", "kind": "collection-item-id", "collection": "characters" }], "triggers": [{ "role": "open", "event": "toggled" }] },
+                { "id": "select", "arguments": [{ "name": "identity", "kind": "product-id", "value": "choice-a" }], "triggers": [{ "role": "choice-a", "event": "toggled" }] },
+                { "id": "select", "arguments": [{ "name": "identity", "kind": "product-id", "value": "choice-b" }], "triggers": [{ "role": "choice-b", "event": "toggled" }] },
+                { "id": "previous", "arguments": [], "triggers": [{ "role": "screen-input", "event": "navigate-previous" }] }
+              ],
+              "values": [],
+              "collections": [
+                { "id": "characters", "role": "preview", "item_role": "open", "item_scene": "items/character.tscn", "selection": "single" }
+              ],
+              "buttons": [
+                { "role": "choice-a", "toggle": true, "initial_variant": "clear", "variants": [{ "id": "clear", "visual_state": "clear", "inputs": [{ "input": "primary-released", "event": "toggled" }] }, { "id": "selected", "visual_state": "selected", "inputs": [{ "input": "primary-released", "event": "toggled" }] }] },
+                { "role": "choice-b", "toggle": true, "initial_variant": "clear", "variants": [{ "id": "clear", "visual_state": "clear", "inputs": [{ "input": "primary-released", "event": "toggled" }] }, { "id": "selected", "visual_state": "selected", "inputs": [{ "input": "primary-released", "event": "toggled" }] }] },
+                { "role": "open", "toggle": true, "initial_variant": "clear", "variants": [{ "id": "clear", "visual_state": "clear", "inputs": [{ "input": "primary-released", "event": "toggled" }, { "input": "double-pressed", "event": "double-pressed" }] }, { "id": "selected", "visual_state": "selected", "inputs": [{ "input": "double-pressed", "event": "double-pressed" }] }] }
+              ],
+              "selection_groups": [
+                { "id": "choice", "roles": ["choice-a", "choice-b"], "allow_empty": true, "initial_role": "choice-a" }
+              ],
+              "focus_order": ["choice-a", "choice-b", "open"]
             }
           ]
         }

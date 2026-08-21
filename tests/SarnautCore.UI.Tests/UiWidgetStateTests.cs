@@ -7,10 +7,11 @@ public sealed class UiWidgetStateTests
     {
         UiRoleState state = VisibleScreen().Roles["enter"];
 
-        Assert.Equal("button_yes", state.BeginPress());
+        Assert.False(state.BeginPress().Activated);
         UiActionDispatch dispatch = state.EndPress(activate: true);
 
         Assert.True(dispatch.Activated);
+        Assert.Equal("button_yes", dispatch.Cue);
         Assert.Equal("primary", dispatch.VisualState);
         Assert.Equal(["submit-login"], dispatch.ActionIds);
         Assert.Equal("standard", state.VariantId);
@@ -22,13 +23,15 @@ public sealed class UiWidgetStateTests
         UiRoleState state = VisibleScreen().Roles["options"];
 
         Assert.Equal("options-open", state.VisualState);
-        Assert.Null(state.BeginPress());
+        Assert.False(state.BeginPress().Activated);
         UiActionDispatch first = state.EndPress(activate: true);
 
         Assert.Equal("options-closed", first.VisualState);
         Assert.Equal(["toggle-options"], first.ActionIds);
-        Assert.Equal("button_no", state.BeginPress());
-        Assert.Equal("options-open", state.EndPress(activate: true).VisualState);
+        Assert.False(state.BeginPress().Activated);
+        UiActionDispatch second = state.EndPress(activate: true);
+        Assert.Equal("button_no", second.Cue);
+        Assert.Equal("options-open", second.VisualState);
     }
 
     [Fact]
@@ -56,8 +59,8 @@ public sealed class UiWidgetStateTests
 
         Assert.False(state.IsPointerOver);
         Assert.False(state.IsPressed);
-        Assert.Null(state.PointerEntered());
-        Assert.Null(state.BeginPress());
+        Assert.False(state.PointerEntered().Activated);
+        Assert.False(state.BeginPress().Activated);
         Assert.False(state.EndPress(activate: true).Activated);
     }
 
@@ -66,7 +69,7 @@ public sealed class UiWidgetStateTests
     {
         UiRoleState account = VisibleScreen().Roles["account"];
 
-        Assert.Equal(["submit-login"], account.Dispatch(UiActionEvent.Submitted));
+        Assert.Equal(["submit-login"], account.Dispatch(UiActionEvent.Submitted).Select(action => action.Id));
         Assert.Empty(account.Dispatch(UiActionEvent.Changed));
         Assert.Throws<ArgumentOutOfRangeException>(() => account.Dispatch(UiActionEvent.Pressed));
     }
@@ -79,7 +82,7 @@ public sealed class UiWidgetStateTests
 
         Assert.False(screen.IsVisible);
         Assert.False(screen.Roles["enter"].CanReceiveInput);
-        Assert.Null(screen.Roles["enter"].BeginPress());
+        Assert.False(screen.Roles["enter"].BeginPress().Activated);
         Assert.Equal(["ui_menu_open"], screen.Show());
         Assert.True(screen.Roles["enter"].CanReceiveInput);
         Assert.Equal(["ui_menu_close"], screen.Hide());
@@ -105,5 +108,237 @@ public sealed class UiWidgetStateTests
         Assert.Null(local.Show());
         Assert.Equal(["ui_menu_open", "ui_menu_open"], screen.Show());
         Assert.True(local.CanReceiveInput);
+    }
+
+    [Fact]
+    public void HoverTransitionsDispatchTypedPreviewActionsExactlyOnce()
+    {
+        UiRoleState preview = InteractionScreen().Roles["preview"];
+
+        UiActionDispatch entered = preview.PointerEntered();
+        Assert.True(entered.Activated);
+        Assert.Equal("preview_hover", entered.Cue);
+        UiActionDefinition previewAction = Assert.Single(entered.Actions);
+        Assert.Equal("preview", previewAction.Id);
+        Assert.Equal("league-warrior", Assert.Single(previewAction.Arguments).Value);
+        Assert.False(preview.PointerEntered().Activated);
+
+        UiActionDispatch exited = preview.PointerExited();
+        Assert.True(exited.Activated);
+        Assert.Equal("preview-end", Assert.Single(exited.Actions).Id);
+        Assert.False(preview.PointerExited().Activated);
+    }
+
+    [Fact]
+    public void DoublePressResolvesCollectionItemIdentityFromRowContext()
+    {
+        UiRoleState row = InteractionScreen().Roles["open"];
+        Assert.Throws<InvalidOperationException>(() => row.DoublePress());
+
+        UiActionDispatch dispatch = row.DoublePress(
+            new UiCollectionItemContext("characters", "character-one"));
+
+        Assert.True(dispatch.Activated);
+        UiActionInvocation invocation = Assert.Single(dispatch.Invocations);
+        Assert.Equal("open", invocation.Id);
+        UiResolvedActionArgument argument = Assert.Single(invocation.Arguments);
+        Assert.Equal(UiActionArgumentKind.CollectionItemId, argument.Kind);
+        Assert.Equal("character-one", argument.Value);
+        Assert.Empty(dispatch.ActionIds.Except(["open"]));
+    }
+
+    [Fact]
+    public void SelectionGroupMovesExclusiveSelectionAndCanClearSelectedRole()
+    {
+        UiScreenState screen = InteractionScreen();
+        UiRoleState choiceA = screen.Roles["choice-a"];
+        UiRoleState choiceB = screen.Roles["choice-b"];
+
+        Assert.Equal("choice-a", screen.SelectedRole("choice"));
+        Assert.True(choiceA.IsSelected);
+        Assert.False(choiceB.IsSelected);
+
+        choiceB.BeginPress();
+        UiActionDispatch selectedB = choiceB.EndPress(activate: true);
+        Assert.Equal("choice-b", screen.SelectedRole("choice"));
+        Assert.False(choiceA.IsSelected);
+        Assert.True(choiceB.IsSelected);
+        Assert.Equal("choice-b", Assert.Single(selectedB.Actions).Arguments[0].Value);
+        Assert.Equal("clear", choiceA.VisualState);
+        Assert.Equal("selected", choiceB.VisualState);
+
+        choiceB.BeginPress();
+        choiceB.EndPress(activate: true);
+        Assert.Null(screen.SelectedRole("choice"));
+        Assert.False(choiceB.IsSelected);
+        Assert.Equal("clear", choiceB.VisualState);
+    }
+
+    [Fact]
+    public void NonEmptySelectionGroupCannotClearItsSelectedRole()
+    {
+        string json = UiProductFixture.InteractionJson.Replace(
+            "\"allow_empty\": true",
+            "\"allow_empty\": false",
+            StringComparison.Ordinal);
+        UiScreenDefinition definition = Assert.Single(UiProductFixture.Parse(json).Screens);
+        var screen = new UiScreenState(definition);
+        UiRoleState choiceA = screen.Roles["choice-a"];
+
+        choiceA.BeginPress();
+        UiActionDispatch dispatch = choiceA.EndPress(activate: true);
+
+        Assert.Equal("choice-a", screen.SelectedRole("choice"));
+        Assert.True(choiceA.IsSelected);
+        Assert.Equal("selected", choiceA.VisualState);
+        Assert.False(dispatch.Activated);
+        Assert.Empty(dispatch.Invocations);
+    }
+
+    private static UiScreenState InteractionScreen()
+    {
+        UiScreenDefinition definition = Assert.Single(
+            UiProductFixture.Parse(UiProductFixture.InteractionJson).Screens);
+        return new UiScreenState(definition);
+    }
+
+    [Fact]
+    public void CollectionSelectionStartsEmptyMovesExclusivelyAndSuppressesReselect()
+    {
+        UiScreenState screen = InteractionScreen();
+        UiCollectionState collection = screen.Collections["characters"];
+        UiRoleState clonedPrototype = screen.Roles["open"];
+        clonedPrototype.BeginPress();
+        Assert.Throws<InvalidOperationException>(() => clonedPrototype.EndPress(
+            activate: true,
+            new UiCollectionItemContext("characters", "character-one")));
+
+        Assert.Null(collection.SelectedProductItemId);
+        UiCollectionActionDispatch first = collection.RouteInput(
+            "character-one",
+            UiPhysicalInput.PrimaryReleased);
+        Assert.True(first.Activated);
+        Assert.Null(first.PreviousProductItemId);
+        Assert.Equal("character-one", first.SelectedProductItemId);
+        Assert.Equal("character-one", Assert.Single(first.Invocations).Arguments[0].Value);
+        Assert.Equal("selected", collection.VisualStateFor("character-one"));
+
+        UiCollectionActionDispatch repeated = collection.RouteInput(
+            "character-one",
+            UiPhysicalInput.PrimaryReleased);
+        Assert.False(repeated.Activated);
+        Assert.Empty(repeated.Invocations);
+        Assert.True(collection.IsSelected("character-one"));
+
+        UiCollectionActionDispatch moved = collection.RouteInput(
+            "character-two",
+            UiPhysicalInput.PrimaryReleased);
+        Assert.True(moved.Activated);
+        Assert.Equal("character-one", moved.PreviousProductItemId);
+        Assert.Equal("character-two", moved.SelectedProductItemId);
+        Assert.False(collection.IsSelected("character-one"));
+        Assert.True(collection.IsSelected("character-two"));
+        Assert.Equal("clear", collection.VisualStateFor("character-one"));
+        Assert.Equal("selected", collection.VisualStateFor("character-two"));
+    }
+
+    [Fact]
+    public void CollectionDoublePressAlwaysDispatchesActivatedRowIdentity()
+    {
+        UiCollectionState collection = InteractionScreen().Collections["characters"];
+        collection.RouteInput("character-one", UiPhysicalInput.PrimaryReleased);
+
+        UiCollectionActionDispatch dispatch = collection.RouteInput(
+            "character-two",
+            UiPhysicalInput.DoublePressed);
+
+        Assert.True(dispatch.Activated);
+        Assert.Equal("character-one", dispatch.SelectedProductItemId);
+        UiActionInvocation invocation = Assert.Single(dispatch.Invocations);
+        Assert.Equal("open", invocation.Id);
+        Assert.Equal("character-two", Assert.Single(invocation.Arguments).Value);
+    }
+
+    [Fact]
+    public void CurrentVariantFiltersUnmappedPhysicalInput()
+    {
+        UiRoleState choice = InteractionScreen().Roles["choice-a"];
+
+        UiActionDispatch dispatch = choice.RouteInput(UiPhysicalInput.SecondaryReleased);
+
+        Assert.False(dispatch.Activated);
+        Assert.Empty(dispatch.Invocations);
+        Assert.True(choice.IsSelected);
+        Assert.Equal("selected", choice.VisualState);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            choice.Dispatch(UiActionEvent.Toggled));
+    }
+
+    [Fact]
+    public void NonButtonControlRoutesPrimaryPhysicalInput()
+    {
+        UiRoleState preview = InteractionScreen().Roles["preview"];
+
+        UiActionDispatch dispatch = preview.RouteInput(UiPhysicalInput.PrimaryPressed);
+
+        Assert.True(dispatch.Activated);
+        Assert.Equal("begin-preview-drag", Assert.Single(dispatch.Invocations).Id);
+    }
+
+    [Fact]
+    public void HiddenCollectionOwnerAndScreenRejectRowInput()
+    {
+        UiScreenState screen = InteractionScreen();
+        UiCollectionState collection = screen.Collections["characters"];
+
+        screen.Roles["preview"].Hide();
+        Assert.False(collection.RouteInput(
+            "character-one",
+            UiPhysicalInput.PrimaryReleased).Activated);
+        Assert.Null(collection.SelectedProductItemId);
+
+        screen.Roles["preview"].Show();
+        screen.Hide();
+        Assert.False(collection.RouteInput(
+            "character-one",
+            UiPhysicalInput.PrimaryReleased).Activated);
+        Assert.Null(collection.SelectedProductItemId);
+    }
+
+    [Fact]
+    public void NonSingleCollectionWithoutAnItemButtonConstructsSafely()
+    {
+        const string json = """
+            {
+              "schema_id": "sarnaut.ui-product/v2",
+              "catalogs": { "cursors": "catalogs/cursors.tres", "sounds": "catalogs/sounds.tres" },
+              "screens": [{
+                "id": "inventory",
+                "scene": "screens/inventory.tscn",
+                "initially_visible": true,
+                "roles": [
+                  { "id": "items", "node": "Items", "initially_visible": true },
+                  { "id": "item", "node": "Item", "initially_visible": true }
+                ],
+                "actions": [],
+                "values": [],
+                "collections": [{
+                  "id": "items", "role": "items", "item_role": "item",
+                  "item_scene": "items/item.tscn", "selection": "none"
+                }],
+                "buttons": [],
+                "selection_groups": [],
+                "focus_order": []
+              }]
+            }
+            """;
+        UiScreenDefinition definition = Assert.Single(UiProductFixture.Parse(json).Screens);
+
+        var screen = new UiScreenState(definition);
+
+        Assert.Equal("default", screen.Collections["items"].VisualStateFor("item-one"));
+        Assert.False(screen.Collections["items"].RouteInput(
+            "item-one",
+            UiPhysicalInput.PrimaryReleased).Activated);
     }
 }

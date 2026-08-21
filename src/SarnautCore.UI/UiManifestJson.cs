@@ -138,9 +138,18 @@ internal static class UiManifestJson
         return new NativeContentPath(value);
     }
 
-    public static string Node(JsonElement parent, string property, string context)
+    public static string Node(
+        JsonElement parent,
+        string property,
+        string context,
+        bool allowRoot = false)
     {
         string value = String(parent, property, context);
+        if (allowRoot && value == ".")
+        {
+            return value;
+        }
+
         if (value.StartsWith('/')
             || value.Contains('\\')
             || value.Contains(':')
