@@ -1,18 +1,20 @@
 $ErrorActionPreference = "Stop"
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $walkaboutPath = Join-Path $projectRoot "src\zone\ZoneWalkabout.cs"
+$routePath = Join-Path $projectRoot "src\SarnautCore.Content\NativeZonePresentationRoute.cs"
 $loaderPath = Join-Path $projectRoot "src\zone\ZoneLoader.cs"
 $walkaboutScenePath = Join-Path $projectRoot "scenes\zone_walkabout.tscn"
 $probePath = Join-Path $projectRoot "tests\ZonePresentationPixelProbe.cs"
 
 $walkabout = Get-Content -LiteralPath $walkaboutPath -Raw
+$route = Get-Content -LiteralPath $routePath -Raw
 $loader = Get-Content -LiteralPath $loaderPath -Raw
 $walkaboutScene = Get-Content -LiteralPath $walkaboutScenePath -Raw
 $probe = Get-Content -LiteralPath $probePath -Raw
 
 foreach ($required in @(
-    'maps/{mapId}/zones/{zoneId}',
-    'zone-presentation.json',
+    'NativeZonePresentationRoute.TryCreate(',
+    'route.TryResolveScenePath(',
     'NativeZonePresentation.Parse(',
     'TryNormalizeContentId(mapName, out string mapId)',
     'ResourceLoader.Load<PackedScene>(scenePath)',
@@ -24,6 +26,24 @@ foreach ($required in @(
     if (-not $walkabout.Contains($required, [StringComparison]::Ordinal)) {
         throw "ZoneWalkabout is missing the native presentation contract: $required"
     }
+}
+
+foreach ($required in @(
+    'NativeAssetReference.TryValidateRoot(',
+    'IsCanonicalContentId(mapId)',
+    'IsCanonicalContentId(zoneId)',
+    'NativeAssetReference.TryCreate(NativeRoot, candidate',
+    'string directoryPrefix = DirectoryPath + "/"'
+)) {
+    if (-not $route.Contains($required, [StringComparison]::Ordinal)) {
+        throw "NativeZonePresentationRoute is missing path confinement: $required"
+    }
+}
+
+if ($walkabout.Contains(
+    '$' + '"{NativeContentSettings.NativeRoot}/maps/{mapId}/zones/{zoneId}"',
+    [StringComparison]::Ordinal)) {
+    throw "ZoneWalkabout still interpolates request-derived identifiers into native paths"
 }
 
 foreach ($forbidden in @(

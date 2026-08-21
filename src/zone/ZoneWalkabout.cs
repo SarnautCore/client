@@ -21,8 +21,6 @@ namespace SarnautCore;
 /// </remarks>
 public partial class ZoneWalkabout : Node3D
 {
-    private const string PresentationFileName = "zone-presentation.json";
-
     /// <summary>The named input actions this scene reads, declared in <c>project.godot</c>.</summary>
     public const string TargetClick = "target_click";
     public const string TargetNearest = "target_nearest";
@@ -179,8 +177,18 @@ public partial class ZoneWalkabout : Node3D
             return false;
         }
 
-        string presentationDirectory = $"{NativeContentSettings.NativeRoot}/maps/{mapId}/zones/{zoneId}";
-        string manifestPath = $"{presentationDirectory}/{PresentationFileName}";
+        if (!NativeZonePresentationRoute.TryCreate(
+            NativeContentSettings.NativeRoot,
+            mapId,
+            zoneId,
+            out NativeZonePresentationRoute route,
+            out string routeError))
+        {
+            error = $"Native zone presentation route is invalid: {routeError}";
+            return false;
+        }
+
+        string manifestPath = route.ManifestPath;
         if (!FileAccess.FileExists(manifestPath))
         {
             error = $"Native zone presentation manifest is missing: {manifestPath}";
@@ -201,7 +209,12 @@ public partial class ZoneWalkabout : Node3D
             return false;
         }
 
-        string scenePath = $"{presentationDirectory}/{presentation.Scene}";
+        if (!route.TryResolveScenePath(presentation.Scene, out string scenePath, out routeError))
+        {
+            error = $"Native zone presentation scene path is invalid: {routeError}";
+            return false;
+        }
+
         if (!FileAccess.FileExists(scenePath))
         {
             error = $"Native zone presentation scene is missing: {scenePath}";
