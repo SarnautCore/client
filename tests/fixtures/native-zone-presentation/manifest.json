@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "manifest_type": "sarnaut.zone-presentation",
+  "map_id": "inst-league-start",
+  "zone_id": "inst-league-1",
+  "scene": "zone-presentation.tscn",
+  "topology": {
+    "camera_centered": true,
+    "environment_node": "Environment",
+    "sun_node": "Sun",
+    "sky_root_node": "Sky"
+  },
+  "sky": {
+    "part_count": 3,
+    "animated_part_count": 1,
+    "projection_scaling": "xy",
+    "parts": [
+      {
+        "node": "Backdrop",
+        "fov_factor": 0.8,
+        "animated": false
+      },
+      {
+        "node": "Stars",
+        "fov_factor": 0.4,
+        "animated": false
+      },
+      {
+        "node": "Clouds",
+        "fov_factor": 1.0,
+        "animated": true
+      }
+    ]
+  },
+  "probe_colors": {
+    "ambient": [0.0882352941, 0.1137254902, 0.3509803922],
+    "direct": [0.2745098039, 0.1176470588, 0.0]
+  }
+}
