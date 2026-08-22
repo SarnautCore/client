@@ -46,7 +46,6 @@ public interface IHudItemPresentationCatalog
 internal sealed class NativeHudItemPresentationCatalog : IHudItemPresentationCatalog, IDisposable
 {
     public const string ProductKey = "hud.items.inst-league1";
-    public const string RelativePath = "items/item_presentation_catalog.res";
     private const string SchemaId = "sarnaut.item-presentation-catalog";
     private const int SchemaVersion = 1;
 

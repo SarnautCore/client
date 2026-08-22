@@ -270,7 +270,7 @@ public sealed partial class NativeGameplayHudHost : Control
     {
         _content = NativeHudContent.Load(paths);
         _itemCatalog = NativeHudItemPresentationCatalog.Load(
-            paths.Resolve(NativeHudItemPresentationCatalog.RelativePath, ".res"));
+            paths.Resolve(_content.Manifest.ItemCatalog.Resource, ".res"));
         _contextPresenter = new NativeHudContextPresenter(_content, _itemCatalog);
         _content.Root.MouseFilter = MouseFilterEnum.Ignore;
         _product = product ?? _content.Product;

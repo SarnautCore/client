@@ -42,7 +42,7 @@ public sealed class NativeHudGodotAdapterSourceTests
         Assert.Contains("SampleAlpha(normalized)", host, StringComparison.Ordinal);
         Assert.Contains("Present(HudDiff diff)", host, StringComparison.Ordinal);
         Assert.Contains("NativeHudItemPresentationCatalog.Load(", host, StringComparison.Ordinal);
-        Assert.Contains("paths.Resolve(NativeHudItemPresentationCatalog.RelativePath, \".res\")", host, StringComparison.Ordinal);
+        Assert.Contains("paths.Resolve(_content.Manifest.ItemCatalog.Resource, \".res\")", host, StringComparison.Ordinal);
         Assert.Contains("_itemCatalog?.Dispose()", host, StringComparison.Ordinal);
         Assert.Contains("HudInput.ResolveMessageBox(requestId, decision)", host, StringComparison.Ordinal);
         Assert.Contains("case HudChangeKind.MessageBox", host, StringComparison.Ordinal);
@@ -87,10 +87,7 @@ public sealed class NativeHudGodotAdapterSourceTests
         string catalog = ReadSource("NativeHudItemPresentationCatalog.cs");
 
         Assert.Contains("ProductKey = \"hud.items.inst-league1\"", catalog, StringComparison.Ordinal);
-        Assert.Contains(
-            "RelativePath = \"items/item_presentation_catalog.res\"",
-            catalog,
-            StringComparison.Ordinal);
+        Assert.DoesNotContain("RelativePath", catalog, StringComparison.Ordinal);
         Assert.Contains("Dictionary<HudId, HudItemPresentation>", catalog, StringComparison.Ordinal);
         Assert.Contains("StringComparer.Ordinal", catalog, StringComparison.Ordinal);
         Assert.Contains("OptionalId(entry[\"action_id\"]", catalog, StringComparison.Ordinal);
