@@ -33,6 +33,7 @@ public sealed class HudProductManifestParserTests
         Assert.Equal("npc-talk", product.Contexts.QuestInfo.InteractionRoot.Value);
         Assert.Equal("character-equipment-bag", product.Contexts.Character.BagSlot.Value);
         Assert.Equal("character-equipment-death-insurance", product.Contexts.Character.DeathInsuranceSlot.Value);
+        Assert.Equal("items/item_presentation_catalog.res", manifest.ItemCatalog.Resource);
     }
 
     [Fact]
@@ -87,6 +88,14 @@ public sealed class HudProductManifestParserTests
         JsonObject items = Object();
         items["item_catalog"]!["version"] = 2;
         Assert.Throws<InvalidDataException>(() => HudProductManifestParser.Parse(items.ToJsonString()));
+
+        JsonObject itemTraversal = Object();
+        itemTraversal["item_catalog"]!["resource"] = "../items/item_presentation_catalog.res";
+        Assert.Throws<InvalidDataException>(() => HudProductManifestParser.Parse(itemTraversal.ToJsonString()));
+
+        JsonObject itemSourceFormat = Object();
+        itemSourceFormat["item_catalog"]!["resource"] = "items/item_presentation_catalog.xdb";
+        Assert.Throws<InvalidDataException>(() => HudProductManifestParser.Parse(itemSourceFormat.ToJsonString()));
 
         JsonObject traversal = Object();
         traversal["theme"] = "../theme.res";
@@ -182,7 +191,12 @@ public sealed class HudProductManifestParserTests
             "catalogs/timelines.res",
             new HudChatCommandCatalogReference("sarnaut.chat-commands/v1", "catalogs/chat-commands-eng.json", "eng", 22),
             new HudExternalProductReference("sarnaut.options-product/v1", "options"),
-            new HudItemCatalogReference("sarnaut.item-presentation-catalog", 1, "hud.items.inst-league1", "item-id"),
+            new HudItemCatalogReference(
+                "sarnaut.item-presentation-catalog",
+                1,
+                "hud.items.inst-league1",
+                "item-id",
+                "items/item_presentation_catalog.res"),
             new HudExternalActions("open-options"),
             new HudWindowPolicy(HudWindowFocusOrder.LastOpened, HudEscapePolicy.CloseLastOpened, HudWindowPlacement.AuthoredScene),
             RootBindings(),

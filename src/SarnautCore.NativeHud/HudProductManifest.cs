@@ -71,7 +71,8 @@ public sealed record HudItemCatalogReference(
     [property: JsonPropertyName("schema")] string Schema,
     [property: JsonPropertyName("version")] int Version,
     [property: JsonPropertyName("product_key")] string ProductKey,
-    [property: JsonPropertyName("key")] string Key);
+    [property: JsonPropertyName("key")] string Key,
+    [property: JsonPropertyName("resource")] string Resource);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record HudExternalActions(

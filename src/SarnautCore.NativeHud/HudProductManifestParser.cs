@@ -241,6 +241,7 @@ public static class HudProductManifestParser
         Require(items.Schema == "sarnaut.item-presentation-catalog" && items.Version == 1 &&
             items.ProductKey == "hud.items.inst-league1" && items.Key == "item-id",
             "HUD item catalog reference changed.");
+        ValidateResourcePath(items.Resource, ".res", "item_catalog.resource");
         HudExternalActions actions = Required(manifest.ExternalActions, "external_actions");
         Require(actions.OpenOptions == "open-options", "HUD open-options action changed.");
         HudWindowPolicy policy = Required(manifest.WindowPolicy, "window_policy");
