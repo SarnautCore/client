@@ -6,6 +6,10 @@ namespace SarnautCore.NativeHud;
 /// </summary>
 public sealed class NativeHud : IDisposable
 {
+    private static readonly HudId QuestAbandonHeaderId = new("hud.quest.abandon.header");
+    private static readonly HudId QuestAbandonBodyId = new("hud.quest.abandon.body");
+    private static readonly HudId QuestShareHeaderId = new("hud.quest.share.header");
+    private static readonly HudId QuestShareBodyId = new("hud.quest.share.body");
     private readonly HudProduct _product;
     private readonly IHudSession _session;
     private readonly IHudWorld _world;
@@ -34,16 +38,22 @@ public sealed class NativeHud : IDisposable
     private readonly HudQuestLogEntryView[] _questLogViews;
     private readonly HudCharacterEquipmentView[] _characterEquipmentViews;
     private readonly HudCharacterStatView[] _characterStatViews;
+    private readonly HudQuestTalkOptionView[] _questTalkOptionViews;
+    private readonly HudMessageBoxState[] _messageBoxes;
+    private readonly HudMessageBoxView[] _messageBoxViews;
     private readonly HudInventoryReadModel _inventoryRead;
     private readonly HudLootReadModel _lootRead;
     private readonly HudQuestLogReadModel _questLogRead;
     private readonly HudCharacterReadModel _characterRead;
+    private readonly HudQuestTalkOptionsReadModel _questTalkOptionsRead;
+    private readonly HudMessageBoxReadModel _messageBoxRead;
     private readonly HudDiff _diff;
     private int _inputHead;
     private int _inputCount;
     private int _transientCursor;
     private int _chatCursor;
     private int _questTombstoneCursor;
+    private long _messageBoxSequence;
     private int _pendingInputOverflows;
     private long _lastNow;
     private long _frameRevision;
@@ -65,12 +75,15 @@ public sealed class NativeHud : IDisposable
     private ContextState<HudQuestInfoSnapshot> _questInfo;
     private ContextState<HudCharacterSnapshot> _character;
     private HudId _selectedQuestId;
+    private HudQuestLogBookmark _selectedQuestBookmark;
+    private HudId _selectedQuestFolderId;
     private HudId _pendingAbandonQuestId;
     private long _abandonConfirmationExpiresAt;
     private long _shareInvitationExpiresAt;
+    private long _shareOfferExpiresAt;
     private int _selectedRewardIndex = -1;
     private int _lootPage;
-    private readonly HudContextWindow[] _openContextOrder = new HudContextWindow[5];
+    private readonly HudContextWindow[] _openContextOrder = new HudContextWindow[6];
     private int _openContextCount;
     private bool _inventoryOpen;
     private bool _questLogOpen;
@@ -109,15 +122,22 @@ public sealed class NativeHud : IDisposable
         _questLogViews = new HudQuestLogEntryView[product.Contexts.QuestLog.MaxEntries];
         _characterEquipmentViews = new HudCharacterEquipmentView[HudProduct.CharacterEquipmentSlotCount];
         _characterStatViews = new HudCharacterStatView[HudProduct.CharacterStatCount];
+        _questTalkOptionViews = new HudQuestTalkOptionView[HudProduct.QuestTalkOptionCount];
+        _messageBoxes = new HudMessageBoxState[HudMessageBoxProduct.Capacity];
+        _messageBoxViews = new HudMessageBoxView[HudMessageBoxProduct.Capacity];
         _inventoryRead = new HudInventoryReadModel(_inventorySlotViews, _inventoryPartitionViews);
         _lootRead = new HudLootReadModel(_lootSlotViews);
         _questLogRead = new HudQuestLogReadModel(_questLogViews);
         _characterRead = new HudCharacterReadModel(_characterEquipmentViews, _characterStatViews);
+        _questTalkOptionsRead = new HudQuestTalkOptionsReadModel(_questTalkOptionViews);
+        _messageBoxRead = new HudMessageBoxReadModel(_messageBoxViews);
 
         UpdateInventoryViews();
         UpdateLootViews();
         UpdateQuestLogViews();
         UpdateCharacterViews();
+        UpdateQuestTalkOptionViews();
+        UpdateMessageBoxViews();
 
         for (int index = 0; index < _entities.Length; index++)
         {
@@ -178,8 +198,9 @@ public sealed class NativeHud : IDisposable
             _questLogRead,
             new HudQuestInfoView(product.Contexts.QuestInfo.InteractionRoot, product.Contexts.QuestInfo.DetailRoot,
                 false, false, HudQuestInfoMode.None, HudId.Empty, 0,
-                HudQuestRefusal.None, null, null, -1, -1, default),
-            _characterRead)
+                HudQuestRefusal.None, null, null, -1, -1, default, _questTalkOptionsRead),
+            _characterRead,
+            _messageBoxRead)
         {
             Focus = HudFocus.World,
             CursorId = product.Cursors.Resolve(HudCursor.Default),
@@ -253,14 +274,11 @@ public sealed class NativeHud : IDisposable
         }
 
         ReadSessionEvents();
-        if (!_pendingAbandonQuestId.IsEmpty && now > _abandonConfirmationExpiresAt)
-        {
-            ClearAbandonConfirmation();
-        }
+        AdvanceMessageBoxes(now);
 
-        if (_shareInvitationExpiresAt > 0 && now > _shareInvitationExpiresAt)
+        if (_shareOfferExpiresAt > 0 && now > _shareOfferExpiresAt)
         {
-            _shareInvitationExpiresAt = 0;
+            _shareOfferExpiresAt = 0;
             UpdateQuestLogViews();
             EmitContext(HudChangeKind.QuestLog, _product.Contexts.QuestLog.Root, _questLogRead.Count, _questLogOpen, _questLog.Stamp);
         }
@@ -387,6 +405,10 @@ public sealed class NativeHud : IDisposable
                 break;
             case HudEventKind.CharacterReplaced:
                 ApplyCharacter(item);
+                break;
+            case HudEventKind.MessageBoxOffered:
+            case HudEventKind.MessageBoxWithdrawn:
+                ApplyMessageBox(item);
                 break;
             default:
                 AddError(HudErrorCode.InvalidEvent, item.Stamp, item.EventId, item.EntityId, item.Slot);
@@ -1086,8 +1108,15 @@ public sealed class NativeHud : IDisposable
             return;
         }
 
+        bool hadAuthority = _questLog.HasAuthority;
         _questLog.Set(item.Stamp, item, snapshot);
-        _shareInvitationExpiresAt = snapshot.ShareInvitation is null ? 0 : checked(_lastNow + 30_000);
+        if (!hadAuthority)
+        {
+            _selectedQuestBookmark = snapshot.ActiveBookmark;
+        }
+        ReconcileShareInvitation(snapshot.ShareInvitation, item.Stamp);
+        _shareOfferExpiresAt = snapshot.ShareOffer is { } offer ?
+            DeadlineAfter(offer.RemainingMilliseconds) : 0;
         if (!_selectedQuestId.IsEmpty && !ContainsQuest(snapshot, _selectedQuestId))
         {
             _selectedQuestId = HudId.Empty;
@@ -1146,6 +1175,29 @@ public sealed class NativeHud : IDisposable
         _character.Set(item.Stamp, item, snapshot);
         UpdateCharacterViews();
         EmitContext(HudChangeKind.Character, _product.Contexts.Character.Root, snapshot.Level, _characterOpen, item.Stamp);
+    }
+
+    private void ApplyMessageBox(in HudEvent item)
+    {
+        if (item.EventId.IsEmpty ||
+            (item.Kind == HudEventKind.MessageBoxOffered && item.MessageBox is not { IsValid: true }))
+        {
+            AddError(HudErrorCode.InvalidEvent, item.Stamp, item.EventId, 0, -1);
+            return;
+        }
+
+        int index = FindMessageBox(item.EventId);
+        if (item.Kind == HudEventKind.MessageBoxWithdrawn)
+        {
+            if (index >= 0 && item.Stamp.CompareTo(_messageBoxes[index].Stamp) >= 0)
+            {
+                RemoveMessageBox(index, false);
+            }
+
+            return;
+        }
+
+        OfferMessageBox(item.MessageBox!.Value, item.Stamp);
     }
 
     private bool AcceptContextAuthority<T>(ref ContextState<T> state, in HudEvent item, HudId related)
@@ -1541,6 +1593,15 @@ public sealed class NativeHud : IDisposable
             case HudInputKind.SelectQuest:
                 SelectQuest(input.Target);
                 break;
+            case HudInputKind.SelectQuestBookmark:
+                SelectQuestBookmark((HudQuestLogBookmark)input.Value);
+                break;
+            case HudInputKind.EnterQuestFolder:
+                SetQuestFolder(input.Target);
+                break;
+            case HudInputKind.LeaveQuestFolder:
+                SetQuestFolder(HudId.Empty);
+                break;
             case HudInputKind.AbandonQuest:
                 AbandonQuest(input.Target);
                 break;
@@ -1558,6 +1619,9 @@ public sealed class NativeHud : IDisposable
                 break;
             case HudInputKind.DeclineSharedQuest:
                 ResolveSharedQuest(input.Target, input.SecondaryTarget, accept: false);
+                break;
+            case HudInputKind.ResolveMessageBox:
+                ResolveMessageBox(input.Target, (HudMessageBoxDecision)input.Value);
                 break;
             case HudInputKind.SelectTalkOption:
                 SelectTalkOption(input.Slot);
@@ -1666,7 +1730,7 @@ public sealed class NativeHud : IDisposable
             return;
         }
 
-        SendCommand(HudCommand.CloseLoot(), HudCommandFamilies.CloseLoot);
+        SendCommand(HudCommand.CloseLoot(snapshot.CorpseEntityId, _loot.Stamp), HudCommandFamilies.CloseLoot);
     }
 
     private void SetLootPage(int page)
@@ -1710,6 +1774,31 @@ public sealed class NativeHud : IDisposable
         EmitContext(HudChangeKind.QuestLog, _product.Contexts.QuestLog.Root, _questLogRead.Count, _questLogOpen, _questLog.Stamp);
     }
 
+    private void SelectQuestBookmark(HudQuestLogBookmark bookmark)
+    {
+        if (_selectedQuestBookmark == bookmark)
+        {
+            return;
+        }
+
+        _selectedQuestBookmark = bookmark;
+        _selectedQuestFolderId = HudId.Empty;
+        UpdateQuestLogViews();
+        EmitContext(HudChangeKind.QuestLog, _product.Contexts.QuestLog.Root, _questLogRead.Count, _questLogOpen, _questLog.Stamp);
+    }
+
+    private void SetQuestFolder(HudId folderId)
+    {
+        if (_selectedQuestFolderId == folderId)
+        {
+            return;
+        }
+
+        _selectedQuestFolderId = folderId;
+        UpdateQuestLogViews();
+        EmitContext(HudChangeKind.QuestLog, _product.Contexts.QuestLog.Root, _questLogRead.Count, _questLogOpen, _questLog.Stamp);
+    }
+
     private void AbandonQuest(HudId questId)
     {
         HudId target = questId.IsEmpty ? _selectedQuestId : questId;
@@ -1724,7 +1813,26 @@ public sealed class NativeHud : IDisposable
             if (quest.QuestId == target && quest.CanAbandon)
             {
                 _pendingAbandonQuestId = target;
-                _abandonConfirmationExpiresAt = checked(_lastNow + 30_000);
+                HudId requestId = AbandonRequestId(target);
+                var request = new HudMessageBoxRequest(
+                    requestId,
+                    HudMessageBoxPurpose.QuestAbandon,
+                    QuestAbandonHeaderId,
+                    QuestAbandonBodyId,
+                    target,
+                    HudId.Empty,
+                    HudMessageBoxButtons.AcceptDecline,
+                    HudMessageBoxDecision.Decline,
+                    30_000,
+                    0,
+                    _questLog.Stamp);
+                if (!OfferLocalMessageBox(request))
+                {
+                    _pendingAbandonQuestId = HudId.Empty;
+                    return;
+                }
+
+                _abandonConfirmationExpiresAt = FindMessageBoxExpiry(requestId);
                 UpdateQuestLogViews();
                 EmitContext(HudChangeKind.QuestLog, _product.Contexts.QuestLog.Root, _questLogRead.Count, _questLogOpen, _questLog.Stamp);
                 return;
@@ -1737,7 +1845,8 @@ public sealed class NativeHud : IDisposable
         if (!_pendingAbandonQuestId.IsEmpty && questId == _pendingAbandonQuestId &&
             _lastNow <= _abandonConfirmationExpiresAt)
         {
-            SendCommand(HudCommand.AbandonQuest(questId, _questLog.Stamp), HudCommandFamilies.AbandonQuest);
+            ResolveMessageBox(AbandonRequestId(questId), HudMessageBoxDecision.Accept);
+            return;
         }
 
         ClearAbandonConfirmation();
@@ -1752,9 +1861,13 @@ public sealed class NativeHud : IDisposable
 
         _pendingAbandonQuestId = HudId.Empty;
         _abandonConfirmationExpiresAt = 0;
+        RemoveMessageBox(FindMessageBoxByPurpose(HudMessageBoxPurpose.QuestAbandon), false);
         UpdateQuestLogViews();
         EmitContext(HudChangeKind.QuestLog, _product.Contexts.QuestLog.Root, _questLogRead.Count, _questLogOpen, _questLog.Stamp);
     }
+
+    private long DeadlineAfter(int remainingMilliseconds) =>
+        _lastNow > long.MaxValue - remainingMilliseconds ? long.MaxValue : _lastNow + remainingMilliseconds;
 
     private void ShareQuest(HudId questId)
     {
@@ -1772,11 +1885,220 @@ public sealed class NativeHud : IDisposable
             return;
         }
 
-        SendCommand(
-            accept ? HudCommand.AcceptSharedQuest(shareId, questId, _questLog.Stamp) :
-                HudCommand.DeclineSharedQuest(shareId, questId, _questLog.Stamp),
-            accept ? HudCommandFamilies.AcceptSharedQuest : HudCommandFamilies.DeclineSharedQuest);
+        ResolveMessageBox(shareId, accept ? HudMessageBoxDecision.Accept : HudMessageBoxDecision.Decline);
     }
+
+    private void ReconcileShareInvitation(HudQuestShareInvitation? invitation, HudStamp stamp)
+    {
+        int existing = FindMessageBoxByPurpose(HudMessageBoxPurpose.QuestShareInvitation);
+        if (invitation is null)
+        {
+            if (existing >= 0)
+            {
+                RemoveMessageBox(existing, false);
+            }
+
+            _shareInvitationExpiresAt = 0;
+            return;
+        }
+
+        var request = new HudMessageBoxRequest(
+            invitation.Value.ShareId,
+            HudMessageBoxPurpose.QuestShareInvitation,
+            QuestShareHeaderId,
+            QuestShareBodyId,
+            invitation.Value.QuestId,
+            invitation.Value.SharerNameId,
+            HudMessageBoxButtons.AcceptDecline,
+            HudMessageBoxDecision.Decline,
+            30_000,
+            invitation.Value.OfferRemainingMilliseconds,
+            stamp);
+        if (existing >= 0 && _messageBoxes[existing].Request.RequestId != request.RequestId)
+        {
+            RemoveMessageBox(existing, false);
+        }
+
+        OfferMessageBox(request, stamp);
+        _shareInvitationExpiresAt = FindMessageBoxExpiry(request.RequestId);
+    }
+
+    private bool OfferLocalMessageBox(in HudMessageBoxRequest request) => OfferMessageBox(request, default);
+
+    private bool OfferMessageBox(in HudMessageBoxRequest request, HudStamp stamp)
+    {
+        int index = FindMessageBox(request.RequestId);
+        if (index < 0)
+        {
+            index = FindFreeMessageBox();
+            if (index < 0)
+            {
+                AddError(HudErrorCode.MessageBoxCapacityExceeded, stamp, request.RequestId, 0, -1);
+                return false;
+            }
+        }
+        else if (stamp != default && stamp.CompareTo(_messageBoxes[index].Stamp) < 0)
+        {
+            return false;
+        }
+
+        long order = _messageBoxes[index].Occupied ? _messageBoxes[index].Order : ++_messageBoxSequence;
+        _messageBoxes[index] = new HudMessageBoxState
+        {
+            Occupied = true,
+            Request = request,
+            Stamp = stamp,
+            ExpiresAt = DeadlineAfter(request.EffectiveLifetimeMilliseconds),
+            Order = order,
+        };
+        UpdateMessageBoxViews();
+        SetContextOrder(HudContextWindow.MessageBox, true);
+        ReconcileContextFocus();
+        EmitContext(HudChangeKind.MessageBox, _product.Contexts.MessageBox.Root,
+            _messageBoxRead.Count, true, stamp);
+        return true;
+    }
+
+    private void AdvanceMessageBoxes(long now)
+    {
+        bool remainingChanged = false;
+        for (int index = 0; index < _messageBoxes.Length; index++)
+        {
+            if (!_messageBoxes[index].Occupied)
+            {
+                continue;
+            }
+
+            if (now >= _messageBoxes[index].ExpiresAt)
+            {
+                HudId requestId = _messageBoxes[index].Request.RequestId;
+                HudMessageBoxDecision decision = _messageBoxes[index].Request.DefaultDecision;
+                ResolveMessageBox(requestId, decision);
+                index = -1;
+                continue;
+            }
+
+            remainingChanged = true;
+        }
+
+        if (remainingChanged)
+        {
+            UpdateMessageBoxViews();
+        }
+    }
+
+    private void ResolveMessageBox(HudId requestId, HudMessageBoxDecision decision)
+    {
+        int index = FindMessageBox(requestId);
+        if (index < 0 || (uint)decision > (uint)HudMessageBoxDecision.Decline)
+        {
+            return;
+        }
+
+        HudMessageBoxRequest request = _messageBoxes[index].Request;
+        switch (request.Purpose)
+        {
+            case HudMessageBoxPurpose.QuestAbandon:
+                if (decision == HudMessageBoxDecision.Accept)
+                {
+                    SendCommand(HudCommand.AbandonQuest(request.RelatedId, request.ExpectedRevision),
+                        HudCommandFamilies.AbandonQuest);
+                }
+
+                _pendingAbandonQuestId = HudId.Empty;
+                _abandonConfirmationExpiresAt = 0;
+                break;
+            case HudMessageBoxPurpose.QuestShareInvitation:
+                SendCommand(
+                    decision == HudMessageBoxDecision.Accept
+                        ? HudCommand.AcceptSharedQuest(request.RequestId, request.RelatedId, request.ExpectedRevision)
+                        : HudCommand.DeclineSharedQuest(request.RequestId, request.RelatedId, request.ExpectedRevision),
+                    decision == HudMessageBoxDecision.Accept
+                        ? HudCommandFamilies.AcceptSharedQuest
+                        : HudCommandFamilies.DeclineSharedQuest);
+                _shareInvitationExpiresAt = 0;
+                break;
+            case HudMessageBoxPurpose.ItemConfirmation:
+            case HudMessageBoxPurpose.TradeInvitation:
+                SendCommand(HudCommand.ResolveMessageBox(
+                    request.RequestId, request.Purpose, decision, request.RelatedId,
+                    request.SecondaryId, request.ExpectedRevision), HudCommandFamilies.ResolveMessageBox);
+                break;
+        }
+
+        RemoveMessageBox(index, false);
+        UpdateQuestLogViews();
+    }
+
+    private void RemoveMessageBox(int index, bool resolveDefault)
+    {
+        if ((uint)index >= (uint)_messageBoxes.Length || !_messageBoxes[index].Occupied)
+        {
+            return;
+        }
+
+        if (resolveDefault)
+        {
+            ResolveMessageBox(_messageBoxes[index].Request.RequestId, _messageBoxes[index].Request.DefaultDecision);
+            return;
+        }
+
+        HudStamp stamp = _messageBoxes[index].Stamp;
+        _messageBoxes[index] = default;
+        UpdateMessageBoxViews();
+        bool open = _messageBoxRead.Count > 0;
+        SetContextOrder(HudContextWindow.MessageBox, open);
+        ReconcileContextFocus();
+        EmitContext(HudChangeKind.MessageBox, _product.Contexts.MessageBox.Root,
+            _messageBoxRead.Count, open, stamp);
+    }
+
+    private int FindMessageBox(HudId requestId)
+    {
+        for (int index = 0; index < _messageBoxes.Length; index++)
+        {
+            if (_messageBoxes[index].Occupied && _messageBoxes[index].Request.RequestId == requestId)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private int FindMessageBoxByPurpose(HudMessageBoxPurpose purpose)
+    {
+        for (int index = 0; index < _messageBoxes.Length; index++)
+        {
+            if (_messageBoxes[index].Occupied && _messageBoxes[index].Request.Purpose == purpose)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private int FindFreeMessageBox()
+    {
+        for (int index = 0; index < _messageBoxes.Length; index++)
+        {
+            if (!_messageBoxes[index].Occupied)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private long FindMessageBoxExpiry(HudId requestId)
+    {
+        int index = FindMessageBox(requestId);
+        return index < 0 ? 0 : _messageBoxes[index].ExpiresAt;
+    }
+
+    private static HudId AbandonRequestId(HudId questId) => new($"message.quest-abandon.{questId.Value}");
 
     private void SelectTalkOption(int option)
     {
@@ -1881,12 +2203,22 @@ public sealed class NativeHud : IDisposable
             case HudContextWindow.Character:
                 SetCharacterOpen(false);
                 break;
+            case HudContextWindow.MessageBox:
+                int messageIndex = FindMessageBox(_messageBoxRead.ActiveRequestId);
+                if (messageIndex >= 0)
+                {
+                    ResolveMessageBox(
+                        _messageBoxes[messageIndex].Request.RequestId,
+                        _messageBoxes[messageIndex].Request.DefaultDecision);
+                }
+                break;
         }
     }
 
     private void ReconcileContextFocus()
     {
-        if (_openContextCount > 0 && _openContextOrder[_openContextCount - 1] == HudContextWindow.QuestInfo)
+        if (_openContextCount > 0 &&
+            _openContextOrder[_openContextCount - 1] is HudContextWindow.QuestInfo or HudContextWindow.MessageBox)
         {
             SetFocus(HudFocus.Modal);
         }
@@ -2448,19 +2780,23 @@ public sealed class NativeHud : IDisposable
         _questLogRead.HasAuthority = _questLog.HasAuthority;
         _questLogRead.Open = _questLogOpen;
         _questLogRead.Count = count;
-        _questLogRead.ActiveBookmark = snapshot?.ActiveBookmark ?? HudQuestLogBookmark.Zones;
+        _questLogRead.ActiveBookmark = _selectedQuestBookmark;
+        _questLogRead.SelectedFolderId = _selectedQuestFolderId;
         _questLogRead.SecretComponentCount = snapshot?.SecretComponents.Length ?? 0;
         _questLogRead.SelectedQuestId = _selectedQuestId;
         _questLogRead.PendingAbandonQuestId = _pendingAbandonQuestId;
         _questLogRead.AbandonConfirmationExpiresAtMilliseconds = _abandonConfirmationExpiresAt;
         _questLogRead.ShareInvitation = _shareInvitationExpiresAt > 0 ? snapshot?.ShareInvitation : null;
         _questLogRead.ShareInvitationExpiresAtMilliseconds = _shareInvitationExpiresAt;
+        _questLogRead.ShareOffer = _shareOfferExpiresAt > 0 ? snapshot?.ShareOffer : null;
+        _questLogRead.ShareOfferExpiresAtMilliseconds = _shareOfferExpiresAt;
         _questLogRead.Revision = _questLog.Stamp;
     }
 
     private void UpdateQuestInfoView()
     {
         HudQuestInfoSnapshot? snapshot = _questInfo.Value;
+        UpdateQuestTalkOptionViews();
         _diff.ReadModel.QuestInfo = new HudQuestInfoView(
             _product.Contexts.QuestInfo.InteractionRoot,
             _product.Contexts.QuestInfo.DetailRoot,
@@ -2474,7 +2810,79 @@ public sealed class NativeHud : IDisposable
             snapshot?.Reward,
             snapshot?.SelectedTalkOption ?? -1,
             _selectedRewardIndex,
-            _questInfo.Stamp);
+            _questInfo.Stamp,
+            _questTalkOptionsRead);
+    }
+
+    private void UpdateQuestTalkOptionViews()
+    {
+        HudQuestInfoSnapshot? snapshot = _questInfo.Value;
+        ReadOnlySpan<HudId> elements = _product.Contexts.QuestInfo.TalkOptions;
+        int count = snapshot?.TalkOptions.Length ?? 0;
+        for (int index = 0; index < _questTalkOptionViews.Length; index++)
+        {
+            if (snapshot is not null && index < snapshot.TalkOptions.Length)
+            {
+                HudQuestTalkOption option = snapshot.TalkOptions[index];
+                _questTalkOptionViews[index] = new HudQuestTalkOptionView(
+                    elements[index], index, option.OptionId, option.LabelId, option.MarkId,
+                    option.Quest?.State, true, index == snapshot.SelectedTalkOption, option.Quest);
+            }
+            else
+            {
+                _questTalkOptionViews[index] = new HudQuestTalkOptionView(
+                    elements[index], index, HudId.Empty, HudId.Empty, HudId.Empty,
+                    null, false, false, null);
+            }
+        }
+
+        _questTalkOptionsRead.Count = count;
+    }
+
+    private void UpdateMessageBoxViews()
+    {
+        int count = 0;
+        int activeIndex = -1;
+        long activeOrder = long.MinValue;
+        for (int index = 0; index < _messageBoxes.Length; index++)
+        {
+            if (!_messageBoxes[index].Occupied)
+            {
+                continue;
+            }
+
+            count++;
+            if (_messageBoxes[index].Order > activeOrder)
+            {
+                activeOrder = _messageBoxes[index].Order;
+                activeIndex = index;
+            }
+        }
+
+        for (int index = 0; index < _messageBoxViews.Length; index++)
+        {
+            if (_messageBoxes[index].Occupied)
+            {
+                long remaining = Math.Max(0, _messageBoxes[index].ExpiresAt - _lastNow);
+                _messageBoxViews[index] = new HudMessageBoxView(
+                    _product.Contexts.MessageBox.Root,
+                    index,
+                    _messageBoxes[index].Request,
+                    (int)Math.Min(int.MaxValue, remaining),
+                    index == activeIndex,
+                    index == activeIndex);
+            }
+            else
+            {
+                _messageBoxViews[index] = new HudMessageBoxView(
+                    _product.Contexts.MessageBox.Root, index, default, 0, false, false);
+            }
+        }
+
+        _messageBoxRead.Count = count;
+        _messageBoxRead.ActiveRequestId = activeIndex < 0
+            ? HudId.Empty
+            : _messageBoxes[activeIndex].Request.RequestId;
     }
 
     private void UpdateCharacterViews()
@@ -2695,14 +3103,18 @@ public sealed class NativeHud : IDisposable
         HudInputKind.UseInventoryItem or HudInputKind.DressInventoryItem or HudInputKind.UndressInventoryItem or
             HudInputKind.TakeLootItem or HudInputKind.SelectTalkOption or HudInputKind.SelectQuestReward => input.Slot >= 0,
         HudInputKind.SelectQuest or HudInputKind.AbandonQuest or HudInputKind.ConfirmAbandonQuest or
-            HudInputKind.ShareQuest => !input.Target.IsEmpty,
+            HudInputKind.ShareQuest or HudInputKind.EnterQuestFolder => !input.Target.IsEmpty,
+        HudInputKind.SelectQuestBookmark => (uint)input.Value < HudProduct.QuestLogBookmarkCount,
         HudInputKind.AcceptSharedQuest or HudInputKind.DeclineSharedQuest =>
             !input.Target.IsEmpty && !input.SecondaryTarget.IsEmpty,
+        HudInputKind.ResolveMessageBox =>
+            !input.Target.IsEmpty && (uint)input.Value <= (uint)HudMessageBoxDecision.Decline,
         HudInputKind.Cancel or >= HudInputKind.PointerMoved and <= HudInputKind.DragEnded or
             HudInputKind.ToggleInventory or HudInputKind.CloseInventory or
             HudInputKind.TakeAllLoot or HudInputKind.DeclineAbandonQuest or
             HudInputKind.LootPreviousPage or HudInputKind.LootNextPage or HudInputKind.CloseLoot or
-            HudInputKind.ToggleQuestLog or HudInputKind.CloseQuestLog or HudInputKind.AcceptQuest or
+            HudInputKind.ToggleQuestLog or HudInputKind.CloseQuestLog or HudInputKind.LeaveQuestFolder or
+            HudInputKind.AcceptQuest or
             HudInputKind.TurnInQuest or HudInputKind.CloseQuestInfo or HudInputKind.ToggleCharacter or
             HudInputKind.CloseCharacter => true,
         HudInputKind.TakeLootMoney => input.Amount == -1 || input.Amount > 0,
@@ -2857,5 +3269,6 @@ public sealed class NativeHud : IDisposable
         QuestLog,
         QuestInfo,
         Character,
+        MessageBox,
     }
 }

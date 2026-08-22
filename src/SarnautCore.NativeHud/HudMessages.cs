@@ -20,6 +20,8 @@ public enum HudEventKind
     QuestLogReplaced,
     QuestInfoReplaced,
     CharacterReplaced,
+    MessageBoxOffered,
+    MessageBoxWithdrawn,
 }
 
 public readonly record struct HudUnitPresentation(HudPlateAssignment Plate, bool OvertipCandidate)
@@ -123,7 +125,8 @@ public readonly record struct HudEvent(
     HudLootSnapshot? Loot,
     HudQuestLogSnapshot? QuestLog,
     HudQuestInfoSnapshot? QuestInfo,
-    HudCharacterSnapshot? Character)
+    HudCharacterSnapshot? Character,
+    HudMessageBoxRequest? MessageBox = null)
 {
     public static HudEvent ActionSlotChanged(
         HudStamp stamp,
@@ -222,6 +225,21 @@ public readonly record struct HudEvent(
         new(HudEventKind.CharacterReplaced, stamp, HudId.Empty, 0, -1, snapshot.Level, 0, false,
             snapshot.NameId, default, null, null, default, null, null, null, null, snapshot);
 
+    public static HudEvent MessageBoxOffered(HudStamp stamp, HudMessageBoxRequest request)
+    {
+        if (!request.IsValid)
+        {
+            throw new ArgumentException("Message-box request is invalid.", nameof(request));
+        }
+
+        return new HudEvent(HudEventKind.MessageBoxOffered, stamp, request.RequestId, 0, -1, 0, 0,
+            false, request.RelatedId, default, null, null, default, null, null, null, null, null, request);
+    }
+
+    public static HudEvent MessageBoxWithdrawn(HudStamp stamp, HudId requestId) =>
+        new(HudEventKind.MessageBoxWithdrawn, stamp, requestId, 0, -1, 0, 0, false, HudId.Empty,
+            default, null, null, default, null, null, null, null, null);
+
     internal bool PayloadEquals(in HudEvent other) =>
         Kind == other.Kind && EventId == other.EventId && EntityId == other.EntityId && Slot == other.Slot &&
         Value == other.Value && Auxiliary == other.Auxiliary && Flag == other.Flag &&
@@ -232,7 +250,8 @@ public readonly record struct HudEvent(
         (ReferenceEquals(Loot, other.Loot) || (Loot is not null && other.Loot is not null && Loot.ContentEquals(other.Loot))) &&
         (ReferenceEquals(QuestLog, other.QuestLog) || (QuestLog is not null && other.QuestLog is not null && QuestLog.ContentEquals(other.QuestLog))) &&
         (ReferenceEquals(QuestInfo, other.QuestInfo) || (QuestInfo is not null && other.QuestInfo is not null && QuestInfo.ContentEquals(other.QuestInfo))) &&
-        (ReferenceEquals(Character, other.Character) || (Character is not null && other.Character is not null && Character.ContentEquals(other.Character)));
+        (ReferenceEquals(Character, other.Character) || (Character is not null && other.Character is not null && Character.ContentEquals(other.Character))) &&
+        MessageBox == other.MessageBox;
 }
 
 public enum HudInputKind
@@ -271,12 +290,16 @@ public enum HudInputKind
     ToggleQuestLog,
     CloseQuestLog,
     SelectQuest,
+    SelectQuestBookmark,
+    EnterQuestFolder,
+    LeaveQuestFolder,
     AbandonQuest,
     ConfirmAbandonQuest,
     DeclineAbandonQuest,
     ShareQuest,
     AcceptSharedQuest,
     DeclineSharedQuest,
+    ResolveMessageBox,
     SelectTalkOption,
     SelectQuestReward,
     AcceptQuest,
@@ -357,6 +380,10 @@ public readonly record struct HudInput(
     public static HudInput ToggleQuestLog() => Context(HudInputKind.ToggleQuestLog);
     public static HudInput CloseQuestLog() => Context(HudInputKind.CloseQuestLog);
     public static HudInput SelectQuest(HudId questId) => Context(HudInputKind.SelectQuest, target: questId);
+    public static HudInput SelectQuestBookmark(HudQuestLogBookmark bookmark) =>
+        Context(HudInputKind.SelectQuestBookmark, value: (int)bookmark);
+    public static HudInput EnterQuestFolder(HudId folderId) => Context(HudInputKind.EnterQuestFolder, target: folderId);
+    public static HudInput LeaveQuestFolder() => Context(HudInputKind.LeaveQuestFolder);
     public static HudInput AbandonQuest(HudId questId) => Context(HudInputKind.AbandonQuest, target: questId);
     public static HudInput ConfirmAbandonQuest(HudId questId) => Context(HudInputKind.ConfirmAbandonQuest, target: questId);
     public static HudInput DeclineAbandonQuest() => Context(HudInputKind.DeclineAbandonQuest);
@@ -365,6 +392,8 @@ public readonly record struct HudInput(
         Context(HudInputKind.AcceptSharedQuest, target: shareId, secondaryTarget: questId);
     public static HudInput DeclineSharedQuest(HudId shareId, HudId questId) =>
         Context(HudInputKind.DeclineSharedQuest, target: shareId, secondaryTarget: questId);
+    public static HudInput ResolveMessageBox(HudId requestId, HudMessageBoxDecision decision) =>
+        Context(HudInputKind.ResolveMessageBox, target: requestId, value: (int)decision);
     public static HudInput SelectTalkOption(int option) => Context(HudInputKind.SelectTalkOption, slot: option);
     public static HudInput SelectQuestReward(int rewardIndex) => Context(HudInputKind.SelectQuestReward, slot: rewardIndex);
     public static HudInput AcceptQuest() => Context(HudInputKind.AcceptQuest);
@@ -407,6 +436,7 @@ public enum HudCommandKind
     DeclineSharedQuest,
     AcceptQuest,
     TurnInQuest,
+    ResolveMessageBox,
 }
 
 public readonly record struct HudCommand(
@@ -419,7 +449,8 @@ public readonly record struct HudCommand(
     bool Flag = false,
     HudId SecondaryValue = default,
     HudStamp ExpectedRevision = default,
-    long Amount = 0)
+    long Amount = 0,
+    HudId RelatedValue = default)
 {
     public static HudCommand ActivateAction(int slot, HudStamp expectedRevision) =>
         new(HudCommandKind.ActivateAction, slot, -1, 0, HudId.Empty, ExpectedRevision: expectedRevision);
@@ -458,7 +489,9 @@ public readonly record struct HudCommand(
         new(HudCommandKind.TakeAllLoot, -1, -1, corpseEntityId, HudId.Empty,
             ExpectedRevision: expectedRevision);
 
-    public static HudCommand CloseLoot() => new(HudCommandKind.CloseLoot, -1, -1, 0, HudId.Empty);
+    public static HudCommand CloseLoot(ulong corpseEntityId, HudStamp expectedRevision) =>
+        new(HudCommandKind.CloseLoot, -1, -1, corpseEntityId, HudId.Empty,
+            ExpectedRevision: expectedRevision);
 
     public static HudCommand AbandonQuest(HudId questId, HudStamp expectedRevision) =>
         new(HudCommandKind.AbandonQuest, -1, -1, 0, questId, ExpectedRevision: expectedRevision);
@@ -480,6 +513,16 @@ public readonly record struct HudCommand(
     public static HudCommand TurnInQuest(HudId questId, ulong npcEntityId, int rewardIndex, HudStamp expectedRevision) =>
         new(HudCommandKind.TurnInQuest, rewardIndex, -1, npcEntityId, questId,
             ExpectedRevision: expectedRevision);
+
+    public static HudCommand ResolveMessageBox(
+        HudId requestId,
+        HudMessageBoxPurpose purpose,
+        HudMessageBoxDecision decision,
+        HudId relatedId,
+        HudId secondaryId,
+        HudStamp expectedRevision) =>
+        new(HudCommandKind.ResolveMessageBox, (int)decision, (int)purpose, 0, requestId,
+            SecondaryValue: secondaryId, ExpectedRevision: expectedRevision, RelatedValue: relatedId);
 }
 
 public enum HudDispatchStatus

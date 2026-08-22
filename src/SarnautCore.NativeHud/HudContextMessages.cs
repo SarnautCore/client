@@ -262,7 +262,8 @@ public sealed class HudQuestLogSnapshot
         HudQuestDocument[] quests,
         HudQuestLogBookmark activeBookmark = HudQuestLogBookmark.Zones,
         HudId[]? secretComponents = null,
-        HudQuestShareInvitation? shareInvitation = null)
+        HudQuestShareInvitation? shareInvitation = null,
+        HudQuestShareOffer? shareOffer = null)
     {
         ArgumentNullException.ThrowIfNull(quests);
         _quests = (HudQuestDocument[])quests.Clone();
@@ -290,13 +291,21 @@ public sealed class HudQuestLogSnapshot
             throw new ArgumentException("Quest-share invitations need share, quest, and sharer identifiers.", nameof(shareInvitation));
         }
 
+        if (shareOffer is { IsValid: false })
+        {
+            throw new ArgumentException("Outgoing quest-share offers need a quest and valid retail TTL.", nameof(shareOffer));
+        }
+
         ShareInvitation = shareInvitation;
+        ShareOffer = shareOffer;
         ActiveBookmark = activeBookmark;
     }
 
     public ReadOnlySpan<HudQuestDocument> Quests => _quests;
 
     public HudQuestShareInvitation? ShareInvitation { get; }
+
+    public HudQuestShareOffer? ShareOffer { get; }
 
     public HudQuestLogBookmark ActiveBookmark { get; }
 
@@ -305,6 +314,7 @@ public sealed class HudQuestLogSnapshot
     internal bool ContentEquals(HudQuestLogSnapshot other)
     {
         if (_quests.Length != other._quests.Length || ShareInvitation != other.ShareInvitation ||
+            ShareOffer != other.ShareOffer ||
             ActiveBookmark != other.ActiveBookmark || !SecretComponents.SequenceEqual(other.SecretComponents))
         {
             return false;
@@ -322,9 +332,31 @@ public sealed class HudQuestLogSnapshot
     }
 }
 
-public readonly record struct HudQuestShareInvitation(HudId ShareId, HudId QuestId, HudId SharerNameId)
+public enum HudQuestShareOfferKind
 {
-    internal bool IsValid => !ShareId.IsEmpty && !QuestId.IsEmpty && !SharerNameId.IsEmpty;
+    Manual,
+    AutomaticOnStart,
+}
+
+public readonly record struct HudQuestShareOffer(
+    HudId QuestId,
+    HudQuestShareOfferKind Kind,
+    int RemainingMilliseconds)
+{
+    internal bool IsValid => !QuestId.IsEmpty && (uint)Kind <= (uint)HudQuestShareOfferKind.AutomaticOnStart &&
+        RemainingMilliseconds > 0 &&
+        RemainingMilliseconds <= (Kind == HudQuestShareOfferKind.Manual ? 60_000 : 10_000);
+}
+
+public readonly record struct HudQuestShareInvitation(
+    HudId ShareId,
+    HudId QuestId,
+    HudId SharerNameId,
+    HudQuestShareOfferKind OfferKind = HudQuestShareOfferKind.Manual,
+    int OfferRemainingMilliseconds = 60_000)
+{
+    internal bool IsValid => !ShareId.IsEmpty && !QuestId.IsEmpty && !SharerNameId.IsEmpty &&
+        new HudQuestShareOffer(QuestId, OfferKind, OfferRemainingMilliseconds).IsValid;
 }
 
 public readonly record struct HudQuestReputation(HudId FactionId, long Value);
