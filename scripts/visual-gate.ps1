@@ -67,7 +67,10 @@ $probes = @(
         )
     },
     @{ Scene = "directional_lighting_probe"; Timeout = 300 },
-    @{ Scene = "gameplay_hud_converted_lifecycle_smoke"; Timeout = 240 },
+    @{ Scene = "native_hud_compiled_lifecycle_smoke"; Timeout = 240; RequiredStdoutPatterns = @(
+            '(?m)^NATIVE_HUD_COMPILED_LIFECYCLE message_boxes=2 action_slots=36 result=PASS\s*$'
+        )
+    },
     @{ Scene = "gameplay_hud_layout_smoke"; Timeout = 240 },
     @{ Scene = "live_zone_player_animation_probe"; Timeout = 240 },
     @{ Scene = "native_character_lod_smoke"; Timeout = 600; MaxSeconds = 45; MaxPeakBytes = 2469606195; Environment = @{
