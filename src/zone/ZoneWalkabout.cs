@@ -280,6 +280,7 @@ public partial class ZoneWalkabout : Node3D
 
         root.Name = "ZonePresentation";
         Node3D sky = root.GetNode<Node3D>(presentation.Topology.SkyRootNode);
+        sky.Owner = null;
         root.RemoveChild(sky);
         var cameraCenteredSky = new CameraCenteredSky { Name = "CameraCenteredSky" };
         cameraCenteredSky.AddChild(sky);
