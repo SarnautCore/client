@@ -18,6 +18,7 @@ public sealed class HudProductManifestParserTests
         HudProduct product = HudProductManifestParser.BuildProduct(manifest);
 
         Assert.Equal(HudProductManifestParser.Schema, manifest.Schema);
+        Assert.Equal(HudChatCommandJson.ProductRelativePath, manifest.ChatCommands.Resource);
         Assert.Equal(HudChatAntiSpamCatalog.ProductRelativePath, manifest.ChatAntiSpam.Resource);
         Assert.Equal(HudSemanticEvent.OpenOptions,
             Assert.Single(manifest.InputBindings, binding => binding.Input == "open-options").Event);
@@ -92,6 +93,10 @@ public sealed class HudProductManifestParserTests
         JsonObject antiSpam = Object();
         antiSpam["chat_antispam"]!["resource"] = "catalogs/renamed-chat-antispam.json";
         Assert.Throws<InvalidDataException>(() => HudProductManifestParser.Parse(antiSpam.ToJsonString()));
+
+        JsonObject chatCommands = Object();
+        chatCommands["chat_commands"]!["resource"] = "catalogs/renamed-chat-commands.json";
+        Assert.Throws<InvalidDataException>(() => HudProductManifestParser.Parse(chatCommands.ToJsonString()));
 
         JsonObject traversal = Object();
         traversal["theme"] = "../theme.res";

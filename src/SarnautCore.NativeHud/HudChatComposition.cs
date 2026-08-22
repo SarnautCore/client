@@ -119,20 +119,62 @@ public sealed record HudChatCommandDefinition
 
 public readonly record struct HudChatSuggestion(string CommandId, string Alias);
 
+public sealed record HudChatChannelPresentation
+{
+    public HudChatChannelPresentation(
+        string channelId,
+        byte clientChatType,
+        string localizedPrefix,
+        string defaultColorClass,
+        bool bubbleEligible,
+        HudChatChannel? runtimeChannel)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(channelId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(localizedPrefix);
+        ArgumentException.ThrowIfNullOrWhiteSpace(defaultColorClass);
+        if (channelId.Any(char.IsWhiteSpace) || !HudChatText.IsWellFormedUtf16(localizedPrefix))
+        {
+            throw new ArgumentException("Chat channel presentation text is invalid.");
+        }
+
+        ChannelId = channelId;
+        ClientChatType = clientChatType;
+        LocalizedPrefix = localizedPrefix;
+        DefaultColorClass = defaultColorClass;
+        BubbleEligible = bubbleEligible;
+        RuntimeChannel = runtimeChannel;
+    }
+
+    public string ChannelId { get; }
+
+    public byte ClientChatType { get; }
+
+    public string LocalizedPrefix { get; }
+
+    public string DefaultColorClass { get; }
+
+    public bool BubbleEligible { get; }
+
+    public HudChatChannel? RuntimeChannel { get; }
+}
+
 public sealed class HudChatCommandCatalog
 {
     private readonly char[] _prefixes;
     private readonly HudChatCommandDefinition[] _commands;
+    private readonly HudChatChannelPresentation[] _channels;
 
     public HudChatCommandCatalog(
         IEnumerable<char> prefixes,
         IEnumerable<HudChatCommandDefinition> commands,
-        int autocompleteCapacity)
+        int autocompleteCapacity,
+        IEnumerable<HudChatChannelPresentation>? channels = null)
     {
         ArgumentNullException.ThrowIfNull(prefixes);
         ArgumentNullException.ThrowIfNull(commands);
         _prefixes = prefixes.ToArray();
         _commands = commands.ToArray();
+        _channels = channels?.ToArray() ?? [];
         if (_prefixes.Length == 0 || _prefixes.Distinct().Count() != _prefixes.Length)
         {
             throw new ArgumentException("Chat prefixes must be non-empty and unique.", nameof(prefixes));
@@ -149,8 +191,14 @@ public sealed class HudChatCommandCatalog
         }
 
         var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var commandIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (HudChatCommandDefinition command in _commands)
         {
+            if (!commandIds.Add(command.Id))
+            {
+                throw new ArgumentException($"Chat command ID '{command.Id}' is duplicated.", nameof(commands));
+            }
+
             foreach (string alias in command.Aliases)
             {
                 if (!aliases.Add(alias))
@@ -160,10 +208,43 @@ public sealed class HudChatCommandCatalog
             }
         }
 
+        var channelIds = new HashSet<string>(StringComparer.Ordinal);
+        var clientTypes = new HashSet<byte>();
+        var runtimeChannels = new HashSet<HudChatChannel>();
+        foreach (HudChatChannelPresentation channel in _channels)
+        {
+            if (!channelIds.Add(channel.ChannelId) || !clientTypes.Add(channel.ClientChatType) ||
+                (channel.RuntimeChannel is HudChatChannel runtime && !runtimeChannels.Add(runtime)))
+            {
+                throw new ArgumentException("Chat channel presentations must have unique IDs, client types, and runtime channels.", nameof(channels));
+            }
+        }
+
         AutocompleteCapacity = autocompleteCapacity;
     }
 
     public int AutocompleteCapacity { get; }
+
+    public int CommandCount => _commands.Length;
+
+    public int ChannelCount => _channels.Length;
+
+    public ReadOnlySpan<HudChatChannelPresentation> Channels => _channels;
+
+    public bool TryGetPresentation(HudChatChannel channel, out HudChatChannelPresentation? presentation)
+    {
+        foreach (HudChatChannelPresentation candidate in _channels)
+        {
+            if (candidate.RuntimeChannel == channel)
+            {
+                presentation = candidate;
+                return true;
+            }
+        }
+
+        presentation = null;
+        return false;
+    }
 
     internal bool IsPrefix(char value) => _prefixes.Contains(value);
 
@@ -246,12 +327,39 @@ public enum HudChatCommitKind
     OpenTrade,
     Unsupported,
     Throttled,
+    WrongFormat,
+}
+
+public abstract record HudChatLocalAction
+{
+    private HudChatLocalAction()
+    {
+    }
+
+    public sealed record InviteTradeByName : HudChatLocalAction
+    {
+        public InviteTradeByName(string playerName)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(playerName);
+            if (!HudChatText.IsWellFormedUtf16(playerName))
+            {
+                throw new ArgumentException("A trade player name must be valid UTF-16.", nameof(playerName));
+            }
+
+            PlayerName = playerName;
+        }
+
+        public string PlayerName { get; }
+    }
+
+    public sealed record InviteTradeSelectedTarget : HudChatLocalAction;
 }
 
 public readonly record struct HudChatCommit(
     HudChatCommitKind Kind,
     HudChatSubmission? Submission,
-    string? CommandId)
+    string? CommandId,
+    HudChatLocalAction? LocalAction = null)
 {
     public static HudChatCommit None => default;
 }
@@ -382,7 +490,16 @@ public sealed class HudChatComposer
 
         if (command!.Action == HudChatCommandAction.OpenTrade)
         {
-            return new HudChatCommit(HudChatCommitKind.OpenTrade, null, command.Id);
+            string argument = commandEnd == Text.Length ? string.Empty : Text[(commandEnd + 1)..].Trim();
+            if (argument is "\"\"" or "''")
+            {
+                return new HudChatCommit(HudChatCommitKind.WrongFormat, null, command.Id);
+            }
+
+            HudChatLocalAction action = argument.Length == 0
+                ? new HudChatLocalAction.InviteTradeSelectedTarget()
+                : new HudChatLocalAction.InviteTradeByName(argument);
+            return new HudChatCommit(HudChatCommitKind.OpenTrade, null, command.Id, action);
         }
 
         if (command.Action == HudChatCommandAction.Unsupported)

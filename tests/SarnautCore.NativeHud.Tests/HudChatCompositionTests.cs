@@ -120,6 +120,19 @@ public sealed class HudChatCompositionTests
         HudChatCommit trade = composer.Enter(0);
         Assert.Equal(HudChatCommitKind.OpenTrade, trade.Kind);
         Assert.Null(trade.Submission);
+        Assert.IsType<HudChatLocalAction.InviteTradeSelectedTarget>(trade.LocalAction);
+
+        composer.Open();
+        composer.TrySetText("/trade Alice The Swift");
+        trade = composer.Enter(0);
+        var named = Assert.IsType<HudChatLocalAction.InviteTradeByName>(trade.LocalAction);
+        Assert.Equal("Alice The Swift", named.PlayerName);
+
+        composer.Open();
+        composer.TrySetText("/trade \"\"");
+        trade = composer.Enter(0);
+        Assert.Equal(HudChatCommitKind.WrongFormat, trade.Kind);
+        Assert.Null(trade.LocalAction);
 
         composer.Open();
         composer.TrySetText("/dance now");
@@ -149,6 +162,25 @@ public sealed class HudChatCompositionTests
             ['/'],
             [Command("first", "same"), Command("second", "SAME")],
             22));
+    }
+
+    [Fact]
+    public void CatalogRejectsAmbiguousCommandAndChannelPresentationKeys()
+    {
+        Assert.Throws<ArgumentException>(() => new HudChatCommandCatalog(
+            ['/'],
+            [Command("same", "first"), Command("SAME", "second")],
+            22));
+
+        HudChatChannelPresentation first =
+            new("say", 2, "Say", "LogColorWhite", true, HudChatChannel.Say);
+        HudChatChannelPresentation duplicateRuntime =
+            new("other", 3, "Other", "LogColorOther", false, HudChatChannel.Say);
+        Assert.Throws<ArgumentException>(() => new HudChatCommandCatalog(
+            ['/'],
+            [Command("say", "say")],
+            22,
+            [first, duplicateRuntime]));
     }
 
     [Fact]
