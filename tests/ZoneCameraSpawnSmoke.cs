@@ -57,9 +57,13 @@ public partial class ZoneCameraSpawnSmoke : Node
         await ToSignal(GetTree(), SceneTree.SignalName.PhysicsFrame);
         await ToSignal(GetTree(), SceneTree.SignalName.PhysicsFrame);
 
+        // The authored League spawn is on the corridor collision, above the
+        // terrain surface and below an overhead corridor collider. Cast from
+        // just above the feet so the test sees the supporting surface instead
+        // of starting below it or selecting the ceiling.
         PhysicsRayQueryParameters3D query = PhysicsRayQueryParameters3D.Create(
-            new Vector3(spawn.X, 100, spawn.Z),
-            new Vector3(spawn.X, -100, spawn.Z),
+            spawn + (Vector3.Up * 0.5f),
+            new Vector3(spawn.X, loader.TerrainBounds.Position.Y - 100.0f, spawn.Z),
             collisionMask: 1);
         query.Exclude = [walker.GetRid()];
         Godot.Collections.Dictionary hit = GetViewport().World3D.DirectSpaceState.IntersectRay(query);
@@ -81,12 +85,12 @@ public partial class ZoneCameraSpawnSmoke : Node
             + $"result={(passed ? "PASS" : "FAIL")}");
         if (!grounded)
         {
-            GD.PushError($"ZONE_CAMERA_SPAWN_SMOKE no terrain exists below {spawn}");
+            GD.PushError($"ZONE_CAMERA_SPAWN_SMOKE no authored support exists below {spawn}");
         }
 
         if (!framed)
         {
-            GD.PushError($"ZONE_CAMERA_SPAWN_SMOKE actual walkabout camera does not frame terrain from {spawn}");
+            GD.PushError($"ZONE_CAMERA_SPAWN_SMOKE actual walkabout camera does not frame the spawn support from {spawn}");
         }
 
         scene.QueueFree();

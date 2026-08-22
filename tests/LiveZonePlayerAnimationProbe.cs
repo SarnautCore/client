@@ -49,6 +49,9 @@ public partial class LiveZonePlayerAnimationProbe : Node
         Node? boundSkeleton = skinnedMesh == null || skinnedMesh.Skeleton.IsEmpty
             ? null
             : skinnedMesh.GetNodeOrNull(skinnedMesh.Skeleton);
+        bool usesEngineLocalSkeleton = skinnedMesh is not null
+            && skinnedMesh.Skeleton.IsEmpty
+            && skinnedMesh.GetParent() == skeleton;
 
         Expect(player?.IsPlaying() == true, "live idle reports active playback");
         Expect(lastTime > firstTime + 0.05, $"live idle time advances, saw {firstTime:F3} -> {lastTime:F3}");
@@ -56,8 +59,12 @@ public partial class LiveZonePlayerAnimationProbe : Node
         Expect(Mathf.Abs(rightArm.Y) > 0.25f && Mathf.Abs(leftArm.Y) > 0.25f,
             $"live idle lowers both arms out of bind pose, right={rightArm} left={leftArm}");
         Expect(skinnedMesh != null, "live player has a runtime skinned mesh");
-        Expect(boundSkeleton == skeleton,
-            $"runtime mesh resolves its skeleton path '{skinnedMesh?.Skeleton}' to the animated skeleton");
+        Expect(skinnedMesh?.Skin?.GetBindCount() > 0, "live player skin has authored bone binds");
+        // Godot 4.7 resolves an empty Skeleton path to the parent Skeleton3D.
+        // Keeping the path empty avoids the engine-side T-pose regression that
+        // an explicit ".." path causes for these compiled native scenes.
+        Expect(usesEngineLocalSkeleton || boundSkeleton == skeleton,
+            $"runtime mesh binds to the animated parent skeleton; path='{skinnedMesh?.Skeleton}'");
         Expect(fallbackMesh == null || !fallbackMesh.Visible, "static OBJ fallback is hidden");
 
         bool passed = _failures.Count == 0;
@@ -65,7 +72,7 @@ public partial class LiveZonePlayerAnimationProbe : Node
             $"LIVE_ZONE_PLAYER_ANIMATION clip=\"{character.ActiveClip}\" playing={player?.IsPlaying() == true} "
             + $"time={firstTime:F3}->{lastTime:F3} pose_advanced={poseAdvanced} "
             + $"right_arm={rightArm} left_arm={leftArm} skin_path=\"{skinnedMesh?.Skeleton}\" "
-            + $"skin_resolved={boundSkeleton == skeleton} fallback_visible={fallbackMesh?.Visible} "
+            + $"skin_resolved={usesEngineLocalSkeleton || boundSkeleton == skeleton} fallback_visible={fallbackMesh?.Visible} "
             + $"result={(passed ? "PASS" : "FAIL")}");
         foreach (string failure in _failures)
         {
