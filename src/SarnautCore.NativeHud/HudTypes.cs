@@ -103,8 +103,9 @@ public enum HudEventFamilies
     QuestLog = 1 << 7,
     QuestInfo = 1 << 8,
     Character = 1 << 9,
+    MessageBoxes = 1 << 11,
     All = ActionSlots | TargetSelection | Units | CombatFeedback | QuestTracker | Chat | Inventory | Loot |
-        QuestLog | QuestInfo | Character,
+        QuestLog | QuestInfo | Character | MessageBoxes,
 }
 
 [Flags]
@@ -128,10 +129,11 @@ public enum HudCommandFamilies
     DeclineSharedQuest = 1 << 14,
     AcceptQuest = 1 << 15,
     TurnInQuest = 1 << 16,
+    ResolveMessageBox = 1 << 17,
     All = ActivateAction | SelectWorldEntity | SubmitChat | InteractWorldEntity |
         MoveInventoryItem | DropInventoryItem | UseInventoryItem | DressInventoryItem |
         UndressInventoryItem | TakeLoot | CloseLoot | AbandonQuest | ShareQuest |
-        AcceptSharedQuest | DeclineSharedQuest | AcceptQuest | TurnInQuest,
+        AcceptSharedQuest | DeclineSharedQuest | AcceptQuest | TurnInQuest | ResolveMessageBox,
 }
 
 public readonly record struct HudSessionCapabilities(HudEventFamilies Events, HudCommandFamilies Commands);

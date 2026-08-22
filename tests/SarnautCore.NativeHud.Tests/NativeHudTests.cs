@@ -23,6 +23,66 @@ public sealed class NativeHudTests
     }
 
     [Fact]
+    public void ItemPresentationCatalogUsesExactIdsAndReturnsFalseOnMiss()
+    {
+        var presentation = new HudItemPresentation(
+            Id("item.sword"), Id("item.sword.name"), Id("item.sword.description"), Id("item.sword.icon"),
+            HudItemQuality.Common, HudItemCategory.Equipment, HudEquipmentSlot.MainHand,
+            new HudRetailDressSlot("MAINHAND", 14), 1, Id("item-action.item.sword"));
+        var noAction = new HudItemPresentation(
+            Id("item.armor"), Id("item.armor.name"), Id("item.armor.description"), Id("item.armor.icon"),
+            HudItemQuality.Goods, HudItemCategory.Equipment, HudEquipmentSlot.Armor,
+            new HudRetailDressSlot("ARMOR", 1), 1, null);
+        IHudItemPresentationCatalog catalog = new RecordingHudItemPresentationCatalog([presentation, noAction]);
+
+        Assert.True(catalog.TryGet(Id("item.sword"), out HudItemPresentation found));
+        Assert.Equal(presentation, found);
+        Assert.False(catalog.TryGet(Id("item.missing"), out HudItemPresentation missing));
+        Assert.Equal(default, missing);
+        var recording = Assert.IsType<RecordingHudItemPresentationCatalog>(catalog);
+        Assert.Equal([Id("item.sword"), Id("item.missing")], recording.Lookups);
+    }
+
+    [Fact]
+    public void SharedMessageBoxProjectsAndResolvesItemConfirmation()
+    {
+        var session = new InMemoryHudSession();
+        using NativeHud hud = Open(session);
+        var request = new HudMessageBoxRequest(
+            Id("message.item-confirmation.7"),
+            HudMessageBoxPurpose.ItemConfirmation,
+            Id("message.item-confirmation.header"),
+            Id("message.item-confirmation.body"),
+            Id("item.teleport-stone"),
+            Id("item-action.teleport-stone"),
+            HudMessageBoxButtons.Confirm,
+            HudMessageBoxDecision.Decline,
+            30_000,
+            0,
+            Stamp(9));
+        session.TryQueue(HudEvent.MessageBoxOffered(Stamp(9), request));
+
+        HudDiff opened = hud.Advance(Frame(100));
+        Assert.Equal(HudFocus.Modal, opened.ReadModel.Focus);
+        Assert.Equal(1, opened.ReadModel.MessageBoxes.Count);
+        Assert.Equal(request.RequestId, opened.ReadModel.MessageBoxes.ActiveRequestId);
+        HudMessageBoxView view = Assert.Single(opened.ReadModel.MessageBoxes.Entries.ToArray(), entry => entry.Active);
+        Assert.Equal(30_000, view.RemainingMilliseconds);
+        Assert.Equal(Id("context-uni-message-box"), view.Element);
+
+        hud.Dispatch(HudInput.ResolveMessageBox(request.RequestId, HudMessageBoxDecision.Accept));
+        HudDiff resolved = hud.Advance(Frame(101));
+        Assert.Equal(0, resolved.ReadModel.MessageBoxes.Count);
+        Assert.True(session.TryReadCommand(out HudCommand command));
+        Assert.Equal(HudCommandKind.ResolveMessageBox, command.Kind);
+        Assert.Equal((int)HudMessageBoxDecision.Accept, command.Slot);
+        Assert.Equal((int)HudMessageBoxPurpose.ItemConfirmation, command.Auxiliary);
+        Assert.Equal(request.RelatedId, command.RelatedValue);
+        Assert.Equal(request.SecondaryId, command.SecondaryValue);
+        Assert.Equal(request.ExpectedRevision, command.ExpectedRevision);
+    }
+
+    [Fact]
     public void NewerAuthorityWinsAndStaleOrConflictingAuthorityDoesNot()
     {
         var session = new InMemoryHudSession();
@@ -690,6 +750,7 @@ public sealed class NativeHudTests
         hud.Dispatch(HudInput.TakeLootItem(7));
         hud.Dispatch(HudInput.TakeLootMoney());
         hud.Dispatch(HudInput.TakeAllLoot());
+        hud.Dispatch(HudInput.CloseLoot());
         HudDiff next = hud.Advance(Frame(1));
 
         Assert.Equal(1, next.ReadModel.Loot.Page);
@@ -701,6 +762,10 @@ public sealed class NativeHudTests
         Assert.Equal(HudCommandKind.TakeLootMoney, money.Kind);
         Assert.True(session.TryReadCommand(out HudCommand all));
         Assert.Equal(HudCommandKind.TakeAllLoot, all.Kind);
+        Assert.True(session.TryReadCommand(out HudCommand close));
+        Assert.Equal(HudCommandKind.CloseLoot, close.Kind);
+        Assert.Equal(77UL, close.EntityId);
+        Assert.Equal(Stamp(1), close.ExpectedRevision);
     }
 
     [Fact]
@@ -754,6 +819,39 @@ public sealed class NativeHudTests
         Assert.True(session.TryReadCommand(out HudCommand command));
         Assert.Equal(HudCommandKind.AcceptSharedQuest, command.Kind);
         Assert.Equal(Stamp(3), command.ExpectedRevision);
+    }
+
+    [Fact]
+    public void QuestShareTimersAndBookmarkFolderSelectionRemainDistinct()
+    {
+        var session = new InMemoryHudSession();
+        using NativeHud hud = Open(session);
+        HudQuestDocument quest = Quest(Id("quest.auto"), HudQuestClientState.InProgress);
+        var invitation = new HudQuestShareInvitation(
+            Id("share.auto"), quest.QuestId, Id("sharer"),
+            HudQuestShareOfferKind.AutomaticOnStart, 10_000);
+        var offer = new HudQuestShareOffer(quest.QuestId, HudQuestShareOfferKind.Manual, 60_000);
+        session.TryQueue(HudEvent.QuestLogReplaced(
+            Stamp(4), new HudQuestLogSnapshot([quest], shareInvitation: invitation, shareOffer: offer)));
+        HudDiff opened = hud.Advance(Frame(100));
+        Assert.Equal(10_100, opened.ReadModel.QuestLog.ShareInvitationExpiresAtMilliseconds);
+        Assert.Equal(60_100, opened.ReadModel.QuestLog.ShareOfferExpiresAtMilliseconds);
+
+        hud.Dispatch(HudInput.SelectQuestBookmark(HudQuestLogBookmark.WorldSecrets));
+        hud.Dispatch(HudInput.EnterQuestFolder(Id("folder.zone")));
+        hud.Dispatch(HudInput.ShareQuest(quest.QuestId));
+        HudDiff selected = hud.Advance(Frame(101));
+        Assert.Equal(HudQuestLogBookmark.WorldSecrets, selected.ReadModel.QuestLog.ActiveBookmark);
+        Assert.Equal(Id("folder.zone"), selected.ReadModel.QuestLog.SelectedFolderId);
+        Assert.True(session.TryReadCommand(out HudCommand share));
+        Assert.Equal(HudCommandKind.ShareQuest, share.Kind);
+
+        HudDiff expired = hud.Advance(Frame(10_101));
+        Assert.Null(expired.ReadModel.QuestLog.ShareInvitation);
+        Assert.True(session.TryReadCommand(out HudCommand decline));
+        Assert.Equal(HudCommandKind.DeclineSharedQuest, decline.Kind);
+        Assert.Equal(invitation.ShareId, decline.Value);
+        Assert.NotNull(expired.ReadModel.QuestLog.ShareOffer);
     }
 
     [Fact]
@@ -922,7 +1020,8 @@ public sealed class NativeHudTests
                 Roles("quest-info-choice", 5), Roles("quest-info-mandatory", 5),
                 Roles("quest-info-reputation", 5), Roles("quest-info-currency", 5)),
             new HudCharacterProduct(
-                Id("character"), Roles("character-equipment", 21), Roles("character-stat", 14)));
+                Id("character"), Roles("character-equipment", 21), Roles("character-stat", 14)),
+            new HudMessageBoxProduct(Id("context-uni-message-box")));
     }
 
     private static HudFrame Frame(long now) => new(now, Viewport);

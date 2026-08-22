@@ -19,6 +19,7 @@ public enum HudChangeKind
     QuestLog,
     QuestInfo,
     Character,
+    MessageBox,
 }
 
 [Flags]
@@ -41,9 +42,10 @@ public enum HudRefreshAreas
     QuestLog = 1 << 12,
     QuestInfo = 1 << 13,
     Character = 1 << 14,
+    MessageBoxes = 1 << 16,
     All = ActionSlots | TargetSelection | UnitPlates | Overtips | Feedback | QuestTracker | Chat |
         WorldChat | Focus | Cursor | VirtualPointer | Inventory | Loot | QuestLog |
-        QuestInfo | Character,
+        QuestInfo | Character | MessageBoxes,
 }
 
 [Flags]
@@ -94,6 +96,7 @@ public enum HudErrorCode
     LootCapacityExceeded,
     QuestLogCapacityExceeded,
     QuestInfoCapacityExceeded,
+    MessageBoxCapacityExceeded,
 }
 
 public readonly record struct HudError(HudErrorCode Code, HudStamp Stamp, HudId RelatedId, ulong EntityId, int Index);
@@ -284,13 +287,37 @@ public sealed class HudQuestLogReadModel
     public bool Open { get; internal set; }
     public int Count { get; internal set; }
     public HudQuestLogBookmark ActiveBookmark { get; internal set; }
+    public HudId SelectedFolderId { get; internal set; }
     public int SecretComponentCount { get; internal set; }
     public HudId SelectedQuestId { get; internal set; }
     public HudId PendingAbandonQuestId { get; internal set; }
     public long AbandonConfirmationExpiresAtMilliseconds { get; internal set; }
     public HudQuestShareInvitation? ShareInvitation { get; internal set; }
     public long ShareInvitationExpiresAtMilliseconds { get; internal set; }
+    public HudQuestShareOffer? ShareOffer { get; internal set; }
+    public long ShareOfferExpiresAtMilliseconds { get; internal set; }
     public HudStamp Revision { get; internal set; }
+}
+
+public readonly record struct HudQuestTalkOptionView(
+    HudId Element,
+    int Option,
+    HudId OptionId,
+    HudId LabelId,
+    HudId MarkId,
+    HudQuestClientState? QuestState,
+    bool Occupied,
+    bool Selected,
+    HudQuestDocument? Quest);
+
+public sealed class HudQuestTalkOptionsReadModel
+{
+    private readonly HudQuestTalkOptionView[] _options;
+
+    internal HudQuestTalkOptionsReadModel(HudQuestTalkOptionView[] options) => _options = options;
+
+    public ReadOnlySpan<HudQuestTalkOptionView> Options => _options;
+    public int Count { get; internal set; }
 }
 
 public readonly record struct HudQuestInfoView(
@@ -306,7 +333,8 @@ public readonly record struct HudQuestInfoView(
     HudQuestRewardSnapshot? Reward,
     int SelectedTalkOption,
     int SelectedRewardIndex,
-    HudStamp Revision);
+    HudStamp Revision,
+    HudQuestTalkOptionsReadModel TalkOptions);
 
 public readonly record struct HudCharacterEquipmentView(
     HudId Element,
@@ -372,7 +400,8 @@ public sealed class HudReadModel
         HudLootReadModel loot,
         HudQuestLogReadModel questLog,
         HudQuestInfoView questInfo,
-        HudCharacterReadModel character)
+        HudCharacterReadModel character,
+        HudMessageBoxReadModel messageBoxes)
     {
         _actionSlots = actionSlots;
         _feedback = feedback;
@@ -386,6 +415,7 @@ public sealed class HudReadModel
         QuestLog = questLog;
         QuestInfo = questInfo;
         Character = character;
+        MessageBoxes = messageBoxes;
     }
 
     public ReadOnlySpan<HudActionSlotView> ActionSlots => _actionSlots;
@@ -411,6 +441,8 @@ public sealed class HudReadModel
     public HudQuestInfoView QuestInfo { get; internal set; }
 
     public HudCharacterReadModel Character { get; }
+
+    public HudMessageBoxReadModel MessageBoxes { get; }
 
     public HudSelectedTargetView SelectedTarget { get; internal set; }
 
@@ -518,6 +550,7 @@ public sealed class HudDiff
         HudChangeKind.QuestLog => HudRefreshAreas.QuestLog,
         HudChangeKind.QuestInfo => HudRefreshAreas.QuestInfo,
         HudChangeKind.Character => HudRefreshAreas.Character,
+        HudChangeKind.MessageBox => HudRefreshAreas.MessageBoxes,
         _ => HudRefreshAreas.None,
     };
 }

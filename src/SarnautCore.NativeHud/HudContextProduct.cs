@@ -397,7 +397,7 @@ public sealed class HudCharacterProduct
     }
 }
 
-/// <summary>Validated semantic bindings for the five full-screen gameplay contexts.</summary>
+/// <summary>Validated semantic bindings for gameplay contexts and the one shared modal surface.</summary>
 public sealed class HudContextProduct
 {
     public HudContextProduct(
@@ -405,18 +405,21 @@ public sealed class HudContextProduct
         HudLootProduct loot,
         HudQuestLogProduct questLog,
         HudQuestInfoProduct questInfo,
-        HudCharacterProduct character)
+        HudCharacterProduct character,
+        HudMessageBoxProduct messageBox)
     {
         ArgumentNullException.ThrowIfNull(inventory);
         ArgumentNullException.ThrowIfNull(loot);
         ArgumentNullException.ThrowIfNull(character);
         ArgumentNullException.ThrowIfNull(questLog);
         ArgumentNullException.ThrowIfNull(questInfo);
+        ArgumentNullException.ThrowIfNull(messageBox);
         Inventory = inventory;
         Loot = loot;
         QuestLog = questLog;
         QuestInfo = questInfo;
         Character = character;
+        MessageBox = messageBox;
     }
 
     public HudInventoryProduct Inventory { get; }
@@ -428,4 +431,6 @@ public sealed class HudContextProduct
     public HudQuestInfoProduct QuestInfo { get; }
 
     public HudCharacterProduct Character { get; }
+
+    public HudMessageBoxProduct MessageBox { get; }
 }
