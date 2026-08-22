@@ -37,6 +37,7 @@ public sealed class OptionsRuntime : IDisposable, IChatBubbleSettingsSource
     private DefaultsConfirmationView? _defaultsConfirmation;
     private bool _opened;
     private bool _closed;
+    private bool _quarantined;
     private bool _disposed;
 
     internal OptionsRuntime(
@@ -69,6 +70,11 @@ public sealed class OptionsRuntime : IDisposable, IChatBubbleSettingsSource
 
     public OptionsTransition Open()
     {
+        if (_quarantined)
+        {
+            return Failure(OptionsIssueCode.RollbackContractViolation, fatal: true);
+        }
+
         if (_disposed)
         {
             return Failure(OptionsIssueCode.Disposed, fatal: true);
@@ -130,6 +136,11 @@ public sealed class OptionsRuntime : IDisposable, IChatBubbleSettingsSource
     public OptionsTransition Dispatch(OptionsCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        if (_quarantined)
+        {
+            return Failure(OptionsIssueCode.RollbackContractViolation, fatal: true);
+        }
+
         if (_disposed)
         {
             return Failure(OptionsIssueCode.Disposed);
@@ -172,7 +183,7 @@ public sealed class OptionsRuntime : IDisposable, IChatBubbleSettingsSource
             return;
         }
 
-        if (_opened && !_closed && HasAudioDraftChanges())
+        if (!_quarantined && _opened && !_closed && HasAudioDraftChanges())
         {
             try
             {
@@ -579,6 +590,7 @@ public sealed class OptionsRuntime : IDisposable, IChatBubbleSettingsSource
 
         if (commitFailure is OptionsIssueCode failure)
         {
+            _quarantined = rollbackViolated;
             return Failure(
                 rollbackViolated ? OptionsIssueCode.RollbackContractViolation : failure,
                 fatal: rollbackViolated);
@@ -1201,7 +1213,7 @@ public sealed class OptionsRuntime : IDisposable, IChatBubbleSettingsSource
             _conflict,
             _defaultsConfirmation,
             dirty,
-            dirty && !ModalActive(),
+            dirty && !ModalActive() && !_quarantined,
             _warnings);
     }
 

@@ -604,6 +604,47 @@ public sealed class OptionsRuntimeTests
     }
 
     [Fact]
+    public void RollbackViolationQuarantinesTheRuntimeWithoutFurtherAdapterCalls()
+    {
+        OptionsRuntime runtime = Open(out _, out RecordingOptionsAdapters adapters, out _);
+        runtime.Dispatch(new OptionsCommand.SetOption(
+            "masterVolume",
+            Row(runtime, "masterVolume").Choices[0]));
+        adapters.Persistence.FailCommit = true;
+        adapters.Input.FailRollback = true;
+
+        OptionsTransition failed = runtime.Dispatch(new OptionsCommand.Apply());
+        Assert.Equal(OptionsIssueCode.RollbackContractViolation, Assert.Single(failed.Issues).Code);
+        Assert.False(failed.View!.CanApply);
+
+        int settingsCommits = adapters.Settings.PreparedCommitCount;
+        int inputCommits = adapters.Input.PreparedCommitCount;
+        int storeCommits = adapters.Persistence.CommitCount;
+        int audioRestores = adapters.Audio.Restores.Count;
+        adapters.Persistence.FailCommit = false;
+        adapters.Input.FailRollback = false;
+
+        OptionsTransition edit = runtime.Dispatch(new OptionsCommand.SetOption(
+            "muteAll",
+            OptionScalar.FromBoolean(true)));
+        OptionsTransition retry = runtime.Dispatch(new OptionsCommand.Apply());
+        OptionsTransition reopen = runtime.Open();
+        runtime.Dispose();
+
+        Assert.All([edit, retry, reopen], transition =>
+        {
+            OptionsIssue issue = Assert.Single(transition.Issues);
+            Assert.Equal(OptionsIssueCode.RollbackContractViolation, issue.Code);
+            Assert.Equal(OptionsIssueSeverity.Fatal, issue.Severity);
+            Assert.False(transition.View!.CanApply);
+        });
+        Assert.Equal(settingsCommits, adapters.Settings.PreparedCommitCount);
+        Assert.Equal(inputCommits, adapters.Input.PreparedCommitCount);
+        Assert.Equal(storeCommits, adapters.Persistence.CommitCount);
+        Assert.Equal(audioRestores, adapters.Audio.Restores.Count);
+    }
+
+    [Fact]
     public void ThrowingInputPrepareDisposesThePreparedSettingsPlan()
     {
         OptionsRuntime runtime = Open(out _, out RecordingOptionsAdapters adapters, out _);
