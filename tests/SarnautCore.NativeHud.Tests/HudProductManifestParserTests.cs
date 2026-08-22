@@ -142,8 +142,8 @@ public sealed class HudProductManifestParserTests
     {
         HudSystemManifest systems = Systems();
         string[] semanticIds = SemanticIds(systems).Distinct(StringComparer.Ordinal).ToArray();
-        Assert.True(semanticIds.Length >= 490);
-        HudInputRoleBinding[] inputRoles = semanticIds.Take(490)
+        Assert.True(semanticIds.Length >= 497);
+        HudInputRoleBinding[] inputRoles = semanticIds.Take(497)
             .Select((id, index) => new HudInputRoleBinding(
                 id,
                 index + 1,
@@ -204,7 +204,13 @@ public sealed class HudProductManifestParserTests
             inputs,
             semanticIds.Take(41).Select((id, index) => new HudSoundBinding(
                 id, index % 2 == 0 ? HudSoundEvent.Open : HudSoundEvent.Close,
-                soundIds[index % soundIds.Length])).ToArray());
+                soundIds[index % soundIds.Length])).ToArray())
+        {
+            ChatAntispam = new(
+                "sarnaut.chat-antispam/v1",
+                "chat-antispam",
+                "catalogs/chat-antispam.json"),
+        };
     }
 
     private static HudSystemManifest Systems()
@@ -233,7 +239,10 @@ public sealed class HudProductManifestParserTests
                 new(HudTargetExtentSource.SelectedObjectCutTerrainAreaAndRadius, new(1, 2), new(1, 2), new(2, 1),
                     HudProjectionAxis.PositiveYToNegativeY, HudProjectionDepthPolicy.SelectedEntityVisualHeight,
                     HudVerticalOffsetPolicy.EntityGroundAnchor, 1, "DXT5 RGBA8", 4, true)),
-            Character(), Inventory(), Loot(), QuestLog(), QuestInfo(), NpcTalk());
+            Character(), Inventory(), Loot(), QuestLog(), QuestInfo(), NpcTalk())
+        {
+            MessageBox = MessageBox(),
+        };
     }
 
     private static HudCharacterSystem Character()
@@ -298,13 +307,19 @@ public sealed class HudProductManifestParserTests
         {
             string id = $"quest-log-row-{index:00}";
             return new HudQuestLogRowBinding(id, $"Node/{id}", Roles($"{id}-role", 13));
-        }).ToArray(), Roles("quest-log-bookmark", 3),
+        }).ToArray(),
+        [
+            new(Role("quest-log-bookmark-zones"), "quest-log-show-zones"),
+            new(Role("quest-log-bookmark-completed"), "quest-log-show-completed"),
+            new(Role("quest-log-bookmark-world-secrets"), "quest-log-show-world-secrets"),
+        ],
+        new(Role("quest-log-folder-toggle"), "quest-log-toggle-folder"),
         new(Pool("quest-log-objective", 5), Pool("quest-log-objective-no-number", 5),
             Pool("quest-log-reputation", 5), Pool("quest-log-currency", 5),
             Pool("quest-log-alternative-text", 5), Pool("quest-log-mandatory-text", 5),
             Pool("quest-log-alternative-icon", 5), Pool("quest-log-mandatory-icon", 5),
             Pool("quest-log-secret", 15)),
-        new("quest-share", "quest-share-accept", "quest-share-decline", "quest-abandon", 30_000),
+        new("quest-share", "quest-share-accept", "quest-share-decline", "message-box", "quest-abandon", 30_000),
         Roles("quest-log-role", 5), State("quest-log"));
 
     private static HudQuestInfoSystem QuestInfo() => new(
@@ -319,6 +334,50 @@ public sealed class HudProductManifestParserTests
         Pool("npc-talk-alternative-button", 5), Pool("npc-talk-mandatory-button", 5),
         Pool("npc-talk-reward-group", 5), Roles("npc-talk-role", 24),
         new("return-quest", "quest-id", "reward-index"), State("npc-talk"));
+
+    private static HudMessageBoxSystem MessageBox()
+    {
+        HudMessageBoxButton Button(string id, string action) => new(Role(id), action);
+        HudMessageBoxInstance Instance(int ordinal)
+        {
+            string id = $"message-box-{ordinal:00}";
+            return new(
+                id,
+                $"Node/{id}",
+                Role($"{id}-title"),
+                Role($"{id}-body"),
+                Role($"{id}-icon"),
+                Role($"{id}-progress"),
+                Role($"{id}-timer-label"),
+                Role($"{id}-button-tab"),
+                Role($"{id}-button-container"),
+                Button($"{id}-accept", "message-box-answer-accept"),
+                Button($"{id}-decline", "message-box-answer-decline"),
+                Button($"{id}-confirm", "message-box-answer-confirm"));
+        }
+
+        return new(
+            "message-box",
+            2,
+            new(
+                Role("message-box-prototype"),
+                Role("message-box-header-prototype"),
+                Role("message-box-text-prototype"),
+                Role("message-box-progress-prototype"),
+                Role("message-box-button-tab-prototype"),
+                Role("message-box-button-container-prototype"),
+                Role("message-box-accept-prototype"),
+                Role("message-box-decline-prototype"),
+                Role("message-box-confirm-prototype")),
+            [Instance(1), Instance(2)],
+            new("queue", "request-order", "request-priority"),
+            new("second-timer", "request-default-button"),
+            new(
+                "message-box-answer-none",
+                "message-box-answer-accept",
+                "message-box-answer-decline",
+                "message-box-answer-confirm"));
+    }
 
     private static HudRolePool Pool(string id, int count) => new(count, $"Node/{id}-prototype", Roles(id, count));
     private static HudFeedbackPool Feedback(string id) => new(5, Roles($"feedback-{id}", 5));
@@ -350,7 +409,7 @@ public sealed class HudProductManifestParserTests
     }
 
     private static HudRootBinding[] RootBindings() =>
-        new[] { "world-input", "action-bar", "unit-plates", "overtips", "combat-feedback", "compass", "chat", "chat-input", "world-chat-bubbles", "quest-tracker", "target-selection", "character", "multibag", "loot-bag", "quest-log", "quest-info", "npc-talk" }
+        new[] { "world-input", "action-bar", "unit-plates", "overtips", "combat-feedback", "compass", "chat", "chat-input", "world-chat-bubbles", "quest-tracker", "target-selection", "character", "multibag", "loot-bag", "quest-log", "quest-info", "npc-talk", "message-box" }
             .Select(id => new HudRootBinding(id, $"Root/{id}", id == "target-selection")).ToArray();
 
     private static HudTimelineDefinition[] TimelineDefinitions() =>

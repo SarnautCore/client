@@ -4,6 +4,7 @@ using System.Linq;
 using Godot;
 using SarnautCore.Content;
 using SarnautCore.Gameplay;
+using SarnautCore.Networking;
 using SarnautCore.Shell;
 
 namespace SarnautCore;
@@ -21,13 +22,13 @@ namespace SarnautCore;
 /// </remarks>
 public partial class ZoneWalkabout : Node3D
 {
+    [Signal]
+    public delegate void NativeProductRequestedEventHandler(string productKey);
+
     /// <summary>The named input actions this scene reads, declared in <c>project.godot</c>.</summary>
     public const string TargetClick = "target_click";
     public const string TargetNearest = "target_nearest";
     public const string Interact = "interact";
-    public const string OpenQuestLog = "journal";
-    public const string OpenInventory = "inventory";
-    public const string AbilitySlot1 = "ability_slot_1";
 
     [Export] public string DefaultMapName { get; set; } = ZoneLoader.DefaultMapName;
     [Export] public string DefaultZoneId { get; set; } = "InstLeague1";
@@ -39,12 +40,6 @@ public partial class ZoneWalkabout : Node3D
     /// </summary>
     [Export] public NodePath StatusLabelPath { get; set; } = new("%Status");
 
-    /// <summary>
-    /// The scene-owned bottom overlay that the ability bar must stay above.
-    /// Its measured rectangle includes wrapping at the active viewport width.
-    /// </summary>
-    [Export] public NodePath HelpPanelPath { get; set; } = new("%HelpPanel");
-
     private SessionHost _session = null!;
     private readonly GameplayFocusOwner _focus = new();
     private ZoneLoader _loader = null!;
@@ -52,7 +47,7 @@ public partial class ZoneWalkabout : Node3D
     private EntityModelCatalog _characterCatalog = null!;
     private ZoneNetworkLoop? _networkLoop;
     private GameplayHudViewModel? _hudModel;
-    private GameplayHudControl? _hudControl;
+    private NativeGameplayHudHost? _nativeHud;
     private Label _status = null!;
     private string _zoneStatus = "";
 
@@ -125,6 +120,30 @@ public partial class ZoneWalkabout : Node3D
 
         _networkLoop = new ZoneNetworkLoop { Name = "NetworkLoop" };
         AddChild(_networkLoop);
+
+        var hudSession = new SessionHudAdapter(sourceEpoch: 1);
+        _networkLoop.AttachHudSession(hudSession);
+
+        var hudWorld = new ZoneNativeHudWorld(_networkLoop, this);
+        if (!NativeGameplayHudHost.TryMount(
+                GetNode<CanvasLayer>("Interface"),
+                NativeHudContentPaths.Canonical(),
+                _networkLoop.HudSession,
+                hudWorld,
+                RequestNativeProduct,
+                out _nativeHud,
+                out string hudError))
+        {
+            _status.Text = hudError;
+            _focus.Cancel();
+            _networkLoop.Free();
+            _networkLoop = null;
+            entityRoot.Free();
+            return;
+        }
+
+        // ZoneNetworkLoop still feeds the old model while its remaining inventory,
+        // loot, and dialogue consumers migrate. It has no visual mount.
         _hudModel = new GameplayHudViewModel(
             ownEntityId: 0,
             abilities:
@@ -137,9 +156,6 @@ public partial class ZoneWalkabout : Node3D
             inventoryCapacity: 16,
             stackLimit: _ => 20,
             focus: _focus);
-        _hudControl = new GameplayHudControl();
-        _hudControl.Initialize(_hudModel, _networkLoop, GetNode<Control>(HelpPanelPath));
-        GetNode<CanvasLayer>("Interface").AddChild(_hudControl);
         _networkLoop.Start(
             _walker,
             entityRoot,
@@ -152,6 +168,16 @@ public partial class ZoneWalkabout : Node3D
             SetNetworkStatus,
             OnAdmitted,
             OnRefused);
+    }
+
+    private void RequestNativeProduct(string productKey)
+    {
+        if (!StringComparer.Ordinal.Equals(productKey, "options"))
+        {
+            throw new InvalidOperationException($"Unknown native gameplay product '{productKey}'.");
+        }
+
+        EmitSignal(SignalName.NativeProductRequested, productKey);
     }
 
     internal static void ApplyPresentationSpawn(
@@ -434,29 +460,8 @@ public partial class ZoneWalkabout : Node3D
             return;
         }
 
-        if (_hudControl is not null && inputEvent.IsActionPressed(OpenInventory))
-        {
-            _hudControl.ToggleInventory();
-            GetViewport().SetInputAsHandled();
-            return;
-        }
-
-        if (_hudControl is not null && inputEvent.IsActionPressed(OpenQuestLog))
-        {
-            _hudControl.ToggleQuestLog();
-            GetViewport().SetInputAsHandled();
-            return;
-        }
-
         if (_networkLoop is null || !_focus.WorldInputEnabled)
         {
-            return;
-        }
-
-        if (inputEvent.IsActionPressed(AbilitySlot1))
-        {
-            _hudModel?.Abilities.TryRequestUse(0, _networkLoop.TargetEntityId);
-            GetViewport().SetInputAsHandled();
             return;
         }
 

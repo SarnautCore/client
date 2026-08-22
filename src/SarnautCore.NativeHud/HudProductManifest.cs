@@ -26,7 +26,11 @@ public sealed record HudProductManifest(
     [property: JsonPropertyName("mask_bindings")] HudMaskBinding[] MaskBindings,
     [property: JsonPropertyName("input_roles")] HudInputRoleBinding[] InputRoles,
     [property: JsonPropertyName("input_bindings")] HudSemanticInputBinding[] InputBindings,
-    [property: JsonPropertyName("sound_bindings")] HudSoundBinding[] SoundBindings);
+    [property: JsonPropertyName("sound_bindings")] HudSoundBinding[] SoundBindings)
+{
+    [JsonPropertyName("chat_antispam")]
+    public HudChatAntispamReference ChatAntispam { get; init; } = null!;
+}
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record HudSceneTopology(
@@ -50,6 +54,12 @@ public sealed record HudChatCommandCatalogReference(
     [property: JsonPropertyName("resource")] string Resource,
     [property: JsonPropertyName("locale")] string Locale,
     [property: JsonPropertyName("autocomplete_capacity")] int AutocompleteCapacity);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record HudChatAntispamReference(
+    [property: JsonPropertyName("schema")] string Schema,
+    [property: JsonPropertyName("product_key")] string ProductKey,
+    [property: JsonPropertyName("resource")] string Resource);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record HudExternalProductReference(
@@ -101,7 +111,11 @@ public sealed record HudSystemManifest(
     [property: JsonPropertyName("loot_bag")] HudLootBagSystem LootBag,
     [property: JsonPropertyName("quest_log")] HudQuestLogSystem QuestLog,
     [property: JsonPropertyName("quest_info")] HudQuestInfoSystem QuestInfo,
-    [property: JsonPropertyName("npc_talk")] HudNpcTalkSystem NpcTalk);
+    [property: JsonPropertyName("npc_talk")] HudNpcTalkSystem NpcTalk)
+{
+    [JsonPropertyName("message_box")]
+    public HudMessageBoxSystem MessageBox { get; init; } = null!;
+}
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record HudRoleSystem(
@@ -123,6 +137,11 @@ public sealed record HudChatInputSystem(
 public sealed record HudSemanticRole(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("role")] string Role);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record HudSemanticControl(
+    [property: JsonPropertyName("role")] HudSemanticRole Role,
+    [property: JsonPropertyName("action")] string Action);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record HudActionBarSystem(
@@ -313,7 +332,8 @@ public sealed record HudQuestLogSystem(
     [property: JsonPropertyName("list")] HudSemanticRole List,
     [property: JsonPropertyName("entry_prototype")] HudSemanticRole EntryPrototype,
     [property: JsonPropertyName("rows")] HudQuestLogRowBinding[] Rows,
-    [property: JsonPropertyName("bookmarks")] HudSemanticRole[] Bookmarks,
+    [property: JsonPropertyName("bookmarks")] HudSemanticControl[] Bookmarks,
+    [property: JsonPropertyName("folder_toggle")] HudSemanticControl FolderToggle,
     [property: JsonPropertyName("detail")] HudQuestDetailPools Detail,
     [property: JsonPropertyName("sharing")] HudQuestSharingPolicy Sharing,
     [property: JsonPropertyName("roles")] HudSemanticRole[] Roles,
@@ -348,6 +368,7 @@ public sealed record HudQuestSharingPolicy(
     [property: JsonPropertyName("share")] string Share,
     [property: JsonPropertyName("accept")] string Accept,
     [property: JsonPropertyName("decline")] string Decline,
+    [property: JsonPropertyName("message_box_system")] string MessageBoxSystem,
     [property: JsonPropertyName("abandon")] string Abandon,
     [property: JsonPropertyName("abandon_confirmation_ms")] uint AbandonConfirmationMilliseconds);
 
@@ -388,6 +409,66 @@ public sealed record HudReturnQuestAction(
     [property: JsonPropertyName("event")] string Event,
     [property: JsonPropertyName("quest_id_argument")] string QuestIdArgument,
     [property: JsonPropertyName("reward_index_argument")] string RewardIndexArgument);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record HudMessageBoxSystem(
+    [property: JsonPropertyName("root")] string Root,
+    [property: JsonPropertyName("capacity")] int Capacity,
+    [property: JsonPropertyName("prototypes")] HudMessageBoxPrototypes Prototypes,
+    [property: JsonPropertyName("instances")] HudMessageBoxInstance[] Instances,
+    [property: JsonPropertyName("queue")] HudMessageBoxQueue Queue,
+    [property: JsonPropertyName("timer")] HudMessageBoxTimer Timer,
+    [property: JsonPropertyName("answers")] HudMessageBoxAnswers Answers);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record HudMessageBoxPrototypes(
+    [property: JsonPropertyName("message_box")] HudSemanticRole MessageBox,
+    [property: JsonPropertyName("header")] HudSemanticRole Header,
+    [property: JsonPropertyName("text")] HudSemanticRole Text,
+    [property: JsonPropertyName("progress")] HudSemanticRole Progress,
+    [property: JsonPropertyName("button_tab")] HudSemanticRole ButtonTab,
+    [property: JsonPropertyName("button_container")] HudSemanticRole ButtonContainer,
+    [property: JsonPropertyName("accept")] HudSemanticRole Accept,
+    [property: JsonPropertyName("decline")] HudSemanticRole Decline,
+    [property: JsonPropertyName("confirm")] HudSemanticRole Confirm);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record HudMessageBoxInstance(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("role")] string Role,
+    [property: JsonPropertyName("title")] HudSemanticRole Title,
+    [property: JsonPropertyName("body")] HudSemanticRole Body,
+    [property: JsonPropertyName("icon")] HudSemanticRole Icon,
+    [property: JsonPropertyName("progress")] HudSemanticRole Progress,
+    [property: JsonPropertyName("timer_label")] HudSemanticRole TimerLabel,
+    [property: JsonPropertyName("button_tab")] HudSemanticRole ButtonTab,
+    [property: JsonPropertyName("button_container")] HudSemanticRole ButtonContainer,
+    [property: JsonPropertyName("accept")] HudMessageBoxButton Accept,
+    [property: JsonPropertyName("decline")] HudMessageBoxButton Decline,
+    [property: JsonPropertyName("confirm")] HudMessageBoxButton Confirm);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record HudMessageBoxButton(
+    [property: JsonPropertyName("role")] HudSemanticRole Role,
+    [property: JsonPropertyName("action")] string Action);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record HudMessageBoxQueue(
+    [property: JsonPropertyName("overflow")] string Overflow,
+    [property: JsonPropertyName("order")] string Order,
+    [property: JsonPropertyName("priority")] string Priority);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record HudMessageBoxTimer(
+    [property: JsonPropertyName("tick")] string Tick,
+    [property: JsonPropertyName("expiry")] string Expiry);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record HudMessageBoxAnswers(
+    [property: JsonPropertyName("none")] string None,
+    [property: JsonPropertyName("accept")] string Accept,
+    [property: JsonPropertyName("decline")] string Decline,
+    [property: JsonPropertyName("confirm")] string Confirm);
 
 public enum HudMaskKind { Clip, Pick }
 

@@ -45,9 +45,9 @@ public partial class EntityBindingSmoke : Node3D
         Expect(!registry.TryGet(LocalEntityId, out _), "the local player has no registry visual");
         Expect(registry.HasLocalSample, "the local player's sample is published");
 
-        string plate = Nameplate(registry, NearEntityId);
-        Expect(plate.StartsWith("Rat", StringComparison.Ordinal), $"nameplate reads a slug, not '{plate}'");
-        Expect(plate.Contains("(2)", StringComparison.Ordinal), $"nameplate carries the level, not '{plate}'");
+        Expect(
+            HasNoLegacyOverhead(registry, NearEntityId),
+            "replicated entity has no legacy world-space name or health presentation");
 
         // Aim at the middle of the near entity's pick capsule. Creature scales
         // in the source tree vary by an order of magnitude, so a fixed eye
@@ -86,7 +86,7 @@ public partial class EntityBindingSmoke : Node3D
         GD.Print(
             $"ENTITY_BINDING_SMOKE manifest={(catalog.IsAvailable ? catalog.EntryCount : 0)} "
             + $"models={factory.ModelCount} capsules={factory.CapsuleCount} "
-            + $"nameplate=\"{plate}\" picked={hit} result={(passed ? "PASS" : "FAIL")}");
+            + $"native_overtip_only=1 picked={hit} result={(passed ? "PASS" : "FAIL")}");
         foreach (string failure in _failures)
         {
             GD.PushError($"ENTITY_BINDING_SMOKE {failure}");
@@ -95,15 +95,17 @@ public partial class EntityBindingSmoke : Node3D
         GetTree().Quit(passed ? 0 : 1);
     }
 
-    private static string Nameplate(EntityRegistry registry, ulong entityId)
+    private static bool HasNoLegacyOverhead(EntityRegistry registry, ulong entityId)
     {
         if (!registry.TryGet(entityId, out TrackedEntity? tracked)
             || tracked.Visual is not NetworkEntityVisual visual)
         {
-            return string.Empty;
+            return false;
         }
 
-        return visual.GetNode<Label3D>("Overhead/Nameplate").Text;
+        return visual.GetNodeOrNull<Node3D>("Overhead") is null
+            && visual.GetNodeOrNull<Label3D>("Overhead/Nameplate") is null
+            && visual.GetNodeOrNull<MeshInstance3D>("Overhead/HealthBar") is null;
     }
 
     private void Expect(bool condition, string what)

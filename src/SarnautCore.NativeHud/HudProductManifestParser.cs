@@ -14,7 +14,7 @@ public static class HudProductManifestParser
     [
         "world-input", "action-bar", "unit-plates", "overtips", "combat-feedback", "compass",
         "chat", "chat-input", "world-chat-bubbles", "quest-tracker", "target-selection", "character",
-        "multibag", "loot-bag", "quest-log", "quest-info", "npc-talk",
+        "multibag", "loot-bag", "quest-log", "quest-info", "npc-talk", "message-box",
     ];
     private static readonly int[] InventoryCapacities = [12, 16, 18, 24, 30, 36, 42, 48, 54, 60];
     private static readonly int[][] InventoryPartitions =
@@ -129,7 +129,7 @@ public static class HudProductManifestParser
             new HudQuestLogProduct(
                 new HudId(systems.QuestLog.Root),
                 systems.QuestLog.Rows.Select(row => new HudId(row.Id)).ToArray(),
-                systems.QuestLog.Bookmarks.Select(RoleId).ToArray(),
+                systems.QuestLog.Bookmarks.Select(bookmark => RoleId(bookmark.Role)).ToArray(),
                 detail.Objectives.Roles.Select(RoleId).ToArray(),
                 detail.AlternativeIcons.Roles.Select(RoleId).ToArray(),
                 detail.MandatoryIcons.Roles.Select(RoleId).ToArray(),
@@ -148,7 +148,8 @@ public static class HudProductManifestParser
             new HudCharacterProduct(
                 new HudId(systems.Character.Root),
                 systems.Character.Equipment.Select(binding => RoleId(binding.Role)).ToArray(),
-                systems.Character.StatRows.Select(RoleId).ToArray()));
+                systems.Character.StatRows.Select(RoleId).ToArray()),
+            new HudMessageBoxProduct(new HudId(systems.MessageBox.Root)));
 
         return new HudProduct(
             systems.ActionBar.Slots.Select(slot => RoleId(slot.Action)).ToArray(),
@@ -191,7 +192,7 @@ public static class HudProductManifestParser
         ValidateMetadata(manifest);
 
         HudRootBinding[] roots = Required(manifest.Roots, "roots");
-        Require(roots.Length == RootIds.Length, "HUD root census must have exactly 17 entries.");
+        Require(roots.Length == RootIds.Length, "HUD root census must have exactly 18 entries.");
         for (int index = 0; index < roots.Length; index++)
         {
             HudRootBinding root = Required(roots[index], $"roots[{index}]");
@@ -229,6 +230,10 @@ public static class HudProductManifestParser
         Require(chat.Schema == "sarnaut.chat-commands/v1" && chat.Locale == "eng" &&
             chat.AutocompleteCapacity == 22, "HUD chat command catalog contract changed.");
         ValidateResourcePath(chat.Resource, ".json", "chat_commands.resource");
+        HudChatAntispamReference antispam = Required(manifest.ChatAntispam, "chat_antispam");
+        Require(antispam.Schema == "sarnaut.chat-antispam/v1" &&
+            antispam.ProductKey == "chat-antispam", "HUD chat antispam reference changed.");
+        ValidateResourcePath(antispam.Resource, ".json", "chat_antispam.resource");
         HudExternalProductReference options = Required(manifest.OptionsProduct, "options_product");
         Require(options.Schema == "sarnaut.options-product/v1" && options.ProductKey == "options",
             "HUD options product reference changed.");
@@ -285,6 +290,7 @@ public static class HudProductManifestParser
         ValidateQuestLog(Required(systems.QuestLog, "systems.quest_log"), roles);
         ValidateQuestInfo(Required(systems.QuestInfo, "systems.quest_info"), roles);
         ValidateNpcTalk(Required(systems.NpcTalk, "systems.npc_talk"), roles);
+        ValidateMessageBoxes(Required(systems.MessageBox, "systems.message_box"), roles);
     }
 
     private static void ValidateRoleSystem(HudRoleSystem? system, string root, int count, HashSet<string> roles)
@@ -468,7 +474,23 @@ public static class HudProductManifestParser
             Require(row.Roles.Length == 13, "HUD quest-log row role census changed.");
             ValidateRoles(row.Roles, roles, "quest-log row roles");
         }
-        ValidateRoles(system.Bookmarks, roles, "quest-log bookmarks");
+        string[] bookmarkActions =
+        [
+            "quest-log-show-zones",
+            "quest-log-show-completed",
+            "quest-log-show-world-secrets",
+        ];
+        Require(system.Bookmarks.Length == bookmarkActions.Length,
+            "HUD quest-log bookmark census changed.");
+        for (int index = 0; index < system.Bookmarks.Length; index++)
+        {
+            HudSemanticControl bookmark = Required(system.Bookmarks[index], $"quest-log.bookmarks[{index}]");
+            Require(bookmark.Action == bookmarkActions[index], "HUD quest-log bookmark action changed.");
+            AddRole(bookmark.Role, roles, "quest-log bookmark");
+        }
+        HudSemanticControl folderToggle = Required(system.FolderToggle, "quest-log.folder_toggle");
+        Require(folderToggle.Action == "quest-log-toggle-folder", "HUD quest-log folder action changed.");
+        AddRole(folderToggle.Role, roles, "quest-log folder toggle");
         HudQuestDetailPools detail = Required(system.Detail, "quest-log.detail");
         ValidatePool(detail.Objectives, 5, roles, "quest-log objectives");
         ValidatePool(detail.ObjectiveNoNumbers, 5, roles, "quest-log objectives without numbers");
@@ -481,7 +503,8 @@ public static class HudProductManifestParser
         ValidatePool(detail.Secrets, 15, roles, "quest-log secrets");
         HudQuestSharingPolicy sharing = Required(system.Sharing, "quest-log.sharing");
         Require(sharing.Share == "quest-share" && sharing.Accept == "quest-share-accept" &&
-            sharing.Decline == "quest-share-decline" && sharing.Abandon == "quest-abandon" &&
+            sharing.Decline == "quest-share-decline" && sharing.MessageBoxSystem == "message-box" &&
+            sharing.Abandon == "quest-abandon" &&
             sharing.AbandonConfirmationMilliseconds == 30_000, "HUD quest sharing contract changed.");
         ValidateRoles(system.Roles, roles, "quest-log.roles");
         ValidateState(system.State, "quest-log");
@@ -518,6 +541,62 @@ public static class HudProductManifestParser
         Require(action.Event == "return-quest" && action.QuestIdArgument == "quest-id" &&
             action.RewardIndexArgument == "reward-index", "HUD NPC quest return contract changed.");
         ValidateState(system.State, "npc-talk");
+    }
+
+    private static void ValidateMessageBoxes(HudMessageBoxSystem system, HashSet<string> roles)
+    {
+        Require(system.Root == "message-box" && system.Capacity == 2 &&
+            system.Instances.Length == system.Capacity, "HUD message-box census changed.");
+        HudMessageBoxPrototypes prototypes = Required(system.Prototypes, "message-box.prototypes");
+        AddRole(prototypes.MessageBox, roles, "message-box prototype");
+        AddRole(prototypes.Header, roles, "message-box header prototype");
+        AddRole(prototypes.Text, roles, "message-box text prototype");
+        AddRole(prototypes.Progress, roles, "message-box progress prototype");
+        AddRole(prototypes.ButtonTab, roles, "message-box button-tab prototype");
+        AddRole(prototypes.ButtonContainer, roles, "message-box button-container prototype");
+        AddRole(prototypes.Accept, roles, "message-box accept prototype");
+        AddRole(prototypes.Decline, roles, "message-box decline prototype");
+        AddRole(prototypes.Confirm, roles, "message-box confirm prototype");
+
+        for (int index = 0; index < system.Instances.Length; index++)
+        {
+            HudMessageBoxInstance instance = Required(system.Instances[index], $"message-box.instances[{index}]");
+            int ordinal = index + 1;
+            Require(instance.Id == $"message-box-{ordinal:00}", "HUD message-box order changed.");
+            AddSemanticPath(instance.Id, instance.Role, roles, "message-box instance");
+            AddRole(instance.Title, roles, "message-box title");
+            AddRole(instance.Body, roles, "message-box body");
+            AddRole(instance.Icon, roles, "message-box icon");
+            AddRole(instance.Progress, roles, "message-box progress");
+            AddRole(instance.TimerLabel, roles, "message-box timer label");
+            AddRole(instance.ButtonTab, roles, "message-box button tab");
+            AddRole(instance.ButtonContainer, roles, "message-box button container");
+            ValidateMessageBoxButton(instance.Accept, "message-box-answer-accept", roles);
+            ValidateMessageBoxButton(instance.Decline, "message-box-answer-decline", roles);
+            ValidateMessageBoxButton(instance.Confirm, "message-box-answer-confirm", roles);
+        }
+
+        HudMessageBoxQueue queue = Required(system.Queue, "message-box.queue");
+        Require(queue.Overflow == "queue" && queue.Order == "request-order" &&
+            queue.Priority == "request-priority", "HUD message-box queue policy changed.");
+        HudMessageBoxTimer timer = Required(system.Timer, "message-box.timer");
+        Require(timer.Tick == "second-timer" && timer.Expiry == "request-default-button",
+            "HUD message-box timer policy changed.");
+        HudMessageBoxAnswers answers = Required(system.Answers, "message-box.answers");
+        Require(answers.None == "message-box-answer-none" &&
+            answers.Accept == "message-box-answer-accept" &&
+            answers.Decline == "message-box-answer-decline" &&
+            answers.Confirm == "message-box-answer-confirm", "HUD message-box answers changed.");
+    }
+
+    private static void ValidateMessageBoxButton(
+        HudMessageBoxButton button,
+        string action,
+        HashSet<string> roles)
+    {
+        button = Required(button, "message-box button");
+        Require(button.Action == action, $"HUD message-box action '{action}' changed.");
+        AddRole(button.Role, roles, "message-box button");
     }
 
     private static void ValidatePool(HudRolePool pool, int capacity, HashSet<string> roles, string label)
@@ -606,7 +685,7 @@ public static class HudProductManifestParser
 
     private static void ValidateInputRoles(HudInputRoleBinding[] bindings, HashSet<string> roles)
     {
-        Require(bindings.Length == 490, "HUD input role census changed.");
+        Require(bindings.Length == 497, "HUD input role census changed.");
         var boundRoles = new HashSet<string>(StringComparer.Ordinal);
         var priorities = new HashSet<int>();
         foreach (HudInputRoleBinding binding in bindings)

@@ -35,5 +35,26 @@
     <None Include="../../src/SarnautCore.UI/UiManifestJson.cs"
           Link="contract-source/UiManifestJson.cs"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/ui/NativeHudContent.cs"
+          Link="contract-source/NativeHudContent.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/zone/NetworkEntityVisual.cs"
+          Link="contract-source/NetworkEntityVisual.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/ui/NativeGameplayHudHost.cs"
+          Link="contract-source/NativeGameplayHudHost.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/ui/GodotHudWorld.cs"
+          Link="contract-source/GodotHudWorld.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/ui/NativeHudItemPresentationCatalog.cs"
+          Link="contract-source/NativeHudItemPresentationCatalog.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/ui/NativeHudContextPresenter.cs"
+          Link="contract-source/NativeHudContextPresenter.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/zone/ZoneWalkabout.cs"
+          Link="contract-source/ZoneWalkabout.cs"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

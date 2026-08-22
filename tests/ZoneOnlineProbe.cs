@@ -19,7 +19,7 @@ namespace SarnautCore;
 /// is actually simulating. It signs in through the same view models the screens
 /// use, presents the ticket through the same <see cref="ZoneRequest"/> the
 /// character select writes, and then asks the zone's own registry what it has:
-/// one visual per replicated entity, a nameplate on each, a Tab target and a
+/// one visual per replicated entity, no legacy world-space overhead, a Tab target and a
 /// target picked by unprojecting an entity's own position back onto the screen.
 /// </para>
 /// <para>
@@ -88,7 +88,7 @@ public partial class ZoneOnlineProbe : Node
         Expect(loop != null, "the zone scene started its network loop");
         if (loop == null)
         {
-            Finish(null, null, string.Empty, 0, 0, 0);
+            Finish(null, null, 0, 0, 0);
             return;
         }
 
@@ -168,11 +168,9 @@ public partial class ZoneOnlineProbe : Node
             $"grounding adjustment stays local: {walker.NetworkGroundingAdjustment:F3}");
         await ExpectGroundedAsync(walker);
 
-        string plate = string.Empty;
         int models = 0;
         int animatedModels = 0;
-        int nameplated = 0;
-        int healthBars = 0;
+        int legacyOverheads = 0;
         foreach (ulong entityId in registry.Ids)
         {
             if (!registry.TryGet(entityId, out TrackedEntity? tracked)
@@ -190,29 +188,19 @@ public partial class ZoneOnlineProbe : Node
                 }
             }
 
-            string text = visual.GetNode<Label3D>("Overhead/Nameplate").Text;
-            if (text.Length > 0)
+            if (visual.GetNodeOrNull<Node3D>("Overhead") is not null
+                || visual.GetNodeOrNull<Label3D>("Overhead/Nameplate") is not null
+                || visual.GetNodeOrNull<MeshInstance3D>("Overhead/HealthBar") is not null)
             {
-                nameplated++;
-                if (plate.Length == 0)
-                {
-                    plate = text;
-                }
-
-                // Check every nameplate to ensure no path separators or path-like patterns leak.
-                ValidateNameplateText(text);
-            }
-
-            if (visual.GetNode<MeshInstance3D>("Overhead/HealthBar").Visible)
-            {
-                healthBars++;
+                legacyOverheads++;
             }
         }
 
-        Expect(nameplated == registry.Count, $"every entity has a nameplate, {nameplated} of {registry.Count} do");
+        Expect(
+            legacyOverheads == 0,
+            $"ContextOvertip is the sole name/health path, legacy overheads={legacyOverheads}");
         Expect(models == registry.Count,
             $"every replicated tutorial entity has a converted model, {models} of {registry.Count} do");
-        Expect(healthBars > 0, "living entities show a health bar");
 
         CharacterRig localCharacter = zone.GetNode<CharacterRig>("Walker/Character");
         Expect(localCharacter.HasModel, "the local player uses a native character model");
@@ -231,19 +219,7 @@ public partial class ZoneOnlineProbe : Node
 
         await CaptureScreenshotAsync();
 
-        Finish(loop, loader, plate, models, animatedModels, healthBars);
-    }
-
-    /// <summary>
-    /// Validates that a nameplate text does not contain path separators or
-    /// appear to be a raw path. Fails expectations if the text looks like a
-    /// content-id path.
-    /// </summary>
-    private void ValidateNameplateText(string text)
-    {
-        Expect(!text.Contains('/', StringComparison.Ordinal), $"nameplate does not contain '/' path separator: '{text}'");
-        Expect(!text.Contains('\\', StringComparison.Ordinal), $"nameplate does not contain '\\' path separator: '{text}'");
-        Expect(!text.Contains(".txt", StringComparison.OrdinalIgnoreCase), $"nameplate is not a raw key: '{text}'");
+        Finish(loop, loader, models, animatedModels, legacyOverheads);
     }
 
     private static int CountLayeredTerrainTiles(ZoneLoader loader)
@@ -416,20 +392,19 @@ public partial class ZoneOnlineProbe : Node
     private void Finish(
         ZoneNetworkLoop? loop,
         ZoneLoader? loader,
-        string plate,
         int models,
         int animatedModels,
-        int healthBars)
+        int legacyOverheads)
     {
         bool passed = _failures.Count == 0;
         int entities = loop?.Entities.Count ?? 0;
         GD.Print(
             $"ZONE_ONLINE_PROBE terrain={loader?.TerrainTileCount ?? 0} visuals={loader?.VisualObjectCount ?? 0} "
             + $"entities={entities} models={models} animated_models={animatedModels} capsules={entities - models} "
-            + $"health_bars={healthBars} own={loop?.OwnEntityId ?? 0} target={loop?.TargetEntityId ?? 0} "
+            + $"legacy_overheads={legacyOverheads} own={loop?.OwnEntityId ?? 0} target={loop?.TargetEntityId ?? 0} "
             + $"wire_spawn={Format(_wireSpawn)} godot_spawn={_godotSpawn} "
             + $"ground_gap={_groundGap:F4} ground_collider=\"{_groundCollider}\" "
-            + $"nameplate=\"{plate}\" result={(passed ? "PASS" : "FAIL")}");
+            + $"native_overtip_only=1 result={(passed ? "PASS" : "FAIL")}");
         foreach (string failure in _failures)
         {
             GD.PushError($"ZONE_ONLINE_PROBE {failure}");

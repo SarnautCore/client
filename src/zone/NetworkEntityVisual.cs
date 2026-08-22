@@ -7,8 +7,7 @@ using SarnautCore.Networking;
 namespace SarnautCore;
 
 /// <summary>
-/// One server entity in the scene: its model, the body a pick ray hits, and the
-/// nameplate and health bar above it.
+/// One server entity in the scene: its model and the body a pick ray hits.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -20,8 +19,8 @@ namespace SarnautCore;
 /// </para>
 /// <para>
 /// A capsule is not a failure state. Without a matching native scene, every
-/// entity is a labelled capsule at the right place with the
-/// right name and health, which is a usable client.
+/// entity is still represented at the authoritative position and remains pickable.
+/// The native ContextOvertip HUD is the sole owner of names and health presentation.
 /// </para>
 /// </remarks>
 public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
@@ -31,61 +30,15 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
 
     private const float CapsuleRadius = 0.42f;
     private const float CapsuleHeight = 1.8f;
-    private const float HealthBarWidth = 1.1f;
-    private const float HealthBarHeight = 0.1f;
 
     private static readonly Color PlayerColor = new("55c8e8");
     private static readonly Color NpcColor = new("e4a853");
     private static readonly Color DeadColor = new("6b6f75");
-    private static readonly Color HealthColor = new("cf4f3e");
-    private static readonly Color HealthBackdrop = new("14181d");
-    private static readonly Color NameColor = new("f2f4f8");
-    private static readonly Color TargetColor = new("ffd479");
-
-    /// <summary>
-    /// The health bar is one quad, filled in the fragment shader and turned to
-    /// face the camera in the vertex shader.
-    /// </summary>
-    /// <remarks>
-    /// Two quads with <c>BaseMaterial3D</c> billboarding would have been simpler
-    /// to write and wrong to look at: that billboard mode keeps the node's world
-    /// translation and replaces its basis, so a fill anchored to the left edge
-    /// would swing around the bar as the mob turned. One quad has no left edge to
-    /// lose, and it is also one draw call per entity instead of two.
-    /// </remarks>
-    private const string HealthBarShaderCode = """
-        shader_type spatial;
-        render_mode unshaded, cull_disabled, depth_test_disabled, depth_draw_never, blend_mix;
-
-        uniform float fill : hint_range(0.0, 1.0) = 1.0;
-        uniform vec4 fill_color : source_color;
-        uniform vec4 back_color : source_color;
-
-        void vertex() {
-            MODELVIEW_MATRIX = VIEW_MATRIX * mat4(
-                INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], MODEL_MATRIX[3]);
-        }
-
-        void fragment() {
-            vec4 colour = UV.x <= fill ? fill_color : back_color;
-            ALBEDO = colour.rgb;
-            ALPHA = colour.a;
-        }
-        """;
-
-    /// <summary>One shader for every entity; only the uniforms differ.</summary>
-    private static readonly Shader HealthBarShader = new() { Code = HealthBarShaderCode };
-
     private Area3D _body = null!;
-    private Label3D _nameplate = null!;
-    private MeshInstance3D _healthBar = null!;
-    private ShaderMaterial _healthMaterial = null!;
     private CharacterRig? _character;
     private MeshInstance3D? _capsule;
     private StandardMaterial3D? _capsuleMaterial;
 
-    private string _nameText = string.Empty;
-    private uint _shownLevel;
     private int _shownHealth = -1;
     private int _shownMaxHealth = -1;
     private bool _shownAlive = true;
@@ -111,6 +64,9 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
 
     public float PickCentreHeight { get; private set; }
 
+    /// <summary>World anchor consumed by the native ContextOvertip projection adapter.</summary>
+    public Vector3 HudAnchorPosition => GlobalPosition + (Vector3.Up * (_height + 0.45f));
+
     /// <summary>
     /// The pick ray reports the <see cref="Area3D"/> it hit, so that is what the
     /// registry indexes this visual by.
@@ -129,8 +85,6 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
             }
 
             _targeted = value;
-            _nameplate.Modulate = value ? TargetColor : NameColor;
-            _nameplate.OutlineSize = value ? 20 : 12;
         }
     }
 
@@ -178,7 +132,7 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
         }
 
         AddBody(scale);
-        AddOverhead(sample);
+        Apply(sample);
     }
 
     private void AddCapsule(SampledEntity sample)
@@ -284,7 +238,7 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
                 pending.Push(child);
             }
 
-            if (node is not VisualInstance3D visual || node is Label3D)
+            if (node is not VisualInstance3D visual)
             {
                 continue;
             }
@@ -318,60 +272,11 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
         return new Aabb(min, max - min);
     }
 
-    private void AddOverhead(SampledEntity sample)
-    {
-        var overhead = new Node3D { Name = "Overhead", Position = new Vector3(0, _height + 0.45f, 0) };
-        AddChild(overhead);
-
-        _nameplate = new Label3D
-        {
-            Name = "Nameplate",
-            Billboard = BaseMaterial3D.BillboardModeEnum.Enabled,
-            NoDepthTest = true,
-            PixelSize = 0.0045f,
-            FontSize = 28,
-            OutlineSize = 8,
-            Modulate = NameColor,
-            OutlineModulate = new Color(0, 0, 0, 0.85f),
-            RenderPriority = 2,
-            Position = new Vector3(0, 0.18f, 0),
-        };
-        FadeOutBeyondNameplateRange(_nameplate);
-        overhead.AddChild(_nameplate);
-
-        _healthMaterial = new ShaderMaterial { Shader = HealthBarShader };
-        _healthMaterial.SetShaderParameter("fill_color", HealthColor);
-        _healthMaterial.SetShaderParameter("back_color", HealthBackdrop);
-        _healthBar = new MeshInstance3D
-        {
-            Name = "HealthBar",
-            Mesh = new QuadMesh { Size = new Vector2(HealthBarWidth, HealthBarHeight) },
-            MaterialOverride = _healthMaterial,
-        };
-        FadeOutBeyondNameplateRange(_healthBar);
-        overhead.AddChild(_healthBar);
-
-        Apply(sample);
-    }
-
-    /// <summary>
-    /// Nameplates are for the crowd around the player, not for the far side of
-    /// the instance: at a few hundred subscribed entities the far ones are noise
-    /// and overdraw.
-    /// </summary>
-    private static void FadeOutBeyondNameplateRange(GeometryInstance3D instance)
-    {
-        instance.VisibilityRangeEnd = 55.0f;
-        instance.VisibilityRangeEndMargin = 8.0f;
-        instance.VisibilityRangeFadeMode = GeometryInstance3D.VisibilityRangeFadeModeEnum.Self;
-    }
-
     public void Apply(SampledEntity sample)
     {
         Position = OnlineCoordinateFrame.ToGodot(sample);
         Rotation = new Vector3(0, sample.Heading, 0);
         _character?.SetMoving(sample.AnimationState == AnimationState.Moving);
-        ApplyIdentity(sample);
         ApplyHealth(sample);
     }
 
@@ -380,26 +285,6 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
     public bool PlayHit() => _character?.PlayHit() ?? false;
 
     public bool PlayDeath() => _character?.PlayDeath() ?? false;
-
-    private void ApplyIdentity(SampledEntity sample)
-    {
-        if (_nameText.Length > 0 && _shownLevel == sample.Level)
-        {
-            return;
-        }
-
-        string resolved = EntityNaming.Resolve(sample.NameKey, TranslationServer.Singleton.Translate(sample.NameKey));
-        if (resolved.Length == 0)
-        {
-            // No name key at all: an entity id is still an answer, and a blank
-            // plate over a capsule is not.
-            resolved = $"Entity {sample.EntityId}";
-        }
-
-        _nameText = resolved;
-        _shownLevel = sample.Level;
-        _nameplate.Text = sample.Level > 0 ? $"{resolved}  ({sample.Level})" : resolved;
-    }
 
     private void ApplyHealth(SampledEntity sample)
     {
@@ -411,12 +296,6 @@ public sealed partial class NetworkEntityVisual : Node3D, IEntityVisual
         _shownHealth = sample.Health;
         _shownMaxHealth = sample.MaxHealth;
         _shownAlive = sample.Alive;
-
-        float fraction = sample.MaxHealth <= 0
-            ? 0
-            : Math.Clamp((float)sample.Health / sample.MaxHealth, 0, 1);
-        _healthBar.Visible = sample.MaxHealth > 0 && sample.Alive;
-        _healthMaterial.SetShaderParameter("fill", fraction);
 
         if (_capsuleMaterial != null)
         {

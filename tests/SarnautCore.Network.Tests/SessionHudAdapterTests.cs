@@ -628,7 +628,7 @@ public sealed class SessionHudAdapterTests
             HudCommand.TakeLootItem(9, 19, revision),
             HudCommand.TakeLootMoney(9, -1, revision),
             HudCommand.TakeAllLoot(9, revision),
-            HudCommand.CloseLoot(),
+            HudCommand.CloseLoot(9, revision),
             HudCommand.AbandonQuest(new HudId("quest.one"), revision),
             HudCommand.ShareQuest(new HudId("quest.one"), revision),
             HudCommand.AcceptSharedQuest(new HudId("share.1"), new HudId("quest.one"), revision),
