@@ -8,7 +8,6 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using Godot;
 using Sarnaut.Protocol.V1;
-using SarnautCore.Gameplay;
 using SarnautCore.NativeHud;
 using SarnautCore.Networking;
 using SarnautCore.Shell;
@@ -40,7 +39,6 @@ public partial class ZoneNetworkLoop : Node
     private WalkaboutController _walker = null!;
     private ZoneEntityVisualFactory _visuals = null!;
     private ZoneEntityPicker _picker = null!;
-    private GameplayHudViewModel _hud = null!;
     private Action<string> _setStatus = null!;
     private Action? _onAdmitted;
     private Action<string>? _onRefused;
@@ -116,7 +114,6 @@ public partial class ZoneNetworkLoop : Node
         string zoneId,
         string contentPackId,
         Secret ticket,
-        GameplayHudViewModel hud,
         Action<string> setStatus,
         Action? onAdmitted = null,
         Action<string>? onRefused = null)
@@ -126,7 +123,6 @@ public partial class ZoneNetworkLoop : Node
         Entities = new EntityRegistry(_visuals);
         _picker = new ZoneEntityPicker();
         AddChild(_picker);
-        _hud = hud;
         _setStatus = setStatus;
         _onAdmitted = onAdmitted;
         _onRefused = onRefused;
@@ -269,88 +265,16 @@ public partial class ZoneNetworkLoop : Node
             {
                 currentVisual.Targeted = true;
             }
-
-            _hud.SelectTarget(ToHudSnapshot(current.Latest));
-        }
-        else
-        {
-            _hud.ClearTarget();
         }
 
         TargetChanged?.Invoke(entityId);
-    }
-
-    public bool TryGetEntityScreenPoint(ulong entityId, out Vector2 point)
-    {
-        point = default;
-        if (Entities is null || !Entities.TryGet(entityId, out TrackedEntity? entity))
-        {
-            return false;
-        }
-
-        Camera3D? camera = GetViewport().GetCamera3D();
-        Vector3 worldPosition = OnlineCoordinateFrame.ToGodot(entity.Latest) + (Vector3.Up * 2.2f);
-        if (camera is null || camera.IsPositionBehind(worldPosition))
-        {
-            return false;
-        }
-
-        point = camera.UnprojectPosition(worldPosition);
-        return true;
-    }
-
-    public void RequestAbilityUse(AbilityUseRequest request)
-    {
-        EnqueueCommand(new ClientMessage
-        {
-            AbilityUse = new AbilityUse
-            {
-                CasterId = _ownEntityId,
-                TargetId = request.TargetEntityId,
-                ClientTick = request.ClientTick == 0 ? _timeline.LatestServerTick : request.ClientTick,
-                AbilityId = request.AbilityId,
-            },
-        });
     }
 
     public void RequestInteract(ulong targetEntityId)
     {
         if (targetEntityId != 0)
         {
-            _hud.BeginInteraction(targetEntityId);
             EnqueueCommand(new ClientMessage { Interact = new Interact { TargetEntityId = targetEntityId } });
-        }
-    }
-
-    public void RequestLootTake(ulong corpseEntityId)
-    {
-        if (corpseEntityId != 0)
-        {
-            EnqueueCommand(new ClientMessage { LootTake = new LootTake { CorpseEntityId = corpseEntityId } });
-        }
-    }
-
-    public void RequestQuestAccept(QuestCommandRequest request)
-    {
-        EnqueueCommand(new ClientMessage
-        {
-            QuestAccept = new QuestAccept { QuestId = request.QuestId, StarterEntityId = request.NpcEntityId },
-        });
-    }
-
-    public void RequestQuestTurnIn(QuestCommandRequest request)
-    {
-        EnqueueCommand(new ClientMessage
-        {
-            QuestTurnIn = new QuestTurnIn { QuestId = request.QuestId, FinisherEntityId = request.NpcEntityId },
-        });
-    }
-
-    public void RequestQuestAbandon(string questId)
-    {
-        if (!string.IsNullOrWhiteSpace(questId))
-        {
-            EnqueueCommand(new ClientMessage { QuestAbandon = new QuestAbandon { QuestId = questId } });
         }
     }
 
@@ -478,7 +402,6 @@ public partial class ZoneNetworkLoop : Node
 
             _ownEntityId = update.OwnEntityId;
             EnteredSpawnPosition = update.SpawnPosition!.Clone();
-            _hud.SetOwnEntityId(_ownEntityId);
             // The response's spawn is authoritative: it is the server's answer,
             // not a confirmation of a client request (session spec rule 5.4.6).
             _walker.ApplyAuthoritativePosition(OnlineCoordinateFrame.ToGodot(EnteredSpawnPosition));
@@ -507,10 +430,6 @@ public partial class ZoneNetworkLoop : Node
         {
             SampledEntity local = Entities.LocalSample;
             _walker.ApplyAuthoritativePosition(OnlineCoordinateFrame.ToGodot(local));
-            // The local player deliberately has no registry visual. Observe its
-            // one authoritative sample here so a death followed by Alive=true
-            // can produce respawn feedback without walking all 288 entities.
-            _hud.ObserveEntity(ToHudSnapshot(local));
         }
 
         if (TargetEntityId != 0 && !Entities.Contains(TargetEntityId))
@@ -519,15 +438,10 @@ public partial class ZoneNetworkLoop : Node
             // or it left the subscription. Either way the selection is gone.
             SetTarget(0);
         }
-        else if (TargetEntityId != 0 && Entities.TryGet(TargetEntityId, out TrackedEntity? target))
-        {
-            _hud.ObserveEntity(ToHudSnapshot(target.Latest));
-        }
     }
 
     private void ApplyServerMessage(ServerMessage message)
     {
-        _hud.Route(message);
         switch (message.PayloadCase)
         {
             case ServerMessage.PayloadOneofCase.SpawnEvent:
@@ -947,15 +861,6 @@ public partial class ZoneNetworkLoop : Node
 
     private void RejectHudCommand(in HudCommand command, string reason) =>
         _hudSession?.ReportTransportFault($"HUD command {command.Kind} was rejected: {reason}.");
-
-    private static EntityHudSnapshot ToHudSnapshot(SampledEntity sample) => new(
-        sample.EntityId,
-        sample.NameKey,
-        sample.ContentId,
-        checked((int)sample.Level),
-        sample.Health,
-        sample.MaxHealth,
-        sample.Alive);
 
     private sealed record ConnectionUpdate(
         ulong OwnEntityId,

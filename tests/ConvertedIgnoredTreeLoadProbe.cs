@@ -40,7 +40,6 @@ public partial class ConvertedIgnoredTreeLoadProbe : Node
         CheckSidecarTextureLoad();
         CheckTextResourceLoads();
         CheckConvertedSceneLoaderSeam();
-        CheckConvertedTheme();
         CheckExtResourceResolvesFromCache();
 
         foreach (string failure in _failures)
@@ -155,21 +154,6 @@ public partial class ConvertedIgnoredTreeLoadProbe : Node
             Expect(instance != null, "the converted static object instantiates");
             instance?.QueueFree();
         }
-    }
-
-    /// <summary>The converted theme keeps resolving through the same seam.</summary>
-    private void CheckConvertedTheme()
-    {
-        string themePath = ProjectSettings.GetSetting(UiTheme.ProjectThemeSetting, string.Empty).AsString();
-        Expect(themePath.Length > 0, "the converted theme setting is present");
-        if (themePath.Length == 0)
-        {
-            return;
-        }
-
-        Theme? theme = ConvertedSceneLoader.LoadResource<Theme>(
-            ConvertedRoot, themePath, out string themeError);
-        Expect(theme != null, $"LoadResource<Theme> failed: {themeError}");
     }
 
     /// <summary>

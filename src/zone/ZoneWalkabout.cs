@@ -46,7 +46,6 @@ public partial class ZoneWalkabout : Node3D
     private WalkaboutController _walker = null!;
     private EntityModelCatalog _characterCatalog = null!;
     private ZoneNetworkLoop? _networkLoop;
-    private GameplayHudViewModel? _hudModel;
     private NativeGameplayHudHost? _nativeHud;
     private Label _status = null!;
     private string _zoneStatus = "";
@@ -142,20 +141,6 @@ public partial class ZoneWalkabout : Node3D
             return;
         }
 
-        // ZoneNetworkLoop still feeds the old model while its remaining inventory,
-        // loot, and dialogue consumers migrate. It has no visual mount.
-        _hudModel = new GameplayHudViewModel(
-            ownEntityId: 0,
-            abilities:
-            [
-                new AbilityDefinition(
-                    "ability.melee.novice-cleave",
-                    "M2.Ability.NoviceCleave.Name",
-                    string.Empty),
-            ],
-            inventoryCapacity: 16,
-            stackLimit: _ => 20,
-            focus: _focus);
         _networkLoop.Start(
             _walker,
             entityRoot,
@@ -164,7 +149,6 @@ public partial class ZoneWalkabout : Node3D
             zoneId,
             _session.ContentPackId,
             request.Ticket,
-            _hudModel,
             SetNetworkStatus,
             OnAdmitted,
             OnRefused);

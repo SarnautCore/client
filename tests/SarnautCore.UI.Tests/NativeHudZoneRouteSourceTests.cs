@@ -26,19 +26,28 @@ public sealed class NativeHudZoneRouteSourceTests
     public void ZoneDoesNotMountOrDispatchThroughLegacyHud()
     {
         string source = ReadSource();
+        string network = ReadSource("ZoneNetworkLoop.cs");
 
         Assert.DoesNotContain("new GameplayHudControl", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("GameplayHudViewModel", source, StringComparison.Ordinal);
         Assert.DoesNotContain("_hudControl", source, StringComparison.Ordinal);
         Assert.DoesNotContain("ToggleInventory", source, StringComparison.Ordinal);
         Assert.DoesNotContain("ToggleQuestLog", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Abilities.TryRequestUse", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("GameplayHudViewModel", network, StringComparison.Ordinal);
+        Assert.DoesNotContain("EntityHudSnapshot", network, StringComparison.Ordinal);
+        Assert.DoesNotContain("RequestAbilityUse", network, StringComparison.Ordinal);
+        Assert.DoesNotContain("RequestLootTake", network, StringComparison.Ordinal);
+        Assert.DoesNotContain("RequestQuestAccept", network, StringComparison.Ordinal);
+        Assert.DoesNotContain("RequestQuestTurnIn", network, StringComparison.Ordinal);
+        Assert.DoesNotContain("RequestQuestAbandon", network, StringComparison.Ordinal);
         Assert.Equal(1, Count(source, "NativeGameplayHudHost.TryMount("));
         Assert.Contains("public override void _UnhandledInput", source, StringComparison.Ordinal);
         Assert.DoesNotContain("public override void _Input", source, StringComparison.Ordinal);
     }
 
-    private static string ReadSource() => File.ReadAllText(
-        Path.Combine(AppContext.BaseDirectory, "contract-source", "ZoneWalkabout.cs"));
+    private static string ReadSource(string name = "ZoneWalkabout.cs") => File.ReadAllText(
+        Path.Combine(AppContext.BaseDirectory, "contract-source", name));
 
     private static int Count(string source, string value)
     {

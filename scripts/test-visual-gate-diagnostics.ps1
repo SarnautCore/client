@@ -173,14 +173,16 @@ foreach ($fixture in $fixtures) {
 
 $visualGate = Get-Content -LiteralPath (Join-Path $PSScriptRoot "visual-gate.ps1") -Raw
 $probeCount = [regex]::Matches($visualGate, '@\{\s*Scene\s*=').Count
-if ($probeCount -ne 17) {
-    throw "visual gate must contain 17 probes, found $probeCount"
+if ($probeCount -ne 16) {
+    throw "visual gate must contain 16 probes, found $probeCount"
 }
 
 foreach ($requiredContract in @(
     'Scene = "converted_model_animation_smoke"',
     'CONVERTED_MODEL_ANIMATION cases=53',
     'Scene = "native_character_lod_smoke"',
+    'Scene = "native_hud_compiled_lifecycle_smoke"',
+    'NATIVE_HUD_COMPILED_LIFECYCLE message_boxes=2 action_slots=36 result=PASS',
     'SARNAUT_NATIVE_CHARACTER_LOD_ROOT = "res://content/league-slice"',
     'SARNAUT_NATIVE_CHARACTER_LOD_KEY = "*"',
     'NATIVE_CHARACTER_LOD identities=40/40',
@@ -198,6 +200,16 @@ foreach ($requiredContract in @(
 )) {
     if (-not $visualGate.Contains($requiredContract, [StringComparison]::Ordinal)) {
         throw "visual gate is missing standing coverage contract: $requiredContract"
+    }
+}
+
+foreach ($retiredHudContract in @(
+    'Scene = "gameplay_hud_layout_smoke"',
+    'SARNAUT_HUD_LAYOUT_SCREENSHOT',
+    'SARNAUT_HUD_LIFECYCLE_SCREENSHOT'
+)) {
+    if ($visualGate.Contains($retiredHudContract, [StringComparison]::Ordinal)) {
+        throw "visual gate still contains retired HUD contract: $retiredHudContract"
     }
 }
 

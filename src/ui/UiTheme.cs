@@ -3,37 +3,9 @@ using Godot;
 
 namespace SarnautCore;
 
-/// <summary>
-/// Mounts the interface theme: the converted Allods widget theme when the
-/// converted tree is present, and a theme built in code when it is not.
-/// </summary>
-/// <remarks>
-/// Everything visual under <c>converted/</c> is MY.GAMES-derived and gitignored,
-/// and the converted theme embeds absolute source paths in its metadata, so it
-/// can never be committed. A fresh clone and CI therefore have no theme at all.
-/// The fallback is not a nicety: without it every screen renders with Godot's
-/// default grey and no font, which is what "unusable client" means in practice.
-///
-/// The converted theme's font references are written against the converter's own
-/// <c>res://assets/</c> root, so it is loaded through
-/// <see cref="ConvertedSceneLoader.LoadResource{T}"/> rather than
-/// <see cref="ResourceLoader"/>. Godot still tries the raw file itself at
-/// startup, before any autoload runs, and logs that it could not load it; that
-/// message is expected and is the reason this class exists rather than the
-/// project setting being enough on its own.
-/// </remarks>
+/// <summary>Mounts the code-authored interface theme shared by the shell screens.</summary>
 public static class UiTheme
 {
-    /// <summary>
-    /// The project setting that names the theme. Reading the path from here
-    /// rather than from a constant keeps <c>project.godot</c> the single place
-    /// the theme is chosen.
-    /// </summary>
-    // Godot eagerly loads gui/theme/custom before an autoload can install the
-    // code-built fallback. Keep the optional private resource under our own
-    // setting so a checkout with no converted tree can reach Resolve().
-    public const string ProjectThemeSetting = "sarnaut/ui/converted_theme";
-
     private static readonly Color Ink = new("e6edf6");
     private static readonly Color Muted = new("9aa8b8");
     private static readonly Color Accent = new("55c8e8");
@@ -46,9 +18,6 @@ public static class UiTheme
 
     /// <summary>Where the mounted theme came from, for a status line.</summary>
     public static string Source { get; private set; } = "not mounted";
-
-    /// <summary>True when the converted Allods theme is the one in use.</summary>
-    public static bool UsesConvertedTheme { get; private set; }
 
     /// <summary>The colour a screen paints behind everything else.</summary>
     public static Color Backdrop => new("10151d");
@@ -71,47 +40,20 @@ public static class UiTheme
         return theme;
     }
 
-    /// <summary>The theme in use, loading it on first call.</summary>
+    /// <summary>The theme in use, creating it on first call.</summary>
     public static Theme Resolve()
     {
-        if (_mounted != null)
+        if (_mounted is null)
         {
-            return _mounted;
+            _mounted = Build();
+            Source = "code-authored";
         }
 
-        string configured = ProjectSettings.GetSetting(ProjectThemeSetting, string.Empty).AsString();
-        if (!string.IsNullOrEmpty(configured))
-        {
-            Theme? converted = ConvertedSceneLoader.LoadResource<Theme>(
-                ConvertedRootOf(configured),
-                configured,
-                out string error);
-            if (converted != null)
-            {
-                _mounted = converted;
-                UsesConvertedTheme = true;
-                Source = configured;
-                return converted;
-            }
-
-            GD.Print($"UiTheme: falling back to the built-in theme ({error})");
-        }
-
-        _mounted = BuildFallback();
-        UsesConvertedTheme = false;
-        Source = "built-in fallback";
         return _mounted;
     }
 
-    /// <summary>
-    /// Builds the theme used when no converted tree is present.
-    /// </summary>
-    /// <remarks>
-    /// Deliberately plain: dark surfaces, one accent, Godot's own default font.
-    /// It carries nothing derived from the retail client, which is the point —
-    /// this is the theme a public checkout renders with.
-    /// </remarks>
-    public static Theme BuildFallback()
+    /// <summary>Builds the shell theme from project-owned colors and Godot controls.</summary>
+    public static Theme Build()
     {
         var theme = new Theme { DefaultFontSize = 16 };
 
@@ -146,16 +88,6 @@ public static class UiTheme
         theme.SetConstant("separation", "HBoxContainer", 12);
 
         return theme;
-    }
-
-    /// <summary>
-    /// Derives the converted tree's root from a path inside it. The converter
-    /// writes dependencies relative to the last <c>assets/</c> segment.
-    /// </summary>
-    private static string ConvertedRootOf(string resourcePath)
-    {
-        int marker = resourcePath.LastIndexOf("/assets/", StringComparison.Ordinal);
-        return marker < 0 ? ConvertedSceneLoader.DefaultConvertedRoot : resourcePath[..marker];
     }
 
     private static StyleBoxFlat Box(Color fill, Color border, int radius = 6)

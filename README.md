@@ -29,7 +29,7 @@ Passwords and tokens are carried in `Secret`, whose every conversion returns `[r
 
 #### Interface theme
 
-`gui/theme/custom` names the converted Allods widget theme. That file is MY.GAMES-derived, lives only in the gitignored `converted/` tree, and embeds absolute source paths in its metadata, so it is never committed. `UiTheme` loads it through the converted-scene loader — its font references are written against the converter's own root — and falls back to a theme built in code when the tree is absent. Godot itself also tries the raw file before any autoload runs and logs that it could not load it; that message is expected, and the fallback is what a fresh clone renders with.
+`SessionHost` mounts the project-owned `UiTheme` on the root window. The theme is built from Godot controls and the colors declared in `UiTheme.cs`; it has no external resource or runtime content dependency.
 
 ### Zone Walkabout
 
@@ -66,7 +66,7 @@ Entering the world is now part of the session shell rather than a toggle on the 
 
 The shard decides what exists. Online, `ZoneLoader` counts the map's authored mob placements but does not draw them (`spawn_npc_visuals` is off), because a placement is where a mob *may* spawn and not proof that one is there; the offline walkabout turns it back on because there is no shard to ask. Every replicated entity is one `NetworkEntityVisual` under `NetworkEntities`, carrying its model, an `Area3D` on the entity physics layer for picking, a billboard nameplate and a health bar. `ZoneNetworkLoop.Entities` is the registry: it answers *entity by id* and, through `TryTargetAtScreenPoint`, *entity under the cursor*. `Tab` cycles targets outwards from the player and wraps.
 
-The online walkabout also mounts the gameplay HUD: target frame, one-slot ability bar, pooled floating damage, death feedback, loot, bags, quest log/tracker and quest dialogue. `1` casts, `E` interacts, `I` opens bags and `J` opens the quest log. One focus owner arbitrates the pointer and windows: `Esc` closes the top window, then releases a captured pointer, then leaves walkabout; right-click recaptures it. The widgets use converted Ingame forms when present and code-built frames when `converted/` is absent. Their addon-facing model and event contract is in [`docs/gameplay-hud-addon-surface.md`](docs/gameplay-hud-addon-surface.md).
+The online walkabout mounts `NativeGameplayHudHost`, which loads the compiled HUD product from `content/league-slice/ui/hud`. The product owns the target frame, action bars, combat feedback, loot, bags, quest views, chat, message boxes and related interaction. `E` interacts, `I` opens bags and `J` opens the quest log. `Esc` closes the top window, then releases a captured pointer, then leaves walkabout; right-click recaptures it. The plain gameplay model and session adapter remain independent of Godot scenes.
 
 Nameplates come from `name_key` and never from a display string on the wire (ADR 0007). A resolved locale entry is shown unchanged. On a locale miss, file-shaped keys are slugged, while classic `Creatures/<family>/Instances/...` keys fall back to the creature family. For example, `Rat1_1_Name.txt` reads `Rat  (2)` and an internal corridor-zombie resource path reads `Zombie Warrior  (2)`.
 

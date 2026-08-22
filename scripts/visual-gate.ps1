@@ -57,6 +57,7 @@ if ($OutputDirectory.Length -eq 0) {
 }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 . (Join-Path $PSScriptRoot "visual-gate-diagnostics.ps1")
+& (Join-Path $PSScriptRoot "test-native-hud-cutover.ps1")
 
 # Scene, timeout seconds, and any environment the probe needs.
 $probes = @(
@@ -71,7 +72,6 @@ $probes = @(
             '(?m)^NATIVE_HUD_COMPILED_LIFECYCLE message_boxes=2 action_slots=36 result=PASS\s*$'
         )
     },
-    @{ Scene = "gameplay_hud_layout_smoke"; Timeout = 240 },
     @{ Scene = "live_zone_player_animation_probe"; Timeout = 240 },
     @{ Scene = "native_character_lod_smoke"; Timeout = 600; MaxSeconds = 45; MaxPeakBytes = 2469606195; Environment = @{
             SARNAUT_NATIVE_CHARACTER_LOD_ROOT = "res://content/league-slice"
@@ -107,8 +107,6 @@ $managedEnvironmentNames = @(
     "SARNAUT_FRAME_PROOF",
     "SARNAUT_FRAME_YAW",
     "SARNAUT_GROUNDING_SCREENSHOT",
-    "SARNAUT_HUD_LAYOUT_SCREENSHOT",
-    "SARNAUT_HUD_LIFECYCLE_SCREENSHOT",
     "SARNAUT_LIGHT_DEBUG",
     "SARNAUT_LIGHTING_PROBE_PREFIX",
     "SARNAUT_NATIVE_CHARACTER_LOD_KEY",

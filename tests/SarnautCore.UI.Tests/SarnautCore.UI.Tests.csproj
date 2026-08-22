@@ -56,5 +56,8 @@
     <None Include="../../src/zone/ZoneWalkabout.cs"
           Link="contract-source/ZoneWalkabout.cs"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/zone/ZoneNetworkLoop.cs"
+          Link="contract-source/ZoneNetworkLoop.cs"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
